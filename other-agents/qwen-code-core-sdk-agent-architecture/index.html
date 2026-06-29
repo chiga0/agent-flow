@@ -1,0 +1,2588 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Agent framework, multi-agent orchestration, and runtime harness research notes.">
+      
+      
+      
+        <link rel="canonical" href="https://chiga0.github.io/agent-research/other-agents/qwen-code-core-sdk-agent-architecture/">
+      
+      
+        <link rel="prev" href="../../multi-agent/research-on-multi-agent-orchestration-frameworks/">
+      
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.15">
+    
+    
+      
+        <title>Qwen Code Core 与 SDK Agent 架构分析 - Agent Research</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.342714a4.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#qwen-code-core-sdk-agent" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../.." title="Agent Research" class="md-header__button md-logo" aria-label="Agent Research" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Agent Research
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Qwen Code Core 与 SDK Agent 架构分析
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="blue"  aria-label="切换到深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="切换到深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="blue"  aria-label="切换到浅色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="切换到浅色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chiga0/agent-research" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    chiga0/agent-research
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Agent Research" class="md-nav__button md-logo" aria-label="Agent Research" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Agent Research
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chiga0/agent-research" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    chiga0/agent-research
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    首页
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    多 Agent
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            多 Agent
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../multi-agent/research-on-multi-agent-orchestration-frameworks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    生产级多 Agent 系统编排与运行屏障工程
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    其他 Agent
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            其他 Agent
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Qwen Code Core 与 SDK Agent 架构分析
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Qwen Code Core 与 SDK Agent 架构分析
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. 总览结论
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. 关键源码入口
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. 关键源码入口">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.1 Core 主链路
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.2 SDK 入口
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. 初始化与总装配
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Agent 主循环
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Agent 主循环">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-geminiclientsendmessagestream" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.1 GeminiClient.sendMessageStream()
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-geminiclientstartchat" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.2 GeminiClient.startChat()
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-geminichat" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.3 GeminiChat
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-turn" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.4 Turn
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. 系统提示词体系
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. 系统提示词体系">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-corepromptsts" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.1 core/prompts.ts
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-environmentcontextts" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.2 environmentContext.ts
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-memory-prompt" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.3 memory 与 prompt 的关系
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. 工具系统
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. 工具系统">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-toolregistry" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.1 ToolRegistry
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-tool-declaration-deferred-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.2 tool declaration 与 deferred tool
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-coretoolscheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.3 CoreToolScheduler
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. 权限体系
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. 权限体系">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.1 权限模式
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-l3l4l5" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.2 L3/L4/L5
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73-auto-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.3 Auto mode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#74-shell" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.4 Shell 权限
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-mcp" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. MCP 架构
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. MCP 架构">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#81-mcp" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.1 MCP 来源
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#82-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.2 Discovery 策略
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#83-mcp" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.3 MCP 能贡献什么
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#84-deferred-mcp-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.4 Deferred MCP tools
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#85-mcp-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.5 MCP transport 与认证
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      9. Memory 架构
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Memory 架构">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-hierarchical-instruction-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.1 Hierarchical instruction memory
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-managed-auto-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.2 Managed auto-memory
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-team-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.3 Team memory
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-pluginextension-skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      10. Plugin、Extension 与 Skill
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. Plugin、Extension 与 Skill">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#101-extension-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      10.1 Extension 是 core 中的插件主体
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#102-skillmanager" class="md-nav__link">
+    <span class="md-ellipsis">
+      10.2 SkillManager
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#103-skill-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      10.3 Skill tool
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-hooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      11. Hooks
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-loop-wakeup" class="md-nav__link">
+    <span class="md-ellipsis">
+      12. 定时任务与 Loop Wakeup
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. 定时任务与 Loop Wakeup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#121-cronscheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      12.1 CronScheduler
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#122-cron_create" class="md-nav__link">
+    <span class="md-ellipsis">
+      12.2 cron_create 权限
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#123-loop_wakeup" class="md-nav__link">
+    <span class="md-ellipsis">
+      12.3 loop_wakeup
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-loop-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      13. Loop Detection
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-provider" class="md-nav__link">
+    <span class="md-ellipsis">
+      14. Provider 抽象
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#15-typescript-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      15. TypeScript SDK
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="15. TypeScript SDK">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#151" class="md-nav__link">
+    <span class="md-ellipsis">
+      15.1 进程式接入
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#152-query-runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      15.2 Query runtime
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#153-sdk-mcp-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      15.3 SDK MCP server
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#154-ts-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      15.4 TS SDK 类型能力
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#16-python-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      16. Python SDK
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#17-java-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      17. Java SDK 位置
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#18" class="md-nav__link">
+    <span class="md-ellipsis">
+      18. 一次完整请求的细节链路
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#19" class="md-nav__link">
+    <span class="md-ellipsis">
+      19. 安全边界总结
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#20" class="md-nav__link">
+    <span class="md-ellipsis">
+      20. 研究建议
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#21" class="md-nav__link">
+    <span class="md-ellipsis">
+      21. 关键判断
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. 总览结论
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. 关键源码入口
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. 关键源码入口">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.1 Core 主链路
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.2 SDK 入口
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. 初始化与总装配
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Agent 主循环
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Agent 主循环">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-geminiclientsendmessagestream" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.1 GeminiClient.sendMessageStream()
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-geminiclientstartchat" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.2 GeminiClient.startChat()
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-geminichat" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.3 GeminiChat
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-turn" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.4 Turn
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. 系统提示词体系
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. 系统提示词体系">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-corepromptsts" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.1 core/prompts.ts
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-environmentcontextts" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.2 environmentContext.ts
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-memory-prompt" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.3 memory 与 prompt 的关系
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. 工具系统
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. 工具系统">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-toolregistry" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.1 ToolRegistry
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-tool-declaration-deferred-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.2 tool declaration 与 deferred tool
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-coretoolscheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.3 CoreToolScheduler
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. 权限体系
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. 权限体系">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.1 权限模式
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-l3l4l5" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.2 L3/L4/L5
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73-auto-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.3 Auto mode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#74-shell" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.4 Shell 权限
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-mcp" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. MCP 架构
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. MCP 架构">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#81-mcp" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.1 MCP 来源
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#82-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.2 Discovery 策略
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#83-mcp" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.3 MCP 能贡献什么
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#84-deferred-mcp-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.4 Deferred MCP tools
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#85-mcp-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      8.5 MCP transport 与认证
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      9. Memory 架构
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Memory 架构">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-hierarchical-instruction-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.1 Hierarchical instruction memory
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-managed-auto-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.2 Managed auto-memory
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-team-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      9.3 Team memory
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-pluginextension-skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      10. Plugin、Extension 与 Skill
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="10. Plugin、Extension 与 Skill">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#101-extension-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      10.1 Extension 是 core 中的插件主体
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#102-skillmanager" class="md-nav__link">
+    <span class="md-ellipsis">
+      10.2 SkillManager
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#103-skill-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      10.3 Skill tool
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-hooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      11. Hooks
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-loop-wakeup" class="md-nav__link">
+    <span class="md-ellipsis">
+      12. 定时任务与 Loop Wakeup
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="12. 定时任务与 Loop Wakeup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#121-cronscheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      12.1 CronScheduler
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#122-cron_create" class="md-nav__link">
+    <span class="md-ellipsis">
+      12.2 cron_create 权限
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#123-loop_wakeup" class="md-nav__link">
+    <span class="md-ellipsis">
+      12.3 loop_wakeup
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-loop-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      13. Loop Detection
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-provider" class="md-nav__link">
+    <span class="md-ellipsis">
+      14. Provider 抽象
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#15-typescript-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      15. TypeScript SDK
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="15. TypeScript SDK">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#151" class="md-nav__link">
+    <span class="md-ellipsis">
+      15.1 进程式接入
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#152-query-runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      15.2 Query runtime
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#153-sdk-mcp-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      15.3 SDK MCP server
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#154-ts-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      15.4 TS SDK 类型能力
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#16-python-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      16. Python SDK
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#17-java-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      17. Java SDK 位置
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#18" class="md-nav__link">
+    <span class="md-ellipsis">
+      18. 一次完整请求的细节链路
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#19" class="md-nav__link">
+    <span class="md-ellipsis">
+      19. 安全边界总结
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#20" class="md-nav__link">
+    <span class="md-ellipsis">
+      20. 研究建议
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#21" class="md-nav__link">
+    <span class="md-ellipsis">
+      21. 关键判断
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="qwen-code-core-sdk-agent">Qwen Code Core 与 SDK Agent 架构分析<a class="headerlink" href="#qwen-code-core-sdk-agent" title="Permanent link">&para;</a></h1>
+<p>生成日期：2026-06-30<br />
+源码目录：<code>/Users/chigao/Documents/codebase/github/qwen-code</code><br />
+重点范围：<code>packages/core</code>、<code>packages/sdk-typescript</code>、<code>packages/sdk-python</code><br />
+弱化范围：Web、Channel、VS Code 插件等外层产品形态</p>
+<h2 id="1">1. 总览结论<a class="headerlink" href="#1" title="Permanent link">&para;</a></h2>
+<p>Qwen Code 的 Agent 核心不是一个单独的 <code>Agent</code> 类，而是一组运行时组件协作出来的：</p>
+<ul>
+<li><code>Config</code>：会话级总装配器，负责模型、工具、权限、memory、extension、MCP、hooks、cron 等依赖的初始化与持有。</li>
+<li><code>GeminiClient</code>：Agent 对话主入口，承接用户消息、cron 消息、工具结果、retry、notification、teammate 等输入类型。</li>
+<li><code>GeminiChat</code>：模型请求与历史管理层，负责 system instruction、history、压缩、重试、orphan tool call 修复、provider content generator 调用。</li>
+<li><code>Turn</code>：单轮模型流式输出解析器，把模型 stream 转换成内容、thought、tool call、citation、finish 等事件。</li>
+<li><code>CoreToolScheduler</code>：工具调用调度器，做校验、权限、hooks、并发、安全策略、执行、结果回填。</li>
+<li><code>ToolRegistry</code>：工具注册中心，收纳内置工具、MCP 工具、deferred tool、skill tool、cron tool 等。</li>
+<li><code>PermissionManager</code>：权限规则评估中心，贯穿工具注册期、调度期和执行期。</li>
+<li><code>MemoryManager</code> 与 hierarchical memory discovery：负责长期记忆、团队记忆、项目指令文件、规则文件、自动 recall/extract/dream。</li>
+<li><code>ExtensionManager</code> 与 <code>SkillManager</code>：插件、扩展、skill、MCP server、hooks、commands、agents 的贡献源。</li>
+<li><code>CronScheduler</code> 与 <code>LoopDetectionService</code>：一个负责未来唤醒，一个负责当前 agent loop 的止损。</li>
+<li>SDK：主要通过 CLI 子进程的 JSONL 协议接入 core runtime；TypeScript SDK 最完整，Python SDK 是较轻的进程封装。</li>
+</ul>
+<p>核心数据流可以概括为：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>flowchart TD
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  SDK[&quot;SDK / CLI / daemon&quot;] --&gt; ConfigInit[&quot;Config.initialize()&quot;]
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  ConfigInit --&gt; Ext[&quot;ExtensionManager&quot;]
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  ConfigInit --&gt; Perm[&quot;PermissionManager&quot;]
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  ConfigInit --&gt; Mem[&quot;MemoryManager + Memory Discovery&quot;]
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>  ConfigInit --&gt; Registry[&quot;ToolRegistry&quot;]
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  ConfigInit --&gt; Client[&quot;GeminiClient&quot;]
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>  Client --&gt; Chat[&quot;GeminiChat&quot;]
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>  Chat --&gt; Gen[&quot;ContentGenerator provider adapter&quot;]
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>  Gen --&gt; Model[&quot;LLM Provider&quot;]
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>  Model --&gt; Gen
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>  Gen --&gt; Turn[&quot;Turn.run()&quot;]
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>  Turn --&gt; Events[&quot;GeminiEvent stream&quot;]
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>  Turn --&gt; Scheduler[&quot;CoreToolScheduler&quot;]
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>  Scheduler --&gt; PermFlow[&quot;Permission Flow + Hooks&quot;]
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>  PermFlow --&gt; ToolExec[&quot;Tool.execute()&quot;]
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>  ToolExec --&gt; ToolResult[&quot;ToolResult&quot;]
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>  ToolResult --&gt; Client
+</code></pre></div>
+<h2 id="2">2. 关键源码入口<a class="headerlink" href="#2" title="Permanent link">&para;</a></h2>
+<h3 id="21-core">2.1 Core 主链路<a class="headerlink" href="#21-core" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>主题</th>
+<th>文件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>会话装配</td>
+<td><code>packages/core/src/config/config.ts</code></td>
+</tr>
+<tr>
+<td>Agent 主入口</td>
+<td><code>packages/core/src/core/client.ts</code></td>
+</tr>
+<tr>
+<td>模型聊天与 history</td>
+<td><code>packages/core/src/core/geminiChat.ts</code></td>
+</tr>
+<tr>
+<td>单轮响应解析</td>
+<td><code>packages/core/src/core/turn.ts</code></td>
+</tr>
+<tr>
+<td>工具调度</td>
+<td><code>packages/core/src/core/coreToolScheduler.ts</code></td>
+</tr>
+<tr>
+<td>系统提示词</td>
+<td><code>packages/core/src/core/prompts.ts</code></td>
+</tr>
+<tr>
+<td>启动上下文 reminder</td>
+<td><code>packages/core/src/utils/environmentContext.ts</code></td>
+</tr>
+<tr>
+<td>工具注册</td>
+<td><code>packages/core/src/tools/tool-registry.ts</code></td>
+</tr>
+<tr>
+<td>MCP 管理</td>
+<td><code>packages/core/src/tools/mcp-client-manager.ts</code></td>
+</tr>
+<tr>
+<td>MCP client</td>
+<td><code>packages/core/src/tools/mcp-client.ts</code></td>
+</tr>
+<tr>
+<td>MCP 工具包装</td>
+<td><code>packages/core/src/tools/mcp-tool.ts</code></td>
+</tr>
+<tr>
+<td>memory discovery</td>
+<td><code>packages/core/src/utils/memoryDiscovery.ts</code></td>
+</tr>
+<tr>
+<td>managed memory</td>
+<td><code>packages/core/src/memory/manager.ts</code></td>
+</tr>
+<tr>
+<td>权限管理</td>
+<td><code>packages/core/src/permissions/permission-manager.ts</code></td>
+</tr>
+<tr>
+<td>权限流</td>
+<td><code>packages/core/src/core/permissionFlow.ts</code></td>
+</tr>
+<tr>
+<td>auto mode</td>
+<td><code>packages/core/src/permissions/autoMode.ts</code></td>
+</tr>
+<tr>
+<td>extension</td>
+<td><code>packages/core/src/extension/extensionManager.ts</code></td>
+</tr>
+<tr>
+<td>skill manager</td>
+<td><code>packages/core/src/skills/skill-manager.ts</code></td>
+</tr>
+<tr>
+<td>skill tool</td>
+<td><code>packages/core/src/tools/skill.ts</code></td>
+</tr>
+<tr>
+<td>cron scheduler</td>
+<td><code>packages/core/src/services/cronScheduler.ts</code></td>
+</tr>
+<tr>
+<td>创建 cron</td>
+<td><code>packages/core/src/tools/cron-create.ts</code></td>
+</tr>
+<tr>
+<td>loop wakeup</td>
+<td><code>packages/core/src/tools/loop-wakeup.ts</code></td>
+</tr>
+<tr>
+<td>loop detection</td>
+<td><code>packages/core/src/services/loopDetectionService.ts</code></td>
+</tr>
+<tr>
+<td>provider 抽象</td>
+<td><code>packages/core/src/core/contentGenerator.ts</code></td>
+</tr>
+<tr>
+<td>side LLM client</td>
+<td><code>packages/core/src/core/baseLlmClient.ts</code></td>
+</tr>
+<tr>
+<td>OpenAI 兼容 provider</td>
+<td><code>packages/core/src/core/openaiContentGenerator/openaiContentGenerator.ts</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="22-sdk">2.2 SDK 入口<a class="headerlink" href="#22-sdk" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>SDK</th>
+<th>文件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TS createQuery</td>
+<td><code>packages/sdk-typescript/src/query/createQuery.ts</code></td>
+</tr>
+<tr>
+<td>TS Query runtime</td>
+<td><code>packages/sdk-typescript/src/query/Query.ts</code></td>
+</tr>
+<tr>
+<td>TS 子进程 transport</td>
+<td><code>packages/sdk-typescript/src/transport/ProcessTransport.ts</code></td>
+</tr>
+<tr>
+<td>TS 类型</td>
+<td><code>packages/sdk-typescript/src/types/types.ts</code></td>
+</tr>
+<tr>
+<td>TS 协议</td>
+<td><code>packages/sdk-typescript/src/types/protocol.ts</code></td>
+</tr>
+<tr>
+<td>Python query</td>
+<td><code>packages/sdk-python/src/qwen_code_sdk/query.py</code></td>
+</tr>
+<tr>
+<td>Python transport</td>
+<td><code>packages/sdk-python/src/qwen_code_sdk/transport.py</code></td>
+</tr>
+<tr>
+<td>Python 类型</td>
+<td><code>packages/sdk-python/src/qwen_code_sdk/types.py</code></td>
+</tr>
+<tr>
+<td>Python 校验</td>
+<td><code>packages/sdk-python/src/qwen_code_sdk/validation.py</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="3">3. 初始化与总装配<a class="headerlink" href="#3" title="Permanent link">&para;</a></h2>
+<p><code>Config.initialize()</code> 是 core runtime 的总装配入口。它不是只读配置对象，而是会把一整套运行时服务拼起来。</p>
+<p>典型初始化顺序：</p>
+<ol>
+<li>读取 settings、model、workspace、approval mode、sandbox、telemetry 等会话参数。</li>
+<li>初始化 <code>PermissionManager</code>，加载用户、项目、extension、runtime overlay 里的权限规则。</li>
+<li>在非 bare/safe 场景刷新 extension cache，把 extension contribution 合并进运行时。</li>
+<li>执行 <code>refreshHierarchicalMemory('session_start')</code>，读取全局、项目层级和目录层级指令文件。</li>
+<li>创建并持有 <code>ToolRegistry</code>。</li>
+<li>初始化 <code>GeminiClient</code>，把 model、content generator、tool scheduler 等接上。</li>
+<li>warm 内置工具工厂，注册基础工具。</li>
+<li>启动 MCP discovery。交互模式下通常走 progressive background discovery，避免启动时被慢 MCP server 卡住；非交互模式会更偏向等待 MCP ready。</li>
+<li>初始化 telemetry、runtime diagnostics、stale worktree sweep 等辅助服务。</li>
+</ol>
+<p>从设计上看，<code>Config</code> 是依赖图根节点。很多运行时组件不直接互相 new，而是通过 <code>config.getXxx()</code> 间接访问，降低入口复杂度，但也意味着排查行为时经常需要从 <code>Config</code> 回溯。</p>
+<h2 id="4-agent">4. Agent 主循环<a class="headerlink" href="#4-agent" title="Permanent link">&para;</a></h2>
+<h3 id="41-geminiclientsendmessagestream">4.1 <code>GeminiClient.sendMessageStream()</code><a class="headerlink" href="#41-geminiclientsendmessagestream" title="Permanent link">&para;</a></h3>
+<p><code>GeminiClient</code> 是 core 对外最重要的流式入口。它接收的消息类型不只是用户输入，还包括：</p>
+<ul>
+<li><code>UserQuery</code>：普通用户请求。</li>
+<li><code>ToolResult</code>：工具执行结果回灌给模型。</li>
+<li><code>Retry</code>：失败或中断后的重试。</li>
+<li><code>Hook</code>：hook 触发的消息。</li>
+<li><code>Cron</code>：定时任务触发的 prompt。</li>
+<li><code>Notification</code>：外部通知类消息。</li>
+<li><code>Teammate</code>：团队/多 agent 协作消息。</li>
+</ul>
+<p><code>sendMessageStream()</code> 的主要职责：</p>
+<ol>
+<li>根据消息类型准备当前请求上下文。</li>
+<li>触发 memory recall。<code>UserQuery</code> 和 <code>Cron</code> 会启动异步 recall，若及时完成则注入当前请求，若工具调用已经开始则延后到后续 <code>ToolResult</code>。</li>
+<li>运行 user prompt submit 等 hook。Cron 路径会跳过部分用户提交 hook，避免未来唤醒 prompt 被当作真实用户提交。</li>
+<li>调用 <code>GeminiChat.sendMessageStream()</code> 请求模型。</li>
+<li>用 <code>Turn.run()</code> 消费模型 stream，产生内容事件和 tool call 请求。</li>
+<li>将 tool call 交给 <code>CoreToolScheduler</code>。</li>
+<li>监听工具结果，再把 <code>ToolResult</code> 作为下一次输入喂回模型。</li>
+<li>在 UserQuery 后台调度 memory extract、dream、skill review 等。</li>
+</ol>
+<h3 id="42-geminiclientstartchat">4.2 <code>GeminiClient.startChat()</code><a class="headerlink" href="#42-geminiclientstartchat" title="Permanent link">&para;</a></h3>
+<p><code>startChat()</code> 负责构造一场 agent 会话：</p>
+<ol>
+<li>warm <code>ToolRegistry</code>，确保工具 schema 可用。</li>
+<li>resume session 时重新 reveal deferred tools，避免历史会话丢掉可用工具。</li>
+<li>通过 <code>getInitialChatHistory()</code> 生成 startup prelude。</li>
+<li>创建 <code>GeminiChat(systemInstruction, history)</code>。</li>
+<li>修复 history 中 orphan tool use / tool response。</li>
+<li>跑 SessionStart hook。</li>
+<li>调用 <code>setTools()</code>，把当前可用工具声明传给模型。</li>
+</ol>
+<h3 id="43-geminichat">4.3 <code>GeminiChat</code><a class="headerlink" href="#43-geminichat" title="Permanent link">&para;</a></h3>
+<p><code>GeminiChat</code> 是 provider 请求层。它内部维护两份 history：</p>
+<ul>
+<li>comprehensive history：完整历史，用于尽可能保存细节。</li>
+<li>curated history：压缩或整理过的历史，用于控制上下文窗口。</li>
+</ul>
+<p>关键行为：</p>
+<ul>
+<li>自动压缩：上下文接近限制时会压缩历史。</li>
+<li>hard-rescue：遇到 context overflow 时会尝试救援式压缩和重发。</li>
+<li>retry：根据 provider 错误类型和 retry policy 重试。</li>
+<li>partial response 持久化：模型流式输出中的部分 assistant 内容会进入 history。</li>
+<li>orphan tool use repair：修复模型工具调用和工具结果不成对的问题。</li>
+<li>provider 抽象：通过 <code>config.getContentGenerator().generateContentStream()</code> 调用真实模型。</li>
+</ul>
+<h3 id="44-turn">4.4 <code>Turn</code><a class="headerlink" href="#44-turn" title="Permanent link">&para;</a></h3>
+<p><code>Turn.run()</code> 是模型流解析器。它消费 provider 返回的 stream，把原始响应拆成 core 事件：</p>
+<ul>
+<li><code>Thought</code>：模型思考或 reasoning 片段。</li>
+<li><code>Content</code>：面向用户的文本输出。</li>
+<li><code>ToolCallRequest</code>：function call。</li>
+<li><code>Citation</code>：引用信息。</li>
+<li><code>Finished</code>：单轮结束原因。</li>
+</ul>
+<p>Function call 会被转换成 <code>ToolCallRequestInfo</code>，其中包含：</p>
+<ul>
+<li>tool name。</li>
+<li>tool args。</li>
+<li>call id。</li>
+<li>provider call id。</li>
+<li>response id。</li>
+<li>输出是否被截断。</li>
+</ul>
+<p>这些信息后续会被 <code>CoreToolScheduler</code> 使用，尤其是权限、截断保护、工具结果对应关系。</p>
+<h2 id="5">5. 系统提示词体系<a class="headerlink" href="#5" title="Permanent link">&para;</a></h2>
+<p>Qwen Code 的提示词不是单层文本，而是两层组合：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>flowchart TD
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  SystemInstruction[&quot;systemInstruction, system role&quot;] --&gt; ModelReq[&quot;LLM request&quot;]
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  StartupReminder[&quot;startup &lt;system-reminder&gt;, user role&quot;] --&gt; InitialHistory[&quot;initial chat history&quot;]
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  UserMemory[&quot;hierarchical memory / user memory&quot;] --&gt; SystemInstruction
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  Env[&quot;OS/date/cwd/tree/MCP/skills/deferred tools&quot;] --&gt; StartupReminder
+</code></pre></div>
+<h3 id="51-corepromptsts">5.1 <code>core/prompts.ts</code><a class="headerlink" href="#51-corepromptsts" title="Permanent link">&para;</a></h3>
+<p><code>packages/core/src/core/prompts.ts</code> 生成真正的 system role instruction。</p>
+<p>主要内容：</p>
+<ul>
+<li>Qwen Code 身份与边界。</li>
+<li>工程协作规则。</li>
+<li>代码修改规范。</li>
+<li>git 安全规则。</li>
+<li>工具使用规则。</li>
+<li>sandbox/approval 相关提示。</li>
+<li>用户 memory 拼接。</li>
+</ul>
+<p>可配置入口：</p>
+<ul>
+<li><code>QWEN_SYSTEM_MD</code>：用外部 Markdown 覆盖默认系统提示词。</li>
+<li><code>QWEN_WRITE_SYSTEM_MD</code>：把最终系统提示词写出，便于调试。</li>
+<li>CLI/SDK 的 <code>--system-prompt</code>：覆盖 system prompt。</li>
+<li>CLI/SDK 的 <code>--append-system-prompt</code>：追加 system prompt。</li>
+<li><code>userMemory</code>：通过分隔线拼接进 system instruction。</li>
+</ul>
+<p>这意味着最终 system prompt 可能来自默认模板、环境变量、CLI/SDK 参数、项目 memory 多源叠加。研究 prompt 行为时不能只看 <code>prompts.ts</code> 默认文本。</p>
+<h3 id="52-environmentcontextts">5.2 <code>environmentContext.ts</code><a class="headerlink" href="#52-environmentcontextts" title="Permanent link">&para;</a></h3>
+<p><code>packages/core/src/utils/environmentContext.ts</code> 生成 startup context，通常以 user role 的 <code>&lt;system-reminder&gt;</code> 形式放入初始 history。</p>
+<p>它包含：</p>
+<ul>
+<li>当前日期。</li>
+<li>OS。</li>
+<li>当前工作目录。</li>
+<li>项目目录结构摘要。</li>
+<li>deferred tools 的提示。</li>
+<li>MCP server instructions。</li>
+<li>available skills。</li>
+<li>压缩后恢复 startup context 所需的信息。</li>
+</ul>
+<p>为什么这部分不是 system role：它更像“本次会话环境快照”，需要在 history 中被模型看见，也能在压缩后重新注入。</p>
+<h3 id="53-memory-prompt">5.3 memory 与 prompt 的关系<a class="headerlink" href="#53-memory-prompt" title="Permanent link">&para;</a></h3>
+<p>memory 有两种不同形态：</p>
+<ol>
+<li>指令型 memory：例如 <code>QWEN.md</code>、<code>AGENTS.md</code>、rules，通常会进入 system prompt 或 startup reminder。</li>
+<li>managed memory：长期记忆检索结果，通常会在具体 user query 或 cron query 附近注入。</li>
+</ol>
+<p>这两类 memory 的生命周期、可信边界和注入时机不同，不能混为一个“记忆模块”理解。</p>
+<h2 id="6">6. 工具系统<a class="headerlink" href="#6" title="Permanent link">&para;</a></h2>
+<h3 id="61-toolregistry">6.1 <code>ToolRegistry</code><a class="headerlink" href="#61-toolregistry" title="Permanent link">&para;</a></h3>
+<p><code>ToolRegistry</code> 是工具注册中心。它会收纳：</p>
+<ul>
+<li>内置文件工具：read、write、edit、glob、grep、ls 等。</li>
+<li>shell 工具。</li>
+<li>web fetch。</li>
+<li>todo、task、agent、team、workflow 等运行时工具。</li>
+<li>cron 工具。</li>
+<li>loop wakeup 工具。</li>
+<li>skill tool。</li>
+<li>MCP tools。</li>
+<li>deferred tools。</li>
+</ul>
+<p>工具注册通常会先经过 <code>PermissionManager.isToolEnabled()</code>。这意味着某些工具在模型看来可能根本不存在，而不是存在但调用时被拒。</p>
+<h3 id="62-tool-declaration-deferred-tool">6.2 tool declaration 与 deferred tool<a class="headerlink" href="#62-tool-declaration-deferred-tool" title="Permanent link">&para;</a></h3>
+<p>Qwen Code 支持 deferred tool 机制：不是所有工具都一开始作为 function declaration 发给模型。部分工具会先通过 startup reminder 或 <code>tool_search</code> 暴露给模型，模型需要时再 reveal。</p>
+<p>这样做的价值：</p>
+<ul>
+<li>控制 tool schema token 成本。</li>
+<li>避免大量 MCP 工具污染模型选择空间。</li>
+<li>支持渐进发现。</li>
+</ul>
+<p>当 deferred tool 被 reveal 后，<code>setTools()</code> 会更新发给模型的工具声明。</p>
+<h3 id="63-coretoolscheduler">6.3 <code>CoreToolScheduler</code><a class="headerlink" href="#63-coretoolscheduler" title="Permanent link">&para;</a></h3>
+<p><code>CoreToolScheduler</code> 是工具执行的核心状态机。</p>
+<p>典型状态：</p>
+<ul>
+<li>validating。</li>
+<li>scheduled。</li>
+<li>executing。</li>
+<li>waiting for approval。</li>
+<li>success。</li>
+<li>error。</li>
+<li>cancelled。</li>
+</ul>
+<p>主要职责：</p>
+<ol>
+<li>tool call 参数校验。</li>
+<li>validation retry 与 loop detection。</li>
+<li>截断保护，例如 edit 参数被模型输出截断时拒绝执行。</li>
+<li>权限流判断。</li>
+<li>PreToolUse / PostToolUse / PostToolBatch hooks。</li>
+<li>PermissionRequest hook。</li>
+<li>非交互模式下的 approval fail closed。</li>
+<li>background agent 下的工具限制。</li>
+<li>tool span 与 telemetry。</li>
+<li>根据工具安全等级决定并发执行。</li>
+</ol>
+<p>工具调度是 Agent 行为安全性的第二道门。第一道门是注册期是否暴露工具，第三道门是工具执行时的 hook 和实际 tool 内部保护。</p>
+<h2 id="7">7. 权限体系<a class="headerlink" href="#7" title="Permanent link">&para;</a></h2>
+<p>权限体系大致分三段：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>flowchart TD
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>  Register[&quot;注册期: isToolEnabled()&quot;] --&gt; Visible[&quot;工具是否对模型可见&quot;]
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>  Schedule[&quot;调度期: CoreToolScheduler&quot;] --&gt; L3[&quot;L3 tool default&quot;]
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>  L3 --&gt; L4[&quot;L4 PermissionManager rules&quot;]
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>  L4 --&gt; L5[&quot;L5 approval mode&quot;]
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>  L5 --&gt; Execute[&quot;执行工具&quot;]
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>  Execute --&gt; Hooks[&quot;Pre/Post hooks 可拦截或修改&quot;]
+</code></pre></div>
+<h3 id="71">7.1 权限模式<a class="headerlink" href="#71" title="Permanent link">&para;</a></h3>
+<p>常见 approval / permission mode：</p>
+<ul>
+<li>default。</li>
+<li>plan。</li>
+<li>auto-edit。</li>
+<li>auto。</li>
+<li>yolo。</li>
+</ul>
+<p>不同 mode 影响：</p>
+<ul>
+<li>哪些工具天然可用。</li>
+<li>文件写入是否自动允许。</li>
+<li>shell 是否需要确认。</li>
+<li>是否进入计划模式限制。</li>
+<li>是否启用 auto classifier。</li>
+</ul>
+<h3 id="72-l3l4l5">7.2 L3/L4/L5<a class="headerlink" href="#72-l3l4l5" title="Permanent link">&para;</a></h3>
+<p>可以粗略理解为：</p>
+<ul>
+<li>L3：工具自身默认权限等级和安全类型。</li>
+<li>L4：<code>PermissionManager</code> 的 allow/ask/deny 规则。</li>
+<li>L5：当前 approval mode 的最终策略。</li>
+</ul>
+<p>规则优先级中，deny 最高。allow 并不总是直接放行，有些受保护路径或高风险操作会强制进入更严格检查。</p>
+<h3 id="73-auto-mode">7.3 Auto mode<a class="headerlink" href="#73-auto-mode" title="Permanent link">&para;</a></h3>
+<p><code>packages/core/src/permissions/autoMode.ts</code> 是自动权限策略的关键。</p>
+<p>Auto mode 的核心逻辑：</p>
+<ol>
+<li>安全工具 allowlist 可以直接通过。</li>
+<li>workspace edit 可能走 fast path。</li>
+<li>风险路径或不确定操作交给 LLM classifier。</li>
+<li>classifier 不可用或结果不安全时 fail closed。</li>
+</ol>
+<p>受保护范围包括：</p>
+<ul>
+<li><code>.git</code>。</li>
+<li><code>.husky</code>。</li>
+<li><code>package.json</code>。</li>
+<li><code>.npmrc</code>。</li>
+<li><code>Makefile</code>、<code>justfile</code>、<code>Taskfile</code>。</li>
+<li>GitHub workflows。</li>
+<li><code>.qwen/settings*.json</code>。</li>
+<li><code>QWEN.md</code>、<code>AGENTS.md</code>。</li>
+<li><code>.qwen/rules</code>、<code>.qwen/commands</code>、<code>.qwen/agents</code>、<code>.qwen/skills</code>、<code>.qwen/hooks</code>。</li>
+<li><code>.mcp.json</code>。</li>
+<li>QWEN_HOME 相关配置面。</li>
+</ul>
+<h3 id="74-shell">7.4 Shell 权限<a class="headerlink" href="#74-shell" title="Permanent link">&para;</a></h3>
+<p>shell 不是简单按命令字符串做 allow/deny。<code>PermissionManager.evaluate()</code> 会解析 shell 操作，并将其映射成虚拟操作：</p>
+<ul>
+<li>Read。</li>
+<li>Edit。</li>
+<li>Write。</li>
+<li>WebFetch。</li>
+</ul>
+<p>同时还会跟踪 compound command 中的 cwd 变化。这样规则可以覆盖 shell 间接文件操作，而不是只能管 <code>read_file</code>、<code>write_file</code> 这种显式工具。</p>
+<p>Shell 默认权限也会结合 AST read-only checker 判断。只读命令和写操作的权限路径不同。</p>
+<h2 id="8-mcp">8. MCP 架构<a class="headerlink" href="#8-mcp" title="Permanent link">&para;</a></h2>
+<h3 id="81-mcp">8.1 MCP 来源<a class="headerlink" href="#81-mcp" title="Permanent link">&para;</a></h3>
+<p>MCP server 配置来源会合并：</p>
+<ul>
+<li>settings。</li>
+<li>extension contribution。</li>
+<li>runtime overlay。</li>
+<li>SDK 传入的 MCP server。</li>
+</ul>
+<p>合并后还会经过过滤：</p>
+<ul>
+<li><code>excludedMcpServers</code>。</li>
+<li><code>allowedMcpServers</code>。</li>
+<li><code>pendingMcpServers</code>。</li>
+<li>recently removed server。</li>
+<li>trust 相关过滤。</li>
+</ul>
+<h3 id="82-discovery">8.2 Discovery 策略<a class="headerlink" href="#82-discovery" title="Permanent link">&para;</a></h3>
+<p>Qwen Code 默认偏 progressive discovery。</p>
+<p>交互模式：</p>
+<ul>
+<li>初始化时不阻塞等待所有 MCP 工具发现完成。</li>
+<li>后台执行 <code>startMcpDiscoveryInBackground()</code>。</li>
+<li>发现完成后更新工具、prompt、resource registry。</li>
+</ul>
+<p>非交互模式：</p>
+<ul>
+<li>更倾向调用 <code>waitForMcpReady()</code>，避免 headless 场景里模型看不到必要工具。</li>
+</ul>
+<p>这样可以在 CLI/TUI 中减少冷启动延迟，同时仍让 MCP 工具逐步可用。</p>
+<h3 id="83-mcp">8.3 MCP 能贡献什么<a class="headerlink" href="#83-mcp" title="Permanent link">&para;</a></h3>
+<p>MCP server discovery 后会产生三类能力：</p>
+<ul>
+<li>tools：包装成 <code>DiscoveredMCPTool</code>，进入 <code>ToolRegistry</code>。</li>
+<li>prompts：进入 <code>PromptRegistry</code>，之后可以作为 model-invocable command 被 skill tool 或命令系统调用。</li>
+<li>resources：进入 <code>ResourceRegistry</code>，通过 <code>read_mcp_resource</code> 读取。</li>
+</ul>
+<h3 id="84-deferred-mcp-tools">8.4 Deferred MCP tools<a class="headerlink" href="#84-deferred-mcp-tools" title="Permanent link">&para;</a></h3>
+<p>MCP tools 很适合 deferred：</p>
+<ul>
+<li>MCP server 可能提供大量工具。</li>
+<li>每个工具 schema 可能较长。</li>
+<li>一开始全量暴露会显著增加上下文压力。</li>
+</ul>
+<p>因此 MCP 工具可以先只在 <code>&lt;system-reminder&gt;</code> 或 <code>tool_search</code> 里作为可发现项出现。模型明确需要时，才 reveal 并把 schema 放入 tools declaration。</p>
+<h3 id="85-mcp-transport">8.5 MCP transport 与认证<a class="headerlink" href="#85-mcp-transport" title="Permanent link">&para;</a></h3>
+<p>core 支持多类 MCP transport：</p>
+<ul>
+<li>stdio。</li>
+<li>SSE。</li>
+<li>streamable HTTP。</li>
+<li>websocket placeholder。</li>
+<li>SDK transport。</li>
+</ul>
+<p>认证相关能力：</p>
+<ul>
+<li>OAuth。</li>
+<li>token storage。</li>
+<li>Google credentials。</li>
+<li>service account impersonation。</li>
+</ul>
+<p>还有一些运行时控制：</p>
+<ul>
+<li>MCP status global registry。</li>
+<li>workspace budget guardrail，支持 warn/enforce/off。</li>
+<li>client budget。</li>
+<li>daemon 场景下的 shared MCP transport pool。</li>
+</ul>
+<h2 id="9-memory">9. Memory 架构<a class="headerlink" href="#9-memory" title="Permanent link">&para;</a></h2>
+<p>Qwen Code 的 memory 分两大系统：hierarchical instruction memory 和 managed auto-memory。</p>
+<h3 id="91-hierarchical-instruction-memory">9.1 Hierarchical instruction memory<a class="headerlink" href="#91-hierarchical-instruction-memory" title="Permanent link">&para;</a></h3>
+<p>关键文件：</p>
+<ul>
+<li><code>packages/core/src/utils/memoryDiscovery.ts</code>。</li>
+<li><code>packages/core/src/utils/memoryImportProcessor.ts</code>。</li>
+<li><code>packages/core/src/utils/rulesDiscovery.ts</code>。</li>
+</ul>
+<p>会读取：</p>
+<ul>
+<li>全局 <code>QWEN.md</code>。</li>
+<li>项目或目录中的 <code>QWEN.md</code>。</li>
+<li><code>AGENTS.md</code>。</li>
+<li><code>.qwen/QWEN.local.md</code>。</li>
+<li><code>.qwen/rules/</code>。</li>
+</ul>
+<p>重要行为：</p>
+<ul>
+<li>全局 QWEN 总会查。</li>
+<li>工作区向上扫描需要 trusted folder。</li>
+<li>imports 最大深度为 5，避免无限导入。</li>
+<li><code>.qwen/rules/</code> baseline rules 会进入 system prompt。</li>
+<li>conditional rules 会进入 registry，按路径或条件激活。</li>
+</ul>
+<p>这套 memory 更像“项目宪法”和“局部工作规约”，优先级高，生命周期偏静态。</p>
+<h3 id="92-managed-auto-memory">9.2 Managed auto-memory<a class="headerlink" href="#92-managed-auto-memory" title="Permanent link">&para;</a></h3>
+<p>关键文件：</p>
+<ul>
+<li><code>packages/core/src/memory/manager.ts</code>。</li>
+<li><code>packages/core/src/memory/recall.ts</code>。</li>
+<li><code>packages/core/src/memory/extract.ts</code>。</li>
+<li><code>packages/core/src/memory/dream.ts</code>。</li>
+<li><code>packages/core/src/memory/store.ts</code>。</li>
+<li><code>packages/core/src/memory/team-memory-sync.ts</code>。</li>
+</ul>
+<p>典型生命周期：</p>
+<ol>
+<li><code>UserQuery</code> 或 <code>Cron</code> 开始时，后台异步 <code>recall()</code>。</li>
+<li>recall 如果很快完成，则注入当前请求。</li>
+<li>如果工具调用已经开始，recall 结果会延迟到后续 <code>ToolResult</code> 再追加。</li>
+<li>UserQuery 结束后后台 <code>scheduleExtract()</code>，抽取值得记住的信息。</li>
+<li>后台 <code>scheduleDream()</code>，整理和升华已有 memory。</li>
+<li>后台 <code>scheduleSkillReview()</code>，评估是否应沉淀或更新 skill。</li>
+</ol>
+<p>managed memory 有 memory pressure gate，避免在上下文压力过高时继续注入过多内容。</p>
+<h3 id="93-team-memory">9.3 Team memory<a class="headerlink" href="#93-team-memory" title="Permanent link">&para;</a></h3>
+<p>团队记忆只在 trusted workspace 中启用，并带有额外安全检查：</p>
+<ul>
+<li>git shareability 检查。</li>
+<li>symlink 检查。</li>
+<li>路径逃逸检查。</li>
+<li>secret guard。</li>
+</ul>
+<p>这说明 Qwen Code 不把 memory 只看成个人数据，还考虑了多人/多 agent 协作时的共享安全边界。</p>
+<h2 id="10-pluginextension-skill">10. Plugin、Extension 与 Skill<a class="headerlink" href="#10-pluginextension-skill" title="Permanent link">&para;</a></h2>
+<h3 id="101-extension-core">10.1 Extension 是 core 中的插件主体<a class="headerlink" href="#101-extension-core" title="Permanent link">&para;</a></h3>
+<p>Qwen Code core 里“plugin”更具体的实现形态主要是 extension。</p>
+<p><code>ExtensionManager</code> 支持 extension 贡献：</p>
+<ul>
+<li>MCP servers。</li>
+<li>context files。</li>
+<li>settings。</li>
+<li>commands。</li>
+<li>skills。</li>
+<li>subagents。</li>
+<li>hooks。</li>
+<li>channels。</li>
+</ul>
+<p>Extension 支持：</p>
+<ul>
+<li>启用/禁用状态。</li>
+<li>marketplace/source registry。</li>
+<li>GitHub/npm/archive 安装。</li>
+<li>变量替换。</li>
+<li>本地化。</li>
+<li>用户偏好。</li>
+<li>contribution 合并与覆盖。</li>
+</ul>
+<p>因此 extension 是能力注入层，MCP、skill、hooks、commands 都可以由 extension 带进 core。</p>
+<h3 id="102-skillmanager">10.2 SkillManager<a class="headerlink" href="#102-skillmanager" title="Permanent link">&para;</a></h3>
+<p>Skill 目录形态通常是：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>&lt;skill-name&gt;/
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  SKILL.md
+</code></pre></div>
+<p>Skill 来源优先级：</p>
+<ol>
+<li>project。</li>
+<li>user。</li>
+<li>extension。</li>
+<li>bundled。</li>
+</ol>
+<p><code>SkillManager</code> 会扫描 project/user/extension/bundled 四层 skill，读取 <code>SKILL.md</code> frontmatter 与正文。</p>
+<p>特性：</p>
+<ul>
+<li>watcher 最大深度 2。</li>
+<li>忽略 <code>.git</code> 和特殊文件。</li>
+<li>支持 disabled skills。</li>
+<li>支持 path-activated conditional skills。</li>
+<li>支持 <code>allowedTools</code>。</li>
+<li>支持 skill hooks 注册。</li>
+</ul>
+<h3 id="103-skill-tool">10.3 Skill tool<a class="headerlink" href="#103-skill-tool" title="Permanent link">&para;</a></h3>
+<p><code>packages/core/src/tools/skill.ts</code> 提供模型可调用的 skill 工具。</p>
+<p>设计特点：</p>
+<ul>
+<li>Skill tool 自身描述相对静态。</li>
+<li>可用 skill 列表通过 <code>&lt;available_skills&gt;</code> reminder 动态告诉模型。</li>
+<li>模型调用某个 skill 后，skill body 被注入上下文。</li>
+<li>skill 的 <code>allowedTools</code> 会转成 session allow rule。</li>
+<li>skill hooks 会注册到当前会话。</li>
+<li>如果存在同名 model-invocable command 或 MCP prompt，skill tool 可以委派调用。</li>
+</ul>
+<p>这套设计让 skill 不需要一开始把所有正文都塞进 system prompt，而是在模型明确要用时再展开。</p>
+<h2 id="11-hooks">11. Hooks<a class="headerlink" href="#11-hooks" title="Permanent link">&para;</a></h2>
+<p>Hooks 是贯穿 core 的横切机制。它们可以来自 settings、extension、skill 等。</p>
+<p>常见触发点：</p>
+<ul>
+<li>SessionStart。</li>
+<li>UserPromptSubmit。</li>
+<li>PreToolUse。</li>
+<li>PostToolUse。</li>
+<li>PostToolBatch。</li>
+<li>PermissionRequest。</li>
+<li>Stop。</li>
+</ul>
+<p>Hook 能做的事情包括：</p>
+<ul>
+<li>修改 prompt。</li>
+<li>阻止工具调用。</li>
+<li>改写工具参数。</li>
+<li>添加上下文。</li>
+<li>记录外部事件。</li>
+<li>参与权限确认。</li>
+</ul>
+<p>安全上，trusted hooks 与非 trusted hooks 会有边界。对工具调用来说，hooks 是权限体系之外的又一层可编程策略面。</p>
+<h2 id="12-loop-wakeup">12. 定时任务与 Loop Wakeup<a class="headerlink" href="#12-loop-wakeup" title="Permanent link">&para;</a></h2>
+<h3 id="121-cronscheduler">12.1 CronScheduler<a class="headerlink" href="#121-cronscheduler" title="Permanent link">&para;</a></h3>
+<p>关键文件：</p>
+<ul>
+<li><code>packages/core/src/services/cronScheduler.ts</code>。</li>
+<li><code>packages/core/src/tools/cron-create.ts</code>。</li>
+<li><code>packages/core/src/tools/cron-list.ts</code>。</li>
+<li><code>packages/core/src/tools/cron-delete.ts</code>。</li>
+</ul>
+<p>Cron 类型：</p>
+<ul>
+<li>标准 5-field cron job。</li>
+<li>session-only job。</li>
+<li>durable job。</li>
+</ul>
+<p>一些约束：</p>
+<ul>
+<li>job 上限约 50。</li>
+<li>recurring job 最大年龄约 7 天。</li>
+<li>recurring 触发有 jitter，最多约 10%，上限 15 分钟。</li>
+<li>one-shot 在 <code>:00</code> 或 <code>:30</code> 附近可能最多提前约 90 秒唤醒。</li>
+<li>durable job 会按项目持久化到用户 runtime 目录，并处理 lock、takeover、catch-up、missed 等。</li>
+</ul>
+<p>Cron 触发后，本质上是把 prompt 作为 <code>SendMessageType.Cron</code> 放回 <code>GeminiClient.sendMessageStream()</code>。</p>
+<h3 id="122-cron_create">12.2 cron_create 权限<a class="headerlink" href="#122-cron_create" title="Permanent link">&para;</a></h3>
+<p><code>cron_create</code> 默认需要 ask。原因是 cron 会在未来重新把 prompt 喂给有完整工具权限的 Agent。如果让它轻易自动创建，就可能绕过当前会话的 auto classifier 或人工确认。</p>
+<h3 id="123-loop_wakeup">12.3 loop_wakeup<a class="headerlink" href="#123-loop_wakeup" title="Permanent link">&para;</a></h3>
+<p>关键文件：</p>
+<ul>
+<li><code>packages/core/src/tools/loop-wakeup.ts</code>。</li>
+</ul>
+<p><code>loop_wakeup</code> 是 session-only one-shot wakeup：</p>
+<ul>
+<li>秒级延迟。</li>
+<li>不持久化。</li>
+<li>不计入 cron job 上限。</li>
+<li>通常 clamp 在 60 到 3600 秒。</li>
+<li>chain 最大约 24 小时。</li>
+</ul>
+<p>它适合 agent 在当前任务里安排短期自我唤醒，例如等待外部状态、稍后检查某个进程、循环监控但不想落入无限 loop。</p>
+<h2 id="13-loop-detection">13. Loop Detection<a class="headerlink" href="#13-loop-detection" title="Permanent link">&para;</a></h2>
+<p>关键文件：</p>
+<ul>
+<li><code>packages/core/src/services/loopDetectionService.ts</code>。</li>
+</ul>
+<p>Qwen Code 有多层 loop 止损：</p>
+<ul>
+<li><code>MAX_TURNS = 100</code>，限制模型-工具往返轮数。</li>
+<li>连续相同工具调用检测。</li>
+<li>shell inspection 停滞检测。</li>
+<li>单轮工具调用数量上限，约 100。</li>
+<li>重复 content/thought 检测。</li>
+<li>read-file loop 检测。</li>
+<li>ABAB 工具交替模式检测。</li>
+<li>validation retry loop 检测。</li>
+</ul>
+<p>这说明 Qwen Code 不只防“模型一直说话”，还防“模型反复调用同一工具”“读同一批文件”“工具参数校验反复失败”“shell 检查没有进展”等工程 agent 中常见卡死形态。</p>
+<p>Loop detection 的处理通常不是简单 kill，而是把信号反馈给调度和上层，让 agent 有机会停下、总结、或请求用户介入。</p>
+<h2 id="14-provider">14. Provider 抽象<a class="headerlink" href="#14-provider" title="Permanent link">&para;</a></h2>
+<p>虽然类名保留了 <code>GeminiClient</code> / <code>GeminiChat</code>，但 core 内部并不只支持 Gemini。</p>
+<p>关键抽象：</p>
+<ul>
+<li><code>packages/core/src/core/contentGenerator.ts</code>。</li>
+<li><code>packages/core/src/core/baseLlmClient.ts</code>。</li>
+<li><code>packages/core/src/core/openaiContentGenerator/openaiContentGenerator.ts</code>。</li>
+<li><code>packages/core/src/core/anthropicContentGenerator/anthropicContentGenerator.ts</code>。</li>
+<li><code>packages/core/src/core/geminiContentGenerator/geminiContentGenerator.ts</code>。</li>
+</ul>
+<p>内部消息结构大量使用 Google GenAI 的 <code>Content</code> / <code>Part</code> 形状作为统一中间表示，然后由各 provider adapter 转换：</p>
+<ul>
+<li>Gemini。</li>
+<li>OpenAI-compatible。</li>
+<li>Anthropic。</li>
+<li>Qwen/DashScope。</li>
+<li>DeepSeek。</li>
+<li>ModelScope。</li>
+<li>MiniMax。</li>
+<li>Mistral。</li>
+<li>Mimo。</li>
+<li>Vertex 等。</li>
+</ul>
+<p><code>BaseLlmClient</code> 还承担 side queries：</p>
+<ul>
+<li>permission classifier。</li>
+<li>memory recall/extract/dream。</li>
+<li>compression。</li>
+<li>其他非主对话模型调用。</li>
+</ul>
+<p>它支持 per-model generator cache，避免重复初始化 provider client。</p>
+<h2 id="15-typescript-sdk">15. TypeScript SDK<a class="headerlink" href="#15-typescript-sdk" title="Permanent link">&para;</a></h2>
+<p>TypeScript SDK 是最完整的 SDK。</p>
+<h3 id="151">15.1 进程式接入<a class="headerlink" href="#151" title="Permanent link">&para;</a></h3>
+<p>核心文件：</p>
+<ul>
+<li><code>packages/sdk-typescript/src/query/createQuery.ts</code>。</li>
+<li><code>packages/sdk-typescript/src/query/Query.ts</code>。</li>
+<li><code>packages/sdk-typescript/src/transport/ProcessTransport.ts</code>。</li>
+</ul>
+<p>SDK 会启动 CLI 子进程，大致命令形态：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>qwen --input-format stream-json --output-format stream-json --channel=SDK ...
+</code></pre></div>
+<p>通信方式是 JSONL 双向流：</p>
+<ul>
+<li>stdin 发送用户消息、控制响应、MCP message 等。</li>
+<li>stdout 接收 assistant/system/result/partial/control request 等事件。</li>
+</ul>
+<h3 id="152-query-runtime">15.2 Query runtime<a class="headerlink" href="#152-query-runtime" title="Permanent link">&para;</a></h3>
+<p><code>Query</code> 负责：</p>
+<ul>
+<li>初始化 transport。</li>
+<li>发送 initial prompt。</li>
+<li>处理 event stream。</li>
+<li>暴露 async iterable。</li>
+<li>支持 interrupt。</li>
+<li>支持 set_model。</li>
+<li>支持 set_permission_mode。</li>
+<li>支持 mcp_server_status。</li>
+<li>处理 permission callback <code>canUseTool</code>。</li>
+<li>处理 SDK MCP server 的 <code>mcp_message</code>。</li>
+</ul>
+<h3 id="153-sdk-mcp-server">15.3 SDK MCP server<a class="headerlink" href="#153-sdk-mcp-server" title="Permanent link">&para;</a></h3>
+<p>TypeScript SDK 支持把 SDK 侧 MCP server 接入 core。</p>
+<p>关键文件：</p>
+<ul>
+<li><code>packages/sdk-typescript/src/mcp/SdkControlServerTransport.ts</code>。</li>
+<li><code>packages/sdk-typescript/src/mcp/createSdkMcpServer.ts</code>。</li>
+<li><code>packages/sdk-typescript/src/mcp/tool.ts</code>。</li>
+<li>daemon 版对应目录：<code>packages/sdk-typescript/src/daemon-mcp/</code>。</li>
+</ul>
+<p>初始化时，SDK 会先连接本地 SDK MCP server instances，然后把相关信息放到 initialize control request 中，让 core 能把这些 MCP server 纳入 discovery 和 tool registry。</p>
+<h3 id="154-ts-sdk">15.4 TS SDK 类型能力<a class="headerlink" href="#154-ts-sdk" title="Permanent link">&para;</a></h3>
+<p>TS SDK 类型覆盖较完整：</p>
+<ul>
+<li>SDKUserMessage。</li>
+<li>assistant message。</li>
+<li>system message。</li>
+<li>result message。</li>
+<li>partial message。</li>
+<li>control request/response。</li>
+<li>permission mode。</li>
+<li>hooks。</li>
+<li>MCP server。</li>
+<li>agent/subagent 配置。</li>
+</ul>
+<p>这使 TS SDK 更适合做嵌入式 agent runner、IDE/daemon 桥接、服务端编排。</p>
+<h2 id="16-python-sdk">16. Python SDK<a class="headerlink" href="#16-python-sdk" title="Permanent link">&para;</a></h2>
+<p>Python SDK 是更轻的进程封装。</p>
+<p>关键文件：</p>
+<ul>
+<li><code>packages/sdk-python/src/qwen_code_sdk/query.py</code>。</li>
+<li><code>packages/sdk-python/src/qwen_code_sdk/transport.py</code>。</li>
+<li><code>packages/sdk-python/src/qwen_code_sdk/types.py</code>。</li>
+<li><code>packages/sdk-python/src/qwen_code_sdk/validation.py</code>。</li>
+</ul>
+<p>它同样通过 CLI 子进程和 stream-json 协议通信，但能力不如 TS SDK 完整：</p>
+<ul>
+<li>Python SDK v1 不支持 <code>mcp_message</code>。</li>
+<li><code>validation.py</code> 会拒绝 <code>mcp_servers</code>。</li>
+<li>Python <code>PermissionMode</code> 中缺少 TS 侧已有的部分模式，例如 <code>auto</code>。</li>
+</ul>
+<p>因此如果研究“SDK 如何完整接入 core Agent 能力”，TS SDK 更有代表性；Python SDK 更适合普通 query 封装。</p>
+<h2 id="17-java-sdk">17. Java SDK 位置<a class="headerlink" href="#17-java-sdk" title="Permanent link">&para;</a></h2>
+<p>当前仓库结构中没有 <code>packages/sdk-java/src</code>。如果有 Java SDK，可能不在这个源码路径下，或者被移动到了其他 package。基于当前本地仓库，core + TS/Python SDK 是可直接分析对象。</p>
+<h2 id="18">18. 一次完整请求的细节链路<a class="headerlink" href="#18" title="Permanent link">&para;</a></h2>
+<p>以用户输入“修改某个文件”为例：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>sequenceDiagram
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>  participant User
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>  participant SDK as SDK/CLI
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>  participant Client as GeminiClient
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>  participant Chat as GeminiChat
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>  participant Model as LLM Provider
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>  participant Turn
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>  participant Scheduler as CoreToolScheduler
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>  participant Perm as PermissionManager
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>  participant Tool as Tool
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>  User-&gt;&gt;SDK: 输入请求
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>  SDK-&gt;&gt;Client: SendMessageType.UserQuery
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>  Client-&gt;&gt;Client: recall memory / hooks / prepare context
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>  Client-&gt;&gt;Chat: sendMessageStream()
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>  Chat-&gt;&gt;Model: generateContentStream(system + history + tools)
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>  Model--&gt;&gt;Chat: stream chunks
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>  Chat--&gt;&gt;Turn: raw stream
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>  Turn--&gt;&gt;Client: Content / Thought events
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>  Turn--&gt;&gt;Scheduler: ToolCallRequest
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>  Scheduler-&gt;&gt;Perm: evaluate tool permission
+<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>  Perm--&gt;&gt;Scheduler: allow / ask / deny
+<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>  Scheduler-&gt;&gt;Tool: execute if allowed
+<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>  Tool--&gt;&gt;Scheduler: ToolResult
+<a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>  Scheduler--&gt;&gt;Client: ToolResult
+<a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>  Client-&gt;&gt;Chat: feed tool result back
+</code></pre></div>
+<p>其中任何一步都可能插入：</p>
+<ul>
+<li>memory recall 结果。</li>
+<li>user prompt hook。</li>
+<li>pre tool hook。</li>
+<li>permission request hook。</li>
+<li>post tool hook。</li>
+<li>loop detection。</li>
+<li>history compression。</li>
+<li>MCP deferred tool reveal。</li>
+</ul>
+<p>这就是为什么 Qwen Code Agent 行为看起来像“一个 agent”，源码上却是许多服务组合出的运行时。</p>
+<h2 id="19">19. 安全边界总结<a class="headerlink" href="#19" title="Permanent link">&para;</a></h2>
+<p>Qwen Code 的安全并不只依赖“模型听话”。它至少有这些边界：</p>
+<ul>
+<li>system prompt 明确禁止危险行为。</li>
+<li>startup reminder 注入当前环境和工具边界。</li>
+<li>tool registry 注册期隐藏禁用工具。</li>
+<li>permission manager 规则期 allow/ask/deny。</li>
+<li>approval mode 做最终人机交互策略。</li>
+<li>auto mode classifier 对风险操作 fail closed。</li>
+<li>shell AST 与虚拟文件操作解析。</li>
+<li>hooks 可拦截工具。</li>
+<li>MCP server allow/exclude/pending/trust gate。</li>
+<li>team memory 的 git/symlink/secret/path 安全检查。</li>
+<li>cron_create 默认 ask，避免未来权限绕过。</li>
+<li>loop detection 防止失控执行。</li>
+<li>非交互模式下不满足权限条件直接拒绝。</li>
+</ul>
+<h2 id="20">20. 研究建议<a class="headerlink" href="#20" title="Permanent link">&para;</a></h2>
+<p>如果继续深入，推荐按以下顺序读源码：</p>
+<ol>
+<li><code>packages/core/src/config/config.ts</code>：先看初始化依赖图。</li>
+<li><code>packages/core/src/core/client.ts</code>：看 agent 对话主循环。</li>
+<li><code>packages/core/src/core/geminiChat.ts</code> 与 <code>turn.ts</code>：看模型请求、history、stream parse。</li>
+<li><code>packages/core/src/core/coreToolScheduler.ts</code>：看工具执行状态机。</li>
+<li><code>packages/core/src/permissions/permission-manager.ts</code>、<code>permissionFlow.ts</code>、<code>autoMode.ts</code>：看权限完整链路。</li>
+<li><code>packages/core/src/tools/tool-registry.ts</code>、<code>mcp-client-manager.ts</code>、<code>mcp-client.ts</code>：看工具与 MCP。</li>
+<li><code>packages/core/src/utils/memoryDiscovery.ts</code>、<code>packages/core/src/memory/manager.ts</code>：看两套 memory。</li>
+<li><code>packages/core/src/extension/extensionManager.ts</code>、<code>packages/core/src/skills/skill-manager.ts</code>、<code>packages/core/src/tools/skill.ts</code>：看插件和 skill。</li>
+<li><code>packages/core/src/services/cronScheduler.ts</code>、<code>loopDetectionService.ts</code>：看未来唤醒与 loop 止损。</li>
+<li><code>packages/sdk-typescript/src/query/Query.ts</code> 与 <code>ProcessTransport.ts</code>：看 SDK 如何进入 core。</li>
+</ol>
+<h2 id="21">21. 关键判断<a class="headerlink" href="#21" title="Permanent link">&para;</a></h2>
+<p>Qwen Code 的核心架构更像“CLI-first agent runtime”，而不是传统 SDK-first library：</p>
+<ul>
+<li>core runtime 完整能力在 CLI 内。</li>
+<li>SDK 主要通过启动 CLI 子进程进入 runtime。</li>
+<li>TypeScript SDK 对控制协议和 MCP 做了较完整封装。</li>
+<li>Python SDK 暂时偏轻量 query。</li>
+<li>extension/skill/MCP/hook/memory/permission 都收束进 core，而不是散落在外层产品里。</li>
+</ul>
+<p>这种设计的优点是 CLI、SDK、daemon 可以复用同一个核心 agent 行为；缺点是 SDK 调试时要理解 CLI stream-json 协议和 core runtime 的多层状态机。</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.top", "search.highlight", "search.suggest", "toc.follow"], "search": "../../assets/javascripts/workers/search.d50fe291.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.56ea9cef.min.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
