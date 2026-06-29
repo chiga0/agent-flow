@@ -4,6 +4,7 @@
 
 ## 文档入口
 
+- [企业级 Cloud Agents 框架与运行时技术调研报告](cloud-agents/index.md)
 - [生产级多 Agent 系统编排与运行屏障工程](multi-agent/research-on-multi-agent-orchestration-frameworks.md)
 - [Qwen Code Core 与 SDK Agent 架构分析](other-agents/qwen-code-core-sdk-agent-architecture.md)
 

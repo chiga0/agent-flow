@@ -30,6 +30,8 @@ theme:
 
 nav:
   - 首页: index.md
+  - Cloud Agents:
+      - 企业级 Cloud Agents 框架与运行时技术调研报告: cloud-agents/index.md
   - 多 Agent:
       - 生产级多 Agent 系统编排与运行屏障工程: multi-agent/research-on-multi-agent-orchestration-frameworks.md
   - 其他 Agent:
