@@ -972,6 +972,31 @@ qwen 第一实现: qwen serve HTTP/SSE + ACP bridge，后续优先 `/acp` Stream
 </tr>
 </tbody>
 </table></div>
+<h2 id="2026-07-01-p1p2">2026-07-01 P1/P2 实施审计<a class="headerlink" href="#2026-07-01-p1p2" title="Permanent link">&para;</a></h2>
+<h3 id="_21">已落地能力<a class="headerlink" href="#_21" title="Permanent link">&para;</a></h3>
+<ul>
+<li>P1 单 SAEU 闭环：Run Manager API、fake adapter、qwen serve adapter、canonical SSE、input、cancel、artifact 输出。</li>
+<li>云端运行：systemd service、Docker Compose、bearer token、<code>qwen serve</code> supervisor、VPS 部署脚本。</li>
+<li>P2 审计硬化：SQLite <code>runtime.db</code>、<code>run_events</code> append-only 表、<code>raw_events</code> 表、per-run <code>events.jsonl</code> 和 <code>diagnostics.json</code>。</li>
+<li>权限决策：<code>POST /runs/{run_id}/permissions/{permission_id}</code> 写入 <code>permission.resolved</code>，同时生成权限 artifact。</li>
+<li>恢复与重连：SSE 支持 <code>Last-Event-ID</code>；超出可用序号时写入 <code>event.gap_detected</code>。</li>
+<li>回放：<code>scripts/replay_run.py</code> 支持 events、SSE frame、state 三种输出。</li>
+</ul>
+<h3 id="_22">验证门禁<a class="headerlink" href="#_22" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>python3 scripts/check_style.py</code></li>
+<li><code>python3 -m compileall -q runtime scripts</code></li>
+<li><code>python3 scripts/check_runtime_coverage.py</code>，当前 runtime 覆盖率高于 90%。</li>
+<li><code>python3 scripts/validate_runtime.py</code> 可验证 health、capabilities、run、SSE、artifact、<code>runtime.db</code>。</li>
+<li>ECS 验收需覆盖 fake run、qwen run、systemd restart recovery、artifact replay。</li>
+</ul>
+<h3 id="_23">实施取舍<a class="headerlink" href="#_23" title="Permanent link">&para;</a></h3>
+<ul>
+<li>MVP 使用 SQLite 作为 durable event store。它满足单控制面、单 VPS 的可部署验收，但不是多控制面/高并发最终方案。</li>
+<li>Postgres、jobs/leases、worker heartbeat、resource limit 和多 worker 调度进入 P3。</li>
+<li>Permission timeout 的自动 deny/cancel 尚未进入 P2 MVP；当前先保证人工决策的完整审计链。</li>
+<li>stdout/stderr 类 worker 进程日志将在独立 sandbox worker 引入后纳入 artifact manifest。</li>
+</ul>
 <h2 id="go-no-go">Go / No-Go 决策<a class="headerlink" href="#go-no-go" title="Permanent link">&para;</a></h2>
 <h3 id="go">Go<a class="headerlink" href="#go" title="Permanent link">&para;</a></h3>
 <ul>
@@ -993,7 +1018,7 @@ qwen 第一实现: qwen serve HTTP/SSE + ACP bridge，后续优先 `/acp` Stream
 <li>把所有 SubAgent 都强制拆成独立 daemon。</li>
 <li>从头实现 coding agent core。</li>
 </ul>
-<h2 id="_21">最终可实施判断<a class="headerlink" href="#_21" title="Permanent link">&para;</a></h2>
+<h2 id="_24">最终可实施判断<a class="headerlink" href="#_24" title="Permanent link">&para;</a></h2>
 <p>方案可行，且适合 1-2 台 VPS 起步。推荐第一阶段只实现一个 qwen serve SAEU adapter，把审计、权限、事件、artifact 和恢复做扎实；第二阶段再抽象 ACP-compatible runtime adapter；第三阶段再做常驻 Supervisor + SubAgent + SAEU 的多 Agent 编排。</p>
 <p>只要不跳过单 Agent 单元稳定性，多 Agent 编排不会建立在松散 CLI 进程上，而是建立在可管理、可恢复、可审计的执行单元上。</p>
   </div>
@@ -1404,6 +1429,34 @@ qwen 第一实现: qwen serve HTTP/SSE + ACP bridge，后续优先 `/acp` Stream
         
 
         
+        <a href="#2026-07-01-p1p2"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#2026-07-01-p1p2');">
+            2026-07-01 P1/P2 实施审计
+        </a>
+        
+        
+        <a href="#_21"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#_21');">
+            已落地能力
+        </a>
+        
+        <a href="#_22"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#_22');">
+            验证门禁
+        </a>
+        
+        <a href="#_23"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#_23');">
+            实施取舍
+        </a>
+        
+        
+
+        
         <a href="#go-no-go"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#go-no-go');">
@@ -1426,9 +1479,9 @@ qwen 第一实现: qwen serve HTTP/SSE + ACP bridge，后续优先 `/acp` Stream
         
 
         
-        <a href="#_21"
+        <a href="#_24"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#_21');">
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#_24');">
             最终可实施判断
         </a>
         

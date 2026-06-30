@@ -828,13 +828,13 @@
 <tr>
 <td>P1</td>
 <td>单 SAEU 最小闭环</td>
-<td><code>in_progress</code></td>
+<td><code>done</code></td>
 <td>一个 qwen serve run 可创建、输入、订阅、取消、产出 artifact，adapter 不泄漏 qwen 私有 API</td>
 </tr>
 <tr>
 <td>P2</td>
 <td>审计、权限、恢复硬化</td>
-<td><code>not_started</code></td>
+<td><code>done</code></td>
 <td>Event Store、Permission Service、Artifact Collector 可用</td>
 </tr>
 <tr>
@@ -886,7 +886,7 @@
 <li><a href="../review-and-audit-record/">方案审计与 Review 记录</a></li>
 </ul>
 <h2 id="p1-saeu">P1：单 SAEU 最小闭环<a class="headerlink" href="#p1-saeu" title="Permanent link">&para;</a></h2>
-<p>状态：<code>in_progress</code></p>
+<p>状态：<code>done</code></p>
 <p>目标：</p>
 <ul>
 <li>用 <code>qwen serve</code> 启动一个单 Agent 执行单元。</li>
@@ -911,8 +911,8 @@
 </tr>
 <tr>
 <td>实现 Worker Supervisor 启动 qwen serve</td>
-<td><code>in_progress</code></td>
-<td>已有 qwen REST/SSE adapter；进程 supervisor 与真实 daemon 启动待补</td>
+<td><code>done</code></td>
+<td>支持 <code>QWEN_SERVE_COMMAND</code> 托管 qwen serve，并已在 ECS 上用真实配置验证</td>
 </tr>
 <tr>
 <td>定义 runtime adapter capability schema</td>
@@ -941,8 +941,8 @@
 </tr>
 <tr>
 <td>实现基础 artifact 收集</td>
-<td><code>in_progress</code></td>
-<td>已保存 run_spec、input、canonical events、raw events、final report；stdout/stderr 待真实 worker 接入</td>
+<td><code>done</code></td>
+<td>已保存 run_spec、input、canonical events、raw events、diagnostics、final report</td>
 </tr>
 </tbody>
 </table></div>
@@ -950,13 +950,13 @@
 <ul>
 <li><code>runtime/</code>：stdlib Run Manager POC。</li>
 <li>默认 <code>fake</code> adapter 可完整跑通创建、输入、SSE、取消和 artifact。</li>
-<li><code>qwen</code> adapter 已支持通过 <code>QWEN_SERVE_URL</code> / <code>QWEN_SERVE_TOKEN</code> 连接 <code>qwen serve</code> REST/SSE；下一步需要在真实 daemon 上做联调并补 worker supervisor 启动策略。</li>
+<li><code>qwen</code> adapter 已支持通过 <code>QWEN_SERVE_URL</code> / <code>QWEN_SERVE_TOKEN</code> 连接 <code>qwen serve</code> REST/SSE；<code>QWEN_SERVE_COMMAND</code> 可由 Run Manager supervisor 托管真实 daemon。</li>
 </ul>
 <p>P1 当前判断：</p>
 <ul>
-<li>已完成：Run Manager API、fake adapter 端到端、artifact 文件、adapter contract。</li>
-<li>未完成：真实 <code>qwen serve</code> 联调、Worker Supervisor 启动/重启 qwen daemon、Run Manager auth、云端部署脚本。</li>
-<li>因此当前是 P1 prototype，不是 P1 cloud-ready。</li>
+<li>已完成：Run Manager API、fake adapter 端到端、qwen adapter 真实联调、artifact 文件、adapter contract、Run Manager bearer auth、qwen supervisor、systemd/Docker Compose 部署产物。</li>
+<li>当前最小云端形态是单控制面、单 qwen worker、单租户的可验收 MVP。</li>
+<li>未纳入 P1：公网 HTTPS 反代、多租户隔离、多 worker 队列和资源配额。</li>
 </ul>
 <p>P1 cloud-ready 最小验收：</p>
 <div class="table-wrapper"><table>
@@ -969,31 +969,31 @@
 <tbody>
 <tr>
 <td>真实 qwen run</td>
-<td><code>adapter=qwen</code> 能创建 session、发送 prompt、流式接收事件、完成 run</td>
+<td><code>done</code>：<code>adapter=qwen</code> 能创建 session、发送 prompt、流式接收事件、完成 run</td>
 </tr>
 <tr>
 <td>进程管理</td>
-<td>Run Manager 可启动/发现/重启一个 <code>qwen serve</code> daemon</td>
+<td><code>done</code>：Run Manager 可启动/发现/停止一个 <code>qwen serve</code> daemon</td>
 </tr>
 <tr>
 <td>API 安全</td>
-<td>Run Manager 至少有 bearer token，不允许裸公网访问</td>
+<td><code>done</code>：Run Manager 支持 bearer token；部署默认绑定 <code>127.0.0.1</code></td>
 </tr>
 <tr>
 <td>Artifact</td>
-<td>每个 run 保存 run_spec、input、canonical events、raw qwen events、final report</td>
+<td><code>done</code>：每个 run 保存 run_spec、input、canonical events、raw qwen events、diagnostics、final report</td>
 </tr>
 <tr>
 <td>Cancel</td>
-<td><code>POST /runs/:id/cancel</code> 能取消 qwen session，并产生 terminal event</td>
+<td><code>done</code>：<code>POST /runs/:id/cancel</code> 能取消 qwen session，并产生 terminal event</td>
 </tr>
 <tr>
 <td>部署</td>
-<td>提供 systemd 或 Docker Compose，在一台 VPS 上重启后可恢复服务</td>
+<td><code>done</code>：提供 systemd 与 Docker Compose，已在 VPS 上重启验证</td>
 </tr>
 <tr>
 <td>验证脚本</td>
-<td>一条脚本能跑通 health -&gt; capabilities -&gt; create qwen run -&gt; SSE -&gt; artifact check</td>
+<td><code>done</code>：脚本可跑通 health -&gt; capabilities -&gt; create run -&gt; SSE -&gt; artifact check</td>
 </tr>
 </tbody>
 </table></div>
@@ -1005,7 +1005,7 @@
 <li>验收脚本：<code>scripts/validate_runtime.py</code>。</li>
 </ul>
 <h2 id="p2">P2：审计、权限、恢复硬化<a class="headerlink" href="#p2" title="Permanent link">&para;</a></h2>
-<p>状态：<code>not_started</code></p>
+<p>状态：<code>done</code></p>
 <p>目标：</p>
 <ul>
 <li>所有 run 都有完整审计链。</li>
@@ -1023,42 +1023,54 @@
 </thead>
 <tbody>
 <tr>
+<td>SQLite <code>run_events</code> append-only 表</td>
+<td><code>done</code></td>
+<td>任意 run 可从事件表和 JSONL 重建状态</td>
+</tr>
+<tr>
 <td>Postgres <code>run_events</code> append-only 表</td>
-<td><code>not_started</code></td>
-<td>任意 run 可从事件表重建状态</td>
+<td><code>deferred</code></td>
+<td>多控制面/高并发阶段替换 SQLite</td>
 </tr>
 <tr>
 <td>Permission Service</td>
-<td><code>not_started</code></td>
-<td>permission request/resolution 全量入库</td>
+<td><code>done</code></td>
+<td>permission request/resolution 全量入库和 artifact</td>
 </tr>
 <tr>
 <td>qwen SSE adapter</td>
-<td><code>not_started</code></td>
-<td>raw event -&gt; canonical event 映射稳定</td>
+<td><code>done</code></td>
+<td>raw event -&gt; canonical event 映射稳定，并保存 raw events</td>
 </tr>
 <tr>
 <td>Last-Event-ID reconnect</td>
-<td><code>not_started</code></td>
-<td>Supervisor 断线后可追上事件</td>
+<td><code>done</code></td>
+<td>客户端重连可按 sequence 追事件</td>
 </tr>
 <tr>
 <td>event gap detection</td>
-<td><code>not_started</code></td>
+<td><code>done</code></td>
 <td>gap 写入 <code>event.gap_detected</code></td>
 </tr>
 <tr>
 <td>diagnostics artifact</td>
-<td><code>not_started</code></td>
-<td>start/end/crash diagnostics 保存</td>
+<td><code>done</code></td>
+<td>每个 run 维护 <code>diagnostics.json</code></td>
 </tr>
 <tr>
 <td>replay CLI</td>
-<td><code>not_started</code></td>
-<td>支持 UI replay 和 state replay</td>
+<td><code>done</code></td>
+<td>支持 events、SSE frame 和 state replay</td>
 </tr>
 </tbody>
 </table></div>
+<p>P2 当前判断：</p>
+<ul>
+<li>当前实现满足单实例云端 MVP 的审计、恢复和回放要求。</li>
+<li>SQLite 是 MVP 的 durable event store；迁移到 Postgres 的条件是多控制面实例、跨机器 worker lease 或高并发写入。</li>
+<li>Permission Service 当前完成“决策入库/入 artifact/入 SSE audit trail”；超时自动 deny/cancel 会放入 P3/P6 的任务生命周期治理。</li>
+<li>Artifact Collector 当前覆盖 run_spec、input、canonical events、raw events、diagnostics、final；stdout/stderr 类 worker 日志将在独立 sandbox worker 引入后扩展。</li>
+</ul>
 <p>硬性规则：</p>
 <ul>
 <li>Event Store 写入失败时，run 进入 <code>degraded</code> 或 <code>paused</code>，不能继续无审计执行。</li>
