@@ -102,6 +102,7 @@ flowchart TB
 - **Gateway 不只是反向代理**：它负责身份、租户、限流、连接保持、流式响应、Webhook 回调、客户端断线重连。
 - **Session & Run Manager 是 Cloud Agent 的中枢**：用户看到的是对话，但系统内部必须区分 thread、run、step、tool call、artifact、checkpoint。
 - **Orchestrator 不应承担所有职责**：复杂流程可由 LangGraph / AutoGen / Microsoft Agent Framework / ADK / CrewAI 负责，但资源调度、审计、发布和租户隔离应在平台层完成。
+- **Agent 执行器应协议化**：云端运行时不应假设 worker 一定是某个特定 CLI。Qwen Code `qwen serve` 可以作为第一版成熟执行器，但长期应抽象成 ACP-compatible Agent runtime，让 Claude Code、Codex、OpenCode 或自研 Agent 只要实现同一通信协议就能接入。
 - **Tool Gateway 是安全边界**：企业 Agent 真正的风险通常发生在工具调用、数据访问和外部系统写操作。
 - **Observability 与 Governance 必须是一等公民**：上线后最常见的问题不是“模型不会回答”，而是“无法解释为什么调用了某个工具、花了多少钱、谁授权了、失败后如何恢复”。
 

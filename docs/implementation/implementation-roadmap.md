@@ -1,6 +1,6 @@
 # 实施 Roadmap
 
-> 目标：跟踪从 `qwen serve` 单 Agent 执行单元到多 Agent 编排系统的实施状态。状态字段可持续更新，作为后续开发、审计和复盘入口。
+> 目标：跟踪从 `qwen serve` 第一版 SAEU 到 ACP-compatible 多执行器、多 Agent 编排系统的实施状态。状态字段可持续更新，作为后续开发、审计和复盘入口。
 
 ## 状态说明
 
@@ -19,11 +19,11 @@
 | 阶段 | 目标 | 当前状态 | 退出标准 |
 | --- | --- | --- | --- |
 | P0 | 文档、边界和审计定稿 | `done` | 方案、审计、Roadmap 已入库并部署 |
-| P1 | 单 SAEU 最小闭环 | `not_started` | 一个 qwen serve run 可创建、输入、订阅、取消、产出 artifact |
+| P1 | 单 SAEU 最小闭环 | `not_started` | 一个 qwen serve run 可创建、输入、订阅、取消、产出 artifact，adapter 不泄漏 qwen 私有 API |
 | P2 | 审计、权限、恢复硬化 | `not_started` | Event Store、Permission Service、Artifact Collector 可用 |
 | P3 | 多 SAEU 并发与任务队列 | `not_started` | 1-2 个 SAEU 并发运行，队列限流生效 |
-| P4 | Supervisor 多 Agent 编排 | `not_started` | planner/coder/tester/reviewer 串联闭环 |
-| P5 | 外部协议与替代组件评估 | `not_started` | A2A Gateway、E2B/Daytona、Temporal/LangGraph 完成试点评估 |
+| P4 | Supervisor + SubAgent + SAEU 编排 | `not_started` | 常驻 supervisor 可选择 SubAgent 或 SAEU 执行任务 |
+| P5 | 外部协议与替代组件评估 | `not_started` | ACP Streamable HTTP、A2A Gateway、E2B/Daytona、Temporal/LangGraph 完成试点评估 |
 | P6 | Beta 稳定化 | `not_started` | 故障演练、回放、监控、备份、部署脚本完成 |
 
 ## P0：设计与审计
@@ -33,6 +33,8 @@
 已完成：
 
 - 定义稳定单 Agent 执行单元 SAEU。
+- 修正 SAEU 与 qwen serve 的关系：qwen serve 是第一版实现，不是额外要替代的 worker。
+- 明确 SubAgent 与 SAEU 的边界。
 - 设计基于 `qwen serve` 的云端单 Agent 单元。
 - 设计从单 Agent 到多 Agent 编排路线。
 - 完成协议边界：SAEU、ACP、A2A、MCP。
@@ -42,6 +44,7 @@
 产物：
 
 - [稳定单 Agent 执行单元](stable-agent-execution-unit.md)
+- [SubAgent 与独立执行单元边界](subagent-vs-execution-unit.md)
 - [基于 qwen-code serve 的云端单 Agent 单元方案](qwen-serve-single-agent-cloud-unit.md)
 - [从单 Agent 执行单元到多 Agent 编排](single-to-multi-agent-implementation-plan.md)
 - [外部方案对比与多方向审计](alternative-solutions-comparative-audit.md)
@@ -56,6 +59,7 @@
 - 用 `qwen serve` 启动一个单 Agent 执行单元。
 - 对外只暴露 Run Manager API，不暴露 qwen 原始接口。
 - 能创建 run、发送 prompt、订阅事件、取消 run、收集 artifact。
+- 定义可扩展到 ACP-compatible Agent 的 adapter contract。
 
 任务：
 
@@ -63,6 +67,7 @@
 | --- | --- | --- |
 | 定义 `run_spec` JSON schema | `not_started` | 包含 repo、workspace、prompt、model、tool、sandbox、timeout |
 | 实现 Worker Supervisor 启动 qwen serve | `not_started` | `/health`、`/capabilities` 通过 |
+| 定义 runtime adapter capability schema | `not_started` | 能表达 qwen、claude、codex、opencode 的差异 |
 | 实现 `POST /runs` | `not_started` | 创建 run 并返回 run_id |
 | 实现 `POST /runs/:id/input` | `not_started` | qwen prompt 返回 202，记录 prompt_id |
 | 实现 `GET /runs/:id/events` | `not_started` | 能从 Run Manager SSE 收到 canonical events |
@@ -119,13 +124,14 @@
 | cleanup policy | `not_started` | workspace/artifact 按保留策略清理 |
 | 双 VPS worker 模式 | `deferred` | control plane 与 sandbox worker 分离 |
 
-## P4：Supervisor 多 Agent 编排
+## P4：Supervisor + SubAgent + SAEU 编排
 
 状态：`not_started`
 
 目标：
 
-- 多 Agent 编排不直接编排 CLI，而是编排 SAEU run。
+- 多 Agent 编排不直接编排 CLI，也不把所有 SubAgent 都升级为独立 daemon。
+- 实现常驻 Project/Supervisor Agent，根据任务风险选择 SubAgent 或 SAEU。
 - 实现 planner -> coder -> tester -> reviewer -> final report。
 
 任务：
@@ -134,6 +140,7 @@
 | --- | --- | --- |
 | mission/task 数据模型 | `not_started` | mission 可拆多个 task |
 | profile 定义 | `not_started` | planner/coder/tester/reviewer 权限不同 |
+| SubAgent/SAEU 调度策略 | `not_started` | 轻量任务走 SubAgent，高风险长任务走 SAEU |
 | task dependency | `not_started` | 支持串行和 fan-out/fan-in |
 | artifact handoff | `not_started` | 子任务只通过 artifact 传递结果 |
 | reviewer gate | `not_started` | 高风险 finding 阻塞合并 |
@@ -153,6 +160,7 @@
 | 任务 | 状态 | 验收 |
 | --- | --- | --- |
 | A2A Gateway POC | `not_started` | 外部 task 可映射成 mission/run |
+| ACP Streamable HTTP POC | `not_started` | 一个非 qwen worker 可通过 ACP 远程协议接入 |
 | E2B sandbox adapter POC | `not_started` | 一个 SAEU 可跑在 E2B sandbox |
 | Daytona sandbox adapter POC | `not_started` | 一个 SAEU 可跑在 Daytona sandbox |
 | Temporal workflow POC | `not_started` | `AgentRunWorkflow` 可管理单 run |
@@ -191,7 +199,7 @@
 
 | 检查点 | 时间 | 决策 |
 | --- | --- | --- |
-| P1 完成后 | 单 SAEU 跑通后 | 是否继续 qwen serve，是否需要轻 fork |
+| P1 完成后 | 单 SAEU 跑通后 | qwen serve adapter 是否足够，是否需要优先做 `/acp` 或非 qwen adapter |
 | P2 完成后 | 审计/恢复跑通后 | 是否引入 Temporal 或继续 Postgres queue |
 | P3 完成后 | 并发稳定后 | 是否需要第二台 VPS 或 E2B/Daytona |
 | P4 完成后 | 多 Agent 闭环后 | 是否开放 A2A Gateway |
@@ -201,11 +209,12 @@
 
 近期只做 P1 和 P2，不提前铺太大：
 
-1. qwen serve SAEU wrapper。
+1. qwen serve SAEU adapter。
 2. canonical event schema。
 3. Event Store。
 4. Permission Service。
 5. Artifact Collector。
-6. 基础 replay。
+6. runtime adapter capability schema。
+7. 基础 replay。
 
 这些完成前，不建议投入复杂多 Agent supervisor，也不建议接入 Temporal 或云沙箱。

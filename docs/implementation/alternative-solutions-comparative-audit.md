@@ -1,19 +1,19 @@
 # 外部方案对比与多方向审计
 
 > 调研日期：2026-06-30  
-> 目标：在已经确定 `qwen serve` SAEU 路线后，再对比当前更成熟或相近的方案，并用对比审计、正向审计、无方向审计、反向审计验证当前方案是否需要调整。
+> 目标：在已经确定 `qwen serve` 作为第一版 SAEU 实现后，再对比当前更成熟或相近的方案，并用对比审计、正向审计、无方向审计、反向审计验证当前方案是否需要调整。
 
 ## 总结结论
 
 当前方案不需要推翻。更稳妥的调整是：
 
-- 保留 `qwen serve` SAEU 作为第一版单 Agent 执行单元。
-- 把 SAEU contract 做成不可变的内部边界，避免绑定 qwen 私有 API。
+- 保留 `qwen serve` 作为第一版 SAEU 实现。
+- 把 SAEU contract 做成稳定内部边界，并向 ACP-compatible runtime adapter 收敛，避免绑定 qwen 私有 API。
 - 允许未来替换三类组件：
-  - 执行器：Qwen Code、Claude Code、OpenCode、OpenHands、自研 worker。
+  - 执行器：Qwen Code、Claude Code、Codex、OpenCode、OpenHands、自研 worker。
   - 沙箱：Docker/rootless Docker、E2B、Daytona、OpenHands Runtime、microVM。
   - 编排器：Postgres queue、Temporal、LangGraph/LangSmith。
-- A2A 放在系统边界，不取代内部 SAEU contract。
+- A2A 放在系统边界，不取代内部 ACP/SAEU contract。
 - Roadmap 中加入“替代方案评估里程碑”，避免后续架构锁死。
 
 一句话：**当前路线是低资源 VPS 条件下可实施性最高的路线；外部成熟方案更适合成为后续替换模块，而不是第一天整体替换。**
@@ -44,14 +44,14 @@
 | 可恢复性 | 是否支持断线、崩溃、长任务恢复 |
 | 权限与 HITL | 是否支持工具审批、人类介入 |
 | 沙箱隔离 | 是否提供强隔离工作区 |
-| 协议互操作 | 是否适合 A2A/MCP/自定义协议 |
+| 协议互操作 | 是否适合 ACP/A2A/MCP |
 | 迁移成本 | 对当前方案的替换成本 |
 
 ### 对比矩阵
 
 | 方案 | 低资源 | Coding 贴合 | 审计重放 | 恢复 | 权限/HITL | 沙箱 | 互操作 | 判断 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 当前 qwen serve SAEU | 高 | 高 | 中，需外部补齐 | 中，需外部补齐 | 高 | 中 | 高 | MVP 主线 |
+| 当前 qwen serve SAEU | 高 | 高 | 中，需外部补齐 | 中，需外部补齐 | 高 | 中 | 中高，需 `/acp` 收敛 | MVP 主线 |
 | AWS Bedrock AgentCore | 低 | 中 | 高 | 高 | 高 | 高 | 中 | 企业 AWS 路线 |
 | Microsoft Foundry Agent Service | 低 | 中 | 高 | 高 | 高 | 中 | 中 | Azure 企业路线 |
 | Google ADK + Agent Runtime | 低 | 中 | 高 | 高 | 高 | 中 | 中 | Google Cloud 路线 |
@@ -70,7 +70,7 @@
 - 能直接复用 Qwen Code 的 coding harness。
 - 可快速实现单 Agent 云端执行单元。
 - 不绑定 AWS/Azure/GCP。
-- 后续可逐步接入 A2A、MCP、Temporal、外部沙箱。
+- 后续可逐步接入 ACP Streamable HTTP、A2A、MCP、Temporal、外部沙箱。
 
 当前方案的短板：
 
@@ -84,7 +84,7 @@
 - 如果沙箱成为瓶颈，优先评估 E2B/Daytona，而不是自研 microVM。
 - 如果 mission/run workflow 变复杂，引入 Temporal 或 LangGraph，而不是把状态机继续堆进 Supervisor。
 - 如果进入企业云场景，可评估 AgentCore/Foundry/Google Agent Runtime。
-- 如果需要另一个 coding agent runtime，可把 OpenHands 作为 SAEU adapter 试点。
+- 如果需要另一个 coding agent runtime，可把 Codex、Claude Code、OpenCode 或 OpenHands 作为 SAEU adapter 试点。
 
 ## 正向审计
 
@@ -93,15 +93,15 @@
 | 目标 | 当前方案能力 | 审计结论 |
 | --- | --- | --- |
 | 单 Agent 可长期运行 | qwen serve + Supervisor + Event Store | 可行 |
-| 可外部通信 | SAEU contract + REST/SSE + A2A Gateway | 可行 |
+| 可外部通信 | SAEU contract + ACP/REST/SSE + A2A Gateway | 可行 |
 | 实时状态 | qwen SSE -> canonical events -> Run Manager SSE | 可行 |
 | 权限请求 | qwen permission mediation -> Permission Service | 可行 |
 | 审计 | canonical events + artifact package | 可行 |
 | 重放 | UI replay、transcript replay、后续 deterministic replay | 可行，但分阶段 |
 | 可恢复 | Last-Event-ID、load/resume、workspace snapshot、Supervisor recovery | 可行，但必须外部持久化 |
-| 多 Agent 编排 | mission/task/run + SAEU queue + artifact 协作 | 可行 |
+| 多 Agent 编排 | Project/Supervisor + SubAgent + SAEU queue + artifact 协作 | 可行 |
 | 小 VPS 起步 | 并发 1-2，Docker sandbox，Postgres queue | 可行 |
-| 未来替换方案 | SAEU adapter 边界 | 可行 |
+| 未来替换方案 | ACP-compatible SAEU adapter 边界 | 可行 |
 
 正向审计结论：当前方案满足 MVP 到 Beta 的目标，但必须按 Roadmap 先实现 Event Store、Artifact Store、Permission Service 和 Supervisor，而不是只启动 qwen serve。
 
@@ -112,6 +112,7 @@
 | 区域 | 可能问题 | 缓解 |
 | --- | --- | --- |
 | qwen serve | daemon experimental，API 可能变动 | adapter 封装；版本 pin；capabilities preflight |
+| ACP adapter | 标准仍在演进，Streamable HTTP 未必所有 Agent 支持 | 先兼容 qwen REST/SSE，新增 `/acp` POC，adapter 分层 |
 | Event Store | 写入失败导致无审计执行 | 写失败则 pause/cancel run，不能继续 |
 | SSE | event ring gap | 外部 canonical event store；gap event；load/resume 补救 |
 | Permission | 审批超时或多客户端冲突 | timeout 默认 deny/cancel；记录投票策略 |
@@ -167,6 +168,8 @@
 - Roadmap P5 增加 E2B/Daytona sandbox adapter 评估。
 - Roadmap P5 增加 Temporal/LangGraph orchestrator adapter 评估。
 - Roadmap P5 增加 A2A Gateway 评估。
+- Roadmap P5 增加 ACP Streamable HTTP adapter 评估。
+- 文档中明确 SubAgent 与 SAEU 的边界。
 
 不需要修订：
 
@@ -174,6 +177,7 @@
 - 不需要第一天上 AgentCore/Foundry/Google Agent Runtime。
 - 不需要第一天上 Temporal。
 - 不需要从头实现 coding agent。
+- 不需要把每个 SubAgent 都拆成独立 SAEU。
 
 ## 参考资料
 
@@ -190,3 +194,5 @@
 - [E2B Coding Agents](https://e2b.dev/docs/use-cases/coding-agents)
 - [Daytona](https://www.daytona.io/)
 - [OpenHands Enterprise](https://docs.openhands.dev/enterprise)
+- [Agent Client Protocol](https://agentclientprotocol.com/get-started/introduction)
+- [ACP Streamable HTTP & WebSocket Transport RFD](https://agentclientprotocol.com/rfds/streamable-http-websocket-transport)

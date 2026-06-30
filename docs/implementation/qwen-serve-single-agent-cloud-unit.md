@@ -1,13 +1,13 @@
-# 基于 qwen-code serve 的云端单 Agent 单元方案
+# 基于 qwen-code serve 的云端 Agent 执行单元方案
 
-> 结论：`qwen serve` 可以作为稳定单 Agent 执行单元的第一版 runtime，但必须在外层加 Supervisor、Event Store、Artifact Store、Model Proxy、Sandbox Policy 和恢复控制。不要把 alpha 阶段的 qwen serve 直接暴露公网或直接当作生产控制面。
+> 结论：`qwen serve` 不是 SAEU 之外还要再包装的“普通 CLI 进程”，而是 SAEU 的 Qwen Code 首选实现。它已经提供 daemon、workspace、session、HTTP/SSE、permission mediation、status、resume 等核心 worker 能力。平台外层要补的是多 daemon 编排、持久审计、artifact、model proxy、sandbox policy、租户身份和恢复控制。不要把 alpha 阶段的 qwen serve 直接暴露公网或直接当作完整生产控制面。
 
 ## 设计目标
 
-本方案把一个 qwen serve daemon 包装成一个云端可托管单 Agent 单元：
+本方案把一个受控的 qwen serve daemon 作为云端可托管 Agent 执行单元：
 
 ```text
-Stable Agent Execution Unit
+Qwen SAEU implementation
   = Worker Supervisor
   + qwen serve daemon
   + workspace sandbox
@@ -16,7 +16,36 @@ Stable Agent Execution Unit
   + health/recovery controller
 ```
 
-它对外暴露统一 SAEU contract，对内使用 qwen serve 的 HTTP + SSE + ACP bridge。
+它对外暴露统一 SAEU contract，对内使用 qwen serve 的 HTTP + SSE + ACP bridge。后续当 qwen serve 支持官方 ACP Streamable HTTP `/acp` endpoint 时，adapter 应优先走标准 ACP 远程传输，而不是长期依赖 qwen 私有 REST/SSE。
+
+## SAEU 对齐判断
+
+qwen serve 与 SAEU 的对应关系如下：
+
+| SAEU 要求 | qwen serve 当前能力 | 平台是否还要补 |
+| --- | --- | --- |
+| 独立 workspace | 一个 daemon 绑定一个 workspace | 多 workspace -> 多 daemon registry |
+| Agent runtime | 一个 `qwen --acp` child process | 不需要重写 runtime |
+| 多客户端连接 | HTTP + SSE，多客户端 attach | 需要接入租户/用户身份 |
+| session/run 控制 | `POST /session`、single/thread scope | 需要映射到平台 run/thread/task |
+| 事件流 | `GET /session/:id/events` | 需要持久化为 Event Store |
+| 权限请求 | permission mediation | 需要外部审批、审计、策略 |
+| 健康诊断 | health、capabilities、daemon/status、session/status | 需要 worker lease 和自动恢复 |
+| 恢复 | load/resume | 需要 workspace snapshot 和 artifact |
+| 工具/MCP | MCP pool、MCP restart、tool toggle | 需要工具网关和租户级权限 |
+
+所以第一版不要再造“Agent worker”。应该做：
+
+```text
+Run Manager
+  -> Worker Supervisor
+  -> qwen serve daemon
+  -> qwen session
+  -> qwen SSE / ACP events
+  -> canonical Event Store
+```
+
+如果未来接入 Claude Code、Codex、OpenCode，则替换的是 `qwen serve daemon` 这一格，而不是重写 Run Manager、Event Store、Permission Service。
 
 ## qwen serve 能力基线
 
@@ -42,6 +71,7 @@ Stable Agent Execution Unit
 - event ring 是有界缓冲，不是长期审计日志。
 - 一个 daemon 等于一个 workspace，多 workspace 要多个 daemon 或外层编排。
 - 生产级多客户端、长时间网络抖动和大规模连接需要外层补强。
+- 当前 northbound 主要是 qwen 私有 REST/SSE；开源生态兼容应推动或适配 ACP Streamable HTTP。
 
 ## 单元拓扑
 
@@ -141,7 +171,7 @@ Worker Supervisor 是生产化关键。它不能只是 `docker run` 包装器。
 | session 管理 | `POST /session`、记录 session_id、session scope |
 | prompt 投递 | `POST /session/:id/prompt`，记录 prompt_id/input_id |
 | SSE 订阅 | 维护 `Last-Event-ID`，断线重连 |
-| 事件转换 | qwen event -> SAEU event -> Event Store |
+| 事件转换 | qwen event / ACP event -> SAEU canonical event -> Event Store |
 | 权限中继 | permission request 写 DB，等待外部审批后调用 `/permission/:id` |
 | artifact 收集 | transcript、events、diff、logs、diagnostics |
 | 恢复控制 | daemon 崩溃后 load/resume 或重建 |
@@ -163,6 +193,16 @@ POST /permissions/{permission_id}/resolve
 ```
 
 这样以后可以替换 worker，不影响客户端。
+
+替换原则：
+
+- Qwen Code adapter 调 qwen serve。
+- Claude Code adapter 调 Claude 的 headless/SDK server。
+- Codex adapter 调 Codex 的 CLI/API wrapper。
+- OpenCode adapter 调 OpenCode session runtime。
+- 原生开源 worker 直接实现 ACP server。
+
+这些 adapter 都必须输出相同 canonical events，并接入同一个 Permission Service 和 Artifact Store。
 
 ## 事件采集
 

@@ -1,6 +1,6 @@
 # 从单 Agent 执行单元到多 Agent 编排
 
-> 结论：多 Agent 系统不应该直接编排“模型角色”，而应该编排稳定单 Agent 执行单元。每个子 Agent 都是一个可审计、可恢复、可取消、可隔离的 SAEU run；Supervisor 只通过事件、artifact、状态和权限接口协调它们。
+> 结论：多 Agent 系统不应该直接编排“模型角色”，也不应该把所有内部 SubAgent 都强行升级成独立进程。更准确的分层是：常驻 Project/Supervisor Agent 负责长期目标和上下文，Agent runtime 内部可以使用 SubAgent 做轻量并行；只有需要平台治理、隔离、审计、恢复和跨客户端托管的子任务，才升级为 SAEU run。
 
 ## 总体路线
 
@@ -16,10 +16,11 @@ Phase 6: Temporal 或 durable workflow 接管长流程
 关键原则：
 
 - 先让一个执行单元可靠，再让多个执行单元并发。
-- 子 Agent 之间不共享可写 workspace。
-- Agent 间通信优先通过 artifact 和事件，不直接互相读写内存。
+- SubAgent 用于主 Agent 内部探索、评审、总结；SAEU 用于平台级执行边界。
+- 独立 SAEU 之间不共享可写 workspace。
+- Agent 间通信优先通过 artifact 和事件，不直接互相读写不受控内存。
 - Supervisor 负责规划、派发、合并、失败处理和人机协同。
-- 外部协议可以是 A2A，内部调度原子仍是 SAEU。
+- 外部协议可以是 A2A，内部执行器控制优先 ACP-compatible SAEU。
 
 ## 多 Agent 目标架构
 
@@ -29,7 +30,9 @@ flowchart TB
     RM["Run Manager"]
     SUP["Supervisor Agent / Orchestrator"]
     Queue["SAEU Queue"]
-    U1["SAEU: planner"]
+    Project["Project Agent<br/>resident memory"]
+    Sub["Runtime SubAgents<br/>explore/review/summarize"]
+    U1["SAEU: planner/coder"]
     U2["SAEU: coder"]
     U3["SAEU: reviewer"]
     U4["SAEU: tester"]
@@ -41,7 +44,9 @@ flowchart TB
 
     Client --> RM
     A2A --> RM
-    RM --> SUP
+    RM --> Project
+    Project --> SUP
+    Project --> Sub
     SUP --> Queue
     Queue --> U1
     Queue --> U2
@@ -72,7 +77,7 @@ flowchart TB
 | 对象 | 含义 |
 | --- | --- |
 | `mission` | 用户的宏观目标 |
-| `task` | 可交给一个 SAEU 的子任务 |
+| `task` | 可交给 SubAgent 或 SAEU 的子任务 |
 | `run` | 某个 SAEU 的一次执行 |
 | `dependency` | 子任务之间的依赖 |
 | `artifact` | 子任务输出 |
@@ -88,8 +93,9 @@ Supervisor 可以先是规则系统，后续再变成 Agent。它负责：
 
 - 将 mission 拆成 tasks。
 - 给每个 task 选择 agent profile。
+- 判断任务留在 runtime SubAgent 内部执行，还是升级为 SAEU run。
 - 决定串行、并行或 fan-out/fan-in。
-- 为每个 task 创建 SAEU run。
+- 为需要平台治理的 task 创建 SAEU run。
 - 监听子 run 事件。
 - 处理失败、超时、取消和权限升级。
 - 收集 artifact。
@@ -102,6 +108,7 @@ Supervisor 不负责：
 - 直接修改所有子 workspace。
 - 绕过 permission service。
 - 直接读取 qwen serve 私有 session 状态。
+- 把所有轻量子任务都强制拆成独立 daemon。
 
 ## Agent profile
 
@@ -364,10 +371,10 @@ if task_type == research:
 
 第一版不要追求全自动多 Agent。建议最小范围：
 
-1. 一个 planner SAEU 产出任务计划。
+1. 一个常驻 Project/Supervisor Agent 产出任务计划。
 2. 人类确认计划。
-3. 一个 coder SAEU 执行实现。
-4. 一个 reviewer SAEU 做只读 review。
+3. 轻量探索、阅读和 review 可先用 SubAgent。
+4. 一个 coder SAEU 执行实现。
 5. 一个 tester SAEU 运行测试。
 6. Supervisor 汇总 final report。
 
@@ -375,9 +382,10 @@ if task_type == research:
 
 ## 决策
 
-多 Agent 编排的稳定性来自两个约束：
+多 Agent 编排的稳定性来自三个约束：
 
-- 每个 Agent 都是 SAEU，有独立状态、事件、权限、artifact、workspace。
+- SubAgent 只承担主 Agent 内部的轻量协作。
+- SAEU 承担平台级治理边界，有独立状态、事件、权限、artifact、workspace。
 - Agent 之间只通过 Supervisor 和 artifact 协作，不直接共享不受控状态。
 
 这条路线比“多个 Agent 在一个大对话里互相聊天”更慢一点，但可审计、可恢复、可逐步上线。

@@ -6,6 +6,7 @@
 
 - [可云端长期运行的多 Agent 系统落地方案](implementation/index.md)
 - [稳定单 Agent 执行单元](implementation/stable-agent-execution-unit.md)
+- [SubAgent 与独立执行单元边界](implementation/subagent-vs-execution-unit.md)
 - [基于 qwen-code serve 的云端单 Agent 单元方案](implementation/qwen-serve-single-agent-cloud-unit.md)
 - [沙箱与隔离方案](implementation/sandbox-isolation.md)
 - [ACP、A2A 与 MCP 协议选型](implementation/protocol-acp-a2a.md)

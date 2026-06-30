@@ -1,13 +1,13 @@
 # 方案审计与 Review 记录
 
-> 本记录用于审计“稳定单 Agent 执行单元 -> qwen serve 云端单元 -> 多 Agent 编排”的方案可行性。结论：方案可以作为 MVP 到 Beta 的实施路线，但必须坚持 SAEU contract、外部 Event Store、权限服务和 workspace 隔离四条底线。
+> 本记录用于审计“SAEU contract -> qwen serve 第一实现 -> ACP-compatible 多执行器 -> Supervisor/SubAgent/SAEU 编排”的方案可行性。结论：方案可以作为 MVP 到 Beta 的实施路线，但必须坚持 SAEU contract、外部 Event Store、权限服务和 workspace 隔离四条底线。
 
 ## Review 结论
 
 最终方案通过四轮 review：
 
-1. 架构边界 review：确认外部编排只依赖 SAEU，不直接绑定 qwen serve。
-2. 协议能力 review：确认 ACP/A2A/MCP 各自边界，A2A 可用于外部互操作，但内部 worker 控制仍用 SAEU。
+1. 架构边界 review：确认外部编排只依赖 SAEU contract，不直接绑定 qwen serve 私有 API。
+2. 协议能力 review：确认 ACP/A2A/MCP 各自边界，ACP 用于内部执行器控制，A2A 用于外部互操作。
 3. 安全与权限 review：确认 qwen serve 不公网暴露，密钥不进容器，权限请求一等建模。
 4. 恢复与排障 review：确认 event ring 不是审计日志，必须有外部 Event Store 和 artifact 包。
 
@@ -23,9 +23,9 @@
 
 风险点：
 
-- qwen serve 是一 daemon 一 workspace，天然适合封装成一个 unit，但不能代表所有 worker。
+- qwen serve 是一 daemon 一 workspace，天然就是 Qwen 路线的 SAEU 实现，但不能代表所有 worker。
 - qwen SSE event ring 是短期重连缓冲，不是长期状态。
-- 如果外部编排直接调用 qwen serve API，后续接入 Claude Code/OpenCode/Gemini CLI 会非常痛。
+- 如果外部编排直接调用 qwen serve 私有 API，后续接入 Claude Code/Codex/OpenCode/Gemini CLI 会非常痛。
 
 ### 修正
 
@@ -39,7 +39,7 @@
 
 ### 结论
 
-通过。多 Agent 编排的调度原子确定为 SAEU。
+通过。多 Agent 编排的调度原子确定为 SAEU contract；Qwen 的第一实现是受管 `qwen serve` daemon。
 
 ## 第二轮：协议能力 Review
 
@@ -77,13 +77,41 @@ A2A 可以覆盖开放式 Agent-to-Agent 的主干能力：
 ```text
 外部互操作: A2A Gateway
 内部执行单元控制: SAEU contract
-qwen worker 控制: qwen serve HTTP/SSE + ACP bridge
+内部执行器控制: ACP-first SAEU contract
+qwen 第一实现: qwen serve HTTP/SSE + ACP bridge，后续优先 `/acp` Streamable HTTP
 工具接入: MCP Gateway
 ```
 
 ### 结论
 
-通过。A2A 作为系统边界协议，不作为内部 worker contract。
+通过。A2A 作为系统边界协议，不作为内部 worker contract；内部 worker contract 应向 ACP-compatible 方向收敛。
+
+## 第二点五轮：SubAgent 边界 Review
+
+### 审查问题
+
+既然 Qwen Code、Claude Code、Codex、OpenCode 本身支持 SubAgent 和并行调度，是否还需要独立 SAEU？
+
+### 发现
+
+需要，但不能滥用。SubAgent 是 Agent runtime 内部的协作机制，适合短周期探索、阅读、review、总结和共享上下文的轻量任务。SAEU 是平台治理边界，适合长运行、高风险、可恢复、可审计、跨客户端和跨机器任务。
+
+如果把所有子任务都拆成独立 SAEU，会损失常驻 Agent 的上下文连续性，增加端口、workspace、daemon 和恢复复杂度。如果完全依赖 SubAgent，又缺少平台级审计、资源隔离和生命周期管理。
+
+### 修正
+
+架构策略调整为：
+
+```text
+常驻 Project/Supervisor Agent
+  -> 使用 SubAgent 做轻量并行
+  -> 对长任务/高风险/可审计任务创建 SAEU run
+  -> 通过 Event Store / Artifact Store / Memory Store 汇总上下文
+```
+
+### 结论
+
+通过。多 Agent 编排不等于“每个子 Agent 都是 SAEU”；而是 Supervisor 按治理需求在 SubAgent 和 SAEU 之间选择。
 
 ## 第三轮：安全与权限 Review
 
@@ -182,7 +210,8 @@ qwen serve 已有：
 
 | 风险 | 等级 | 缓解 |
 | --- | --- | --- |
-| qwen serve 仍是 experimental/local-first | 高 | 只作为内部 worker，用 Supervisor 包装；必要时 fork 小边界 |
+| qwen serve 仍是 experimental/local-first | 高 | 只作为内部 worker，用 Supervisor 管理；优先 adapter 和 ACP 收敛，必要时 fork 小边界 |
+| 执行器接口锁死 qwen | 高 | 采用 ACP-compatible adapter contract，至少预留 Claude/Codex/OpenCode 接入 |
 | 权限请求映射到 A2A 没有统一标准 | 中 | 内部 Permission Service 为准，A2A 只暴露 blocked/input-required 状态 |
 | 小 VPS 资源不足 | 中 | 并发 1-2，队列限流，第二台 VPS 做 sandbox worker |
 | 恢复无法确定性重放 | 中 | 保存 workspace snapshot、model/tool fixtures，先实现 UI/transcript replay |
@@ -193,7 +222,9 @@ qwen serve 已有：
 
 ### Go
 
-- 单 SAEU + qwen serve wrapper。
+- 单 SAEU + qwen serve adapter。
+- ACP-compatible runtime adapter contract。
+- SubAgent/SAEU 调度边界。
 - 外部 Event Store。
 - Permission Service。
 - Artifact Collector。
@@ -206,10 +237,11 @@ qwen serve 已有：
 - 多 Agent 共享同一个可写 workspace。
 - 把 qwen event ring 当审计日志。
 - 把 A2A 当内部 worker 全量控制协议。
+- 把所有 SubAgent 都强制拆成独立 daemon。
 - 从头实现 coding agent core。
 
 ## 最终可实施判断
 
-方案可行，且适合 1-2 台 VPS 起步。推荐第一阶段只实现一个 qwen serve SAEU，把审计、权限、事件、artifact 和恢复做扎实；第二阶段再做多 SAEU 并发；第三阶段再做 Supervisor 多 Agent 编排。
+方案可行，且适合 1-2 台 VPS 起步。推荐第一阶段只实现一个 qwen serve SAEU adapter，把审计、权限、事件、artifact 和恢复做扎实；第二阶段再抽象 ACP-compatible runtime adapter；第三阶段再做常驻 Supervisor + SubAgent + SAEU 的多 Agent 编排。
 
 只要不跳过单 Agent 单元稳定性，多 Agent 编排不会建立在松散 CLI 进程上，而是建立在可管理、可恢复、可审计的执行单元上。

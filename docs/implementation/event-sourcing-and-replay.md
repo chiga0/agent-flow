@@ -36,9 +36,9 @@ Qwen Code 的 background subagent transcript 就采用 JSONL，并配套 meta si
 
 相关本地源码：
 
-- `/Users/gawain/Documents/codebase/opensource/qwen-code/packages/core/src/agents/agent-transcript.ts`
-- `/Users/gawain/Documents/codebase/opensource/qwen-code/packages/core/src/agents/background-agent-resume.ts`
-- `/Users/gawain/Documents/codebase/opensource/qwen-code/packages/core/src/tools/agent/agent.ts`
+- `/Users/chigao/Documents/codebase/github/qwen-code/packages/core/src/agents/agent-transcript.ts`
+- `/Users/chigao/Documents/codebase/github/qwen-code/packages/core/src/agents/background-agent-resume.ts`
+- `/Users/chigao/Documents/codebase/github/qwen-code/packages/core/src/tools/agent/agent.ts`
 
 ## qwen-code JSONL 能否复现和回放
 
@@ -112,8 +112,8 @@ OpenCode 的 `session-event.ts` 很适合作为事件类型设计参考。它把
 
 相关本地源码：
 
-- `/Users/gawain/Documents/codebase/github/opencode/packages/opencode/src/v2/session-event.ts`
-- `/Users/gawain/Documents/codebase/github/opencode/packages/opencode/src/v2/session.ts`
+- `/Users/chigao/Documents/codebase/github/opencode/packages/opencode/src/v2/session-event.ts`
+- `/Users/chigao/Documents/codebase/github/opencode/packages/opencode/src/v2/session.ts`
 
 这说明生产系统需要的不是“日志字符串”，而是可消费、可索引、可转换的事件 schema。
 
