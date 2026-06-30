@@ -784,6 +784,12 @@ Phase 6: Temporal 或 durable workflow 接管长流程</code></pre>
 <li>外部协议可以是 A2A，内部执行器控制优先 ACP-compatible SAEU。</li>
 </ul>
 <h2 id="agent">多 Agent 目标架构<a class="headerlink" href="#agent" title="Permanent link">&para;</a></h2>
+<p>这张图不是要否定“一个主 Agent 管多个不同角色 SubAgent”的形态。相反，OpenClaw 这类系统里的主 Agent / sub-agent / 独立 workspace / background task 已经很接近目标形态。这里额外抽出 SAEU Queue 和 SAEU run，是为了把“Agent runtime 内部协作”和“云端平台治理边界”分开：</p>
+<ul>
+<li>如果一个主 Agent 能安全地 spawn sub-agent，且 sub-agent 有自己的 workspace、session、timeout 和结果回传，那么它已经可以承担很多多角色编排。</li>
+<li>当这些 sub-agent 还需要被 Web/Kanban/API 独立观察、取消、恢复、计费、审计、跨机器调度或跨执行器替换时，它们就应该被平台登记为 task/run，并按 SAEU contract 管理。</li>
+<li>所以图中的 SAEU 不是“比 SubAgent 更聪明的 Agent”，而是“被平台接管生命周期的 Agent run”。</li>
+</ul>
 <div class="mermaid">flowchart TB
     Client["Client / API / Kanban"]
     RM["Run Manager"]
@@ -800,12 +806,15 @@ Phase 6: Temporal 或 durable workflow 接管长流程</code></pre>
     PERM["Permission Service"]
     A2A["A2A Gateway"]
     MCP["MCP Gateway"]
+    PR["Profile Registry&lt;br/&gt;built-in + user-defined"]
 
     Client --&gt; RM
     A2A --&gt; RM
     RM --&gt; Project
     Project --&gt; SUP
     Project --&gt; Sub
+    PR --&gt; SUP
+    PR --&gt; Queue
     SUP --&gt; Queue
     Queue --&gt; U1
     Queue --&gt; U2
@@ -827,6 +836,11 @@ Phase 6: Temporal 或 durable workflow 接管长流程</code></pre>
     U2 --&gt; MCP
     U3 --&gt; MCP
     U4 --&gt; MCP</div>
+<p>更准确的实现关系是：</p>
+<pre class="highlight"><code class="language-text">Profile 是模板：planner / coder / reviewer / tester / doc-writer / custom...
+Agent instance 是运行实体：由某个 profile 启动，可以是 SubAgent，也可以是 SAEU run。
+Supervisor 调度的是 task，不是直接调度“角色名”。
+Run Manager 管理的是 SAEU run，不理解 agent 的内部思考过程。</code></pre>
 <h2 id="_2">编排对象<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
 <p>多 Agent 编排层只认识以下对象：</p>
 <div class="table-wrapper"><table>
@@ -895,7 +909,7 @@ Phase 6: Temporal 或 durable workflow 接管长流程</code></pre>
 <li>把所有轻量子任务都强制拆成独立 daemon。</li>
 </ul>
 <h2 id="agent-profile">Agent profile<a class="headerlink" href="#agent-profile" title="Permanent link">&para;</a></h2>
-<p>第一版建议定义这些 profile：</p>
+<p>Agent profile 应该是系统内置模板 + 用户可编辑模板，而不是硬编码角色枚举。第一版建议内置这些 profile：</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -942,6 +956,148 @@ Phase 6: Temporal 或 durable workflow 接管长流程</code></pre>
 <li>workspace 策略。</li>
 <li>artifact 要求。</li>
 </ul>
+<h3 id="profile-agent-instance">Profile 与 Agent instance 的关系<a class="headerlink" href="#profile-agent-instance" title="Permanent link">&para;</a></h3>
+<p>Profile 不是 Agent instance。它更像“岗位说明书 + 权限模板 + 运行参数”：</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>概念</th>
+<th>含义</th>
+<th>例子</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>profile</code></td>
+<td>可复用模板</td>
+<td><code>coder</code>、<code>reviewer</code>、<code>frontend-coder</code></td>
+</tr>
+<tr>
+<td><code>agent instance</code></td>
+<td>一次实际启动的 Agent</td>
+<td><code>coder-1</code>、<code>coder-2</code>、<code>reviewer-a</code></td>
+</tr>
+<tr>
+<td><code>task assignment</code></td>
+<td>task 绑定到某个 profile 或 instance</td>
+<td><code>task_123 -&gt; coder</code></td>
+</tr>
+<tr>
+<td><code>run</code></td>
+<td>平台治理的一次执行</td>
+<td><code>run_abc</code> 使用 <code>coder</code> profile 启动</td>
+</tr>
+</tbody>
+</table></div>
+<p>因此一个 profile 可以启动多个 Agent：</p>
+<ul>
+<li>两个 <code>coder</code> SAEU 并行修不同模块。</li>
+<li>一个 <code>reviewer</code> SubAgent 做轻量 diff review，另一个 <code>reviewer</code> SAEU 做高风险审查。</li>
+<li>用户自定义 <code>security-reviewer</code> profile，限制为只读、允许 grep、允许运行静态扫描，但禁止写 workspace。</li>
+</ul>
+<p>Profile 建议支持三层来源：</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>来源</th>
+<th>是否可编辑</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>system built-in</td>
+<td>否或只允许复制</td>
+<td>平台内置安全默认值</td>
+</tr>
+<tr>
+<td>workspace/team profile</td>
+<td>是</td>
+<td>团队共享的 profile</td>
+</tr>
+<tr>
+<td>user profile</td>
+<td>是</td>
+<td>用户个人自定义</td>
+</tr>
+</tbody>
+</table></div>
+<p>Profile 草案：</p>
+<pre class="highlight"><code class="language-json">{
+  "id": "coder",
+  "display_name": "Coder",
+  "description": "Implement code changes in an isolated workspace.",
+  "runtime": {
+    "preferred_adapter": "qwen",
+    "fallback_adapters": ["codex", "claude", "opencode"],
+    "model": "default"
+  },
+  "tools": {
+    "allow": ["read_file", "write_file", "shell", "git_diff"],
+    "deny": ["secrets_read", "deploy_prod"]
+  },
+  "approval": {
+    "mode": "ask",
+    "required_for": ["shell", "network", "git_push"]
+  },
+  "limits": {
+    "max_turns": 40,
+    "timeout_seconds": 3600,
+    "max_parallel_instances": 3
+  },
+  "workspace": {
+    "strategy": "git_worktree",
+    "write_scope": "isolated_branch"
+  },
+  "artifacts": {
+    "required": ["diff.patch", "implementation-notes.md"]
+  }
+}</code></pre>
+<p>在数据模型里，<code>tasks.profile</code> 只保存 profile id 和版本；实际执行时复制一份 resolved profile 到 run spec。这样用户后续修改 profile，不会改变历史 run 的审计含义。</p>
+<h3 id="openclaw-agent-subagent">与 OpenClaw 类主 Agent + SubAgent 的关系<a class="headerlink" href="#openclaw-agent-subagent" title="Permanent link">&para;</a></h3>
+<p>如果一个 runtime 自身已经支持 sub-agent、独立 workspace 和 background task，那么可以把它视为“profile-aware runtime”。平台不需要把每个 sub-agent 都拆出来管理。推荐规则是：</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>场景</th>
+<th>留在 runtime SubAgent</th>
+<th>升级为 SAEU run</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>主 Agent 短期派生阅读/总结/比较</td>
+<td>是</td>
+<td>否</td>
+</tr>
+<tr>
+<td>sub-agent 有独立 workspace 但只回传摘要</td>
+<td>是</td>
+<td>通常否</td>
+</tr>
+<tr>
+<td>需要 Kanban 中单独可见、可取消、可恢复</td>
+<td>否</td>
+<td>是</td>
+</tr>
+<tr>
+<td>需要跨机器、跨执行器、跨租户调度</td>
+<td>否</td>
+<td>是</td>
+</tr>
+<tr>
+<td>需要独立计费、审计、权限审批</td>
+<td>否</td>
+<td>是</td>
+</tr>
+<tr>
+<td>需要多个 profile 实例并行跑高风险写操作</td>
+<td>否</td>
+<td>是</td>
+</tr>
+</tbody>
+</table></div>
+<p>也就是说，OpenClaw 这类“主 Agent + sub-agent workspaces”可以作为 Project/Supervisor Agent 的一种实现。我们多出来的部分是平台层：Profile Registry、Run Manager、Event Store、Permission Service、Artifact Store、Queue 和对外 API。</p>
 <h2 id="workspace">Workspace 策略<a class="headerlink" href="#workspace" title="Permanent link">&para;</a></h2>
 <p>多 Agent 最大风险之一是并发写冲突。建议：</p>
 <div class="table-wrapper"><table>
@@ -1026,6 +1182,65 @@ supervisor -&gt; final-report.md</code></pre>
 <li><code>blocked_conflict</code></li>
 <li><code>blocked_human</code></li>
 </ul>
+<h2 id="dag">DAG 与专业编排工具<a class="headerlink" href="#dag" title="Permanent link">&para;</a></h2>
+<p>复杂任务会自然长成 DAG，但不要一开始就把所有 Agent 编排交给 Airflow 这类通用调度器。需要先区分三层 DAG：</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>层级</th>
+<th>例子</th>
+<th>第一选择</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>mission/task DAG</td>
+<td>planner -&gt; coder -&gt; tester -&gt; reviewer</td>
+<td>先用本系统 mission/task 表 + queue</td>
+</tr>
+<tr>
+<td>durable execution DAG</td>
+<td>跨天任务、人工审批、失败恢复、worker crash resume</td>
+<td>P5/P6 评估 Temporal 或 LangGraph</td>
+</tr>
+<tr>
+<td>batch/business DAG</td>
+<td>每天批量跑 100 个 repo、定时生成报告、数据流水线</td>
+<td>可接 Airflow</td>
+</tr>
+</tbody>
+</table></div>
+<p>Airflow 的强项是开发、调度和监控 batch-oriented workflows，DAG task 依赖和定时/事件触发非常成熟。它适合“外层批处理调度”，例如：</p>
+<ul>
+<li>每晚对所有仓库创建一次 security review mission。</li>
+<li>每周生成团队工程质量报告。</li>
+<li>数据流水线完成后触发一批 Agent 分析任务。</li>
+<li>把 100 个 repo 的任务分批投递到 Run Manager。</li>
+</ul>
+<p>但 Airflow 不适合作为第一版 Agent runtime 核心，原因是：</p>
+<ul>
+<li>Agent run 是强交互、流式、可取消、带权限审批的长会话，不只是 batch task。</li>
+<li>Supervisor 生成的 DAG 可能在执行中动态变化，而 Airflow 更适合相对稳定、可声明的工作流结构。</li>
+<li>Agent 的核心审计要落在 Event Store / Permission Service / Artifact Store，而不是只看 Airflow task log。</li>
+<li>Airflow 可以触发 mission，但不应该直接控制 qwen/claude/codex 的 session、permission 和 workspace。</li>
+</ul>
+<p>因此推荐路径是：</p>
+<ol>
+<li>P3/P4 先实现内置轻量 DAG：<code>tasks</code>、<code>task_dependencies</code>、queue、retry、artifact handoff。</li>
+<li>当 mission 需要跨天、人工审批和可靠恢复时，评估 Temporal/LangGraph 作为 durable workflow 层。</li>
+<li>当需求是周期性批处理或企业已有 Airflow 平台时，把 Airflow 放在外层，用 Airflow task 调用本系统 API 创建/查询/cancel mission。</li>
+</ol>
+<p>边界示例：</p>
+<pre class="highlight"><code class="language-text">Airflow DAG
+  -&gt; call Run Manager API: create mission
+  -&gt; poll/wait mission status
+  -&gt; collect artifact links
+
+Run Manager / Supervisor
+  -&gt; task DAG
+  -&gt; SubAgent or SAEU run
+  -&gt; Event Store / Artifact Store / Permission Service</code></pre>
+<p>Airflow 是“调用我们系统的上游编排器”，不是“替代我们系统内部 Agent 控制面”的组件。</p>
 <h2 id="a2a-gateway">A2A Gateway 位置<a class="headerlink" href="#a2a-gateway" title="Permanent link">&para;</a></h2>
 <p>A2A 适合系统边界，而不是内部所有调用都必须 A2A。</p>
 <pre class="highlight"><code class="language-text">External A2A Client
@@ -1177,7 +1392,7 @@ if task_type == research:
 <li>内部权限请求不会丢失，至少能反馈为“需要审批/用户输入”状态。</li>
 </ul>
 <h2 id="phase-6durable-workflow">Phase 6：Durable workflow<a class="headerlink" href="#phase-6durable-workflow" title="Permanent link">&para;</a></h2>
-<p>当 mission 可能跨天、多轮人工审批、多个 worker 节点时，引入 Temporal：</p>
+<p>当 mission 可能跨天、多轮人工审批、多个 worker 节点时，优先评估 Temporal 或 LangGraph 这类更贴近 durable execution / agent workflow 的工具：</p>
 <ul>
 <li><code>MissionWorkflow</code> 管 tasks DAG。</li>
 <li><code>AgentRunWorkflow</code> 管单个 SAEU run。</li>
@@ -1185,6 +1400,7 @@ if task_type == research:
 <li>事件详情仍写 Event Store。</li>
 </ul>
 <p>在此之前，Postgres queue + lease 足够。</p>
+<p>Airflow 可作为外层 batch/workflow scheduler 引入，但不建议作为 Agent session 控制面。</p>
 <h2 id="_6">最小可实施版本<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
 <p>第一版不要追求全自动多 Agent。建议最小范围：</p>
 <ol>
@@ -1464,6 +1680,20 @@ if task_type == research:
             Agent profile
         </a>
         
+        
+        <a href="#profile-agent-instance"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#profile-agent-instance');">
+            Profile 与 Agent instance 的关系
+        </a>
+        
+        <a href="#openclaw-agent-subagent"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#openclaw-agent-subagent');">
+            与 OpenClaw 类主 Agent + SubAgent 的关系
+        </a>
+        
+        
 
         
         <a href="#workspace"
@@ -1486,6 +1716,14 @@ if task_type == research:
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#_4');">
             失败处理
+        </a>
+        
+
+        
+        <a href="#dag"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#dag');">
+            DAG 与专业编排工具
         </a>
         
 

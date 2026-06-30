@@ -24,6 +24,12 @@ Phase 6: Temporal 或 durable workflow 接管长流程
 
 ## 多 Agent 目标架构
 
+这张图不是要否定“一个主 Agent 管多个不同角色 SubAgent”的形态。相反，OpenClaw 这类系统里的主 Agent / sub-agent / 独立 workspace / background task 已经很接近目标形态。这里额外抽出 SAEU Queue 和 SAEU run，是为了把“Agent runtime 内部协作”和“云端平台治理边界”分开：
+
+- 如果一个主 Agent 能安全地 spawn sub-agent，且 sub-agent 有自己的 workspace、session、timeout 和结果回传，那么它已经可以承担很多多角色编排。
+- 当这些 sub-agent 还需要被 Web/Kanban/API 独立观察、取消、恢复、计费、审计、跨机器调度或跨执行器替换时，它们就应该被平台登记为 task/run，并按 SAEU contract 管理。
+- 所以图中的 SAEU 不是“比 SubAgent 更聪明的 Agent”，而是“被平台接管生命周期的 Agent run”。
+
 ```mermaid
 flowchart TB
     Client["Client / API / Kanban"]
@@ -41,12 +47,15 @@ flowchart TB
     PERM["Permission Service"]
     A2A["A2A Gateway"]
     MCP["MCP Gateway"]
+    PR["Profile Registry<br/>built-in + user-defined"]
 
     Client --> RM
     A2A --> RM
     RM --> Project
     Project --> SUP
     Project --> Sub
+    PR --> SUP
+    PR --> Queue
     SUP --> Queue
     Queue --> U1
     Queue --> U2
@@ -68,6 +77,15 @@ flowchart TB
     U2 --> MCP
     U3 --> MCP
     U4 --> MCP
+```
+
+更准确的实现关系是：
+
+```text
+Profile 是模板：planner / coder / reviewer / tester / doc-writer / custom...
+Agent instance 是运行实体：由某个 profile 启动，可以是 SubAgent，也可以是 SAEU run。
+Supervisor 调度的是 task，不是直接调度“角色名”。
+Run Manager 管理的是 SAEU run，不理解 agent 的内部思考过程。
 ```
 
 ## 编排对象
@@ -112,7 +130,7 @@ Supervisor 不负责：
 
 ## Agent profile
 
-第一版建议定义这些 profile：
+Agent profile 应该是系统内置模板 + 用户可编辑模板，而不是硬编码角色枚举。第一版建议内置这些 profile：
 
 | Profile | 工具权限 | 适用 |
 | --- | --- | --- |
@@ -131,6 +149,83 @@ Supervisor 不负责：
 - timeout。
 - workspace 策略。
 - artifact 要求。
+
+### Profile 与 Agent instance 的关系
+
+Profile 不是 Agent instance。它更像“岗位说明书 + 权限模板 + 运行参数”：
+
+| 概念 | 含义 | 例子 |
+| --- | --- | --- |
+| `profile` | 可复用模板 | `coder`、`reviewer`、`frontend-coder` |
+| `agent instance` | 一次实际启动的 Agent | `coder-1`、`coder-2`、`reviewer-a` |
+| `task assignment` | task 绑定到某个 profile 或 instance | `task_123 -> coder` |
+| `run` | 平台治理的一次执行 | `run_abc` 使用 `coder` profile 启动 |
+
+因此一个 profile 可以启动多个 Agent：
+
+- 两个 `coder` SAEU 并行修不同模块。
+- 一个 `reviewer` SubAgent 做轻量 diff review，另一个 `reviewer` SAEU 做高风险审查。
+- 用户自定义 `security-reviewer` profile，限制为只读、允许 grep、允许运行静态扫描，但禁止写 workspace。
+
+Profile 建议支持三层来源：
+
+| 来源 | 是否可编辑 | 说明 |
+| --- | --- | --- |
+| system built-in | 否或只允许复制 | 平台内置安全默认值 |
+| workspace/team profile | 是 | 团队共享的 profile |
+| user profile | 是 | 用户个人自定义 |
+
+Profile 草案：
+
+```json
+{
+  "id": "coder",
+  "display_name": "Coder",
+  "description": "Implement code changes in an isolated workspace.",
+  "runtime": {
+    "preferred_adapter": "qwen",
+    "fallback_adapters": ["codex", "claude", "opencode"],
+    "model": "default"
+  },
+  "tools": {
+    "allow": ["read_file", "write_file", "shell", "git_diff"],
+    "deny": ["secrets_read", "deploy_prod"]
+  },
+  "approval": {
+    "mode": "ask",
+    "required_for": ["shell", "network", "git_push"]
+  },
+  "limits": {
+    "max_turns": 40,
+    "timeout_seconds": 3600,
+    "max_parallel_instances": 3
+  },
+  "workspace": {
+    "strategy": "git_worktree",
+    "write_scope": "isolated_branch"
+  },
+  "artifacts": {
+    "required": ["diff.patch", "implementation-notes.md"]
+  }
+}
+```
+
+在数据模型里，`tasks.profile` 只保存 profile id 和版本；实际执行时复制一份 resolved profile 到 run spec。这样用户后续修改 profile，不会改变历史 run 的审计含义。
+
+### 与 OpenClaw 类主 Agent + SubAgent 的关系
+
+如果一个 runtime 自身已经支持 sub-agent、独立 workspace 和 background task，那么可以把它视为“profile-aware runtime”。平台不需要把每个 sub-agent 都拆出来管理。推荐规则是：
+
+| 场景 | 留在 runtime SubAgent | 升级为 SAEU run |
+| --- | --- | --- |
+| 主 Agent 短期派生阅读/总结/比较 | 是 | 否 |
+| sub-agent 有独立 workspace 但只回传摘要 | 是 | 通常否 |
+| 需要 Kanban 中单独可见、可取消、可恢复 | 否 | 是 |
+| 需要跨机器、跨执行器、跨租户调度 | 否 | 是 |
+| 需要独立计费、审计、权限审批 | 否 | 是 |
+| 需要多个 profile 实例并行跑高风险写操作 | 否 | 是 |
+
+也就是说，OpenClaw 这类“主 Agent + sub-agent workspaces”可以作为 Project/Supervisor Agent 的一种实现。我们多出来的部分是平台层：Profile Registry、Run Manager、Event Store、Permission Service、Artifact Store、Queue 和对外 API。
 
 ## Workspace 策略
 
@@ -185,6 +280,52 @@ coder question -> supervisor decision -> reviewer/tester/coder input
 - `blocked_permission`
 - `blocked_conflict`
 - `blocked_human`
+
+## DAG 与专业编排工具
+
+复杂任务会自然长成 DAG，但不要一开始就把所有 Agent 编排交给 Airflow 这类通用调度器。需要先区分三层 DAG：
+
+| 层级 | 例子 | 第一选择 |
+| --- | --- | --- |
+| mission/task DAG | planner -> coder -> tester -> reviewer | 先用本系统 mission/task 表 + queue |
+| durable execution DAG | 跨天任务、人工审批、失败恢复、worker crash resume | P5/P6 评估 Temporal 或 LangGraph |
+| batch/business DAG | 每天批量跑 100 个 repo、定时生成报告、数据流水线 | 可接 Airflow |
+
+Airflow 的强项是开发、调度和监控 batch-oriented workflows，DAG task 依赖和定时/事件触发非常成熟。它适合“外层批处理调度”，例如：
+
+- 每晚对所有仓库创建一次 security review mission。
+- 每周生成团队工程质量报告。
+- 数据流水线完成后触发一批 Agent 分析任务。
+- 把 100 个 repo 的任务分批投递到 Run Manager。
+
+但 Airflow 不适合作为第一版 Agent runtime 核心，原因是：
+
+- Agent run 是强交互、流式、可取消、带权限审批的长会话，不只是 batch task。
+- Supervisor 生成的 DAG 可能在执行中动态变化，而 Airflow 更适合相对稳定、可声明的工作流结构。
+- Agent 的核心审计要落在 Event Store / Permission Service / Artifact Store，而不是只看 Airflow task log。
+- Airflow 可以触发 mission，但不应该直接控制 qwen/claude/codex 的 session、permission 和 workspace。
+
+因此推荐路径是：
+
+1. P3/P4 先实现内置轻量 DAG：`tasks`、`task_dependencies`、queue、retry、artifact handoff。
+2. 当 mission 需要跨天、人工审批和可靠恢复时，评估 Temporal/LangGraph 作为 durable workflow 层。
+3. 当需求是周期性批处理或企业已有 Airflow 平台时，把 Airflow 放在外层，用 Airflow task 调用本系统 API 创建/查询/cancel mission。
+
+边界示例：
+
+```text
+Airflow DAG
+  -> call Run Manager API: create mission
+  -> poll/wait mission status
+  -> collect artifact links
+
+Run Manager / Supervisor
+  -> task DAG
+  -> SubAgent or SAEU run
+  -> Event Store / Artifact Store / Permission Service
+```
+
+Airflow 是“调用我们系统的上游编排器”，不是“替代我们系统内部 Agent 控制面”的组件。
 
 ## A2A Gateway 位置
 
@@ -358,7 +499,7 @@ if task_type == research:
 
 ## Phase 6：Durable workflow
 
-当 mission 可能跨天、多轮人工审批、多个 worker 节点时，引入 Temporal：
+当 mission 可能跨天、多轮人工审批、多个 worker 节点时，优先评估 Temporal 或 LangGraph 这类更贴近 durable execution / agent workflow 的工具：
 
 - `MissionWorkflow` 管 tasks DAG。
 - `AgentRunWorkflow` 管单个 SAEU run。
@@ -366,6 +507,8 @@ if task_type == research:
 - 事件详情仍写 Event Store。
 
 在此之前，Postgres queue + lease 足够。
+
+Airflow 可作为外层 batch/workflow scheduler 引入，但不建议作为 Agent session 控制面。
 
 ## 最小可实施版本
 

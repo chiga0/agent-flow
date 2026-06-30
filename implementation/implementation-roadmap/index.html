@@ -843,15 +843,15 @@
 </tr>
 <tr>
 <td>P4</td>
-<td>Supervisor + SubAgent + SAEU 编排</td>
+<td>Supervisor + Profile + SubAgent + SAEU 编排</td>
 <td><code>not_started</code></td>
-<td>常驻 supervisor 可选择 SubAgent 或 SAEU 执行任务</td>
+<td>常驻 supervisor 可基于 profile 选择 SubAgent 或 SAEU 执行任务</td>
 </tr>
 <tr>
 <td>P5</td>
 <td>外部协议与替代组件评估</td>
 <td><code>not_started</code></td>
-<td>ACP Streamable HTTP、A2A Gateway、E2B/Daytona、Temporal/LangGraph 完成试点评估</td>
+<td>ACP Streamable HTTP、A2A Gateway、E2B/Daytona、Temporal/LangGraph/Airflow 完成试点评估</td>
 </tr>
 <tr>
 <td>P6</td>
@@ -1066,12 +1066,13 @@
 </tr>
 </tbody>
 </table></div>
-<h2 id="p4supervisor-subagent-saeu">P4：Supervisor + SubAgent + SAEU 编排<a class="headerlink" href="#p4supervisor-subagent-saeu" title="Permanent link">&para;</a></h2>
+<h2 id="p4supervisor-profile-subagent-saeu">P4：Supervisor + Profile + SubAgent + SAEU 编排<a class="headerlink" href="#p4supervisor-profile-subagent-saeu" title="Permanent link">&para;</a></h2>
 <p>状态：<code>not_started</code></p>
 <p>目标：</p>
 <ul>
 <li>多 Agent 编排不直接编排 CLI，也不把所有 SubAgent 都升级为独立 daemon。</li>
-<li>实现常驻 Project/Supervisor Agent，根据任务风险选择 SubAgent 或 SAEU。</li>
+<li>实现 Profile Registry，内置 planner/coder/reviewer/tester/doc-writer，并允许用户复制、编辑、新增 profile。</li>
+<li>实现常驻 Project/Supervisor Agent，根据 profile、任务风险和资源策略选择 SubAgent 或 SAEU。</li>
 <li>实现 planner -&gt; coder -&gt; tester -&gt; reviewer -&gt; final report。</li>
 </ul>
 <p>任务：</p>
@@ -1090,14 +1091,24 @@
 <td>mission 可拆多个 task</td>
 </tr>
 <tr>
+<td>Profile Registry</td>
+<td><code>not_started</code></td>
+<td>系统内置 profile + 用户自定义 profile + 版本化 resolved profile</td>
+</tr>
+<tr>
 <td>profile 定义</td>
 <td><code>not_started</code></td>
-<td>planner/coder/tester/reviewer 权限不同</td>
+<td>planner/coder/tester/reviewer/doc-writer 权限、模型、workspace、artifact 要求不同</td>
+</tr>
+<tr>
+<td>profile -&gt; agent instance 映射</td>
+<td><code>not_started</code></td>
+<td>一个 profile 可启动多个 SubAgent 或 SAEU instance</td>
 </tr>
 <tr>
 <td>SubAgent/SAEU 调度策略</td>
 <td><code>not_started</code></td>
-<td>轻量任务走 SubAgent，高风险长任务走 SAEU</td>
+<td>轻量任务走 SubAgent，高风险长任务走 SAEU；支持 OpenClaw 类 runtime 内部 sub-agent</td>
 </tr>
 <tr>
 <td>task dependency</td>
@@ -1167,6 +1178,11 @@
 <td>LangGraph supervisor POC</td>
 <td><code>not_started</code></td>
 <td>一个 mission DAG 可恢复执行</td>
+</tr>
+<tr>
+<td>Airflow outer scheduler POC</td>
+<td><code>deferred</code></td>
+<td>Airflow 作为外层 batch scheduler 调用 mission API，不进入 Agent session 控制面</td>
 </tr>
 <tr>
 <td>OpenHands SAEU adapter 评估</td>
@@ -1555,10 +1571,10 @@
         
 
         
-        <a href="#p4supervisor-subagent-saeu"
+        <a href="#p4supervisor-profile-subagent-saeu"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#p4supervisor-subagent-saeu');">
-            P4：Supervisor + SubAgent + SAEU 编排
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#p4supervisor-profile-subagent-saeu');">
+            P4：Supervisor + Profile + SubAgent + SAEU 编排
         </a>
         
 
