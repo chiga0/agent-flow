@@ -307,6 +307,7 @@ article {
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
+  contain: inline-size;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -325,6 +326,11 @@ article {
   max-width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+}
+
+.typography pre code {
+  display: block;
+  min-width: max-content;
 }
 
 .mermaid {
@@ -391,6 +397,8 @@ article {
   .typography {
     font-size: 0.98rem;
     line-height: 1.78;
+    overflow-wrap: anywhere;
+    line-break: anywhere;
   }
 
   .typography h2 {
@@ -404,6 +412,13 @@ article {
     max-width: calc(100vw - 1.5rem);
   }
 
+  .typography :not(pre) > code {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-break: anywhere;
+  }
+
   .typography table {
     font-size: 0.9rem;
   }
@@ -412,6 +427,19 @@ article {
   .typography table td {
     min-width: 7rem;
     max-width: 14rem;
+  }
+
+  .typography .table-wrapper table:not(:has(tr > :nth-child(3))) {
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+    table-layout: fixed;
+  }
+
+  .typography .table-wrapper table:not(:has(tr > :nth-child(3))) th,
+  .typography .table-wrapper table:not(:has(tr > :nth-child(3))) td {
+    min-width: 0;
+    max-width: none;
   }
 
   #search-dialog {
