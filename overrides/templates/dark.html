@@ -1,0 +1,18 @@
+<script>
+  (function () {
+    var storedTheme = localStorage.getItem("theme");
+
+    if (storedTheme === "dark") {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+      if (storedTheme !== "light") {
+        localStorage.setItem("theme", "light");
+      }
+    }
+
+    document.documentElement.classList.add(
+      localStorage.getItem("html-layout") || "layout-fixed"
+    );
+  })();
+</script>

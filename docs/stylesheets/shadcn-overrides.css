@@ -1,0 +1,280 @@
+:root {
+  --theme-accent: oklch(54.6% 0.245 262.881);
+}
+
+html:not(.dark) {
+  color-scheme: light;
+}
+
+body {
+  --header-height: 3.75rem;
+  --footer-height: 3.5rem;
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.9), rgba(255, 255, 255, 0) 18rem),
+    var(--color-background);
+}
+
+header {
+  border-bottom: 1px solid var(--color-border);
+  background-color: color-mix(in oklab, var(--color-background) 92%, transparent);
+  backdrop-filter: saturate(180%) blur(12px);
+}
+
+header .container-wrapper,
+main .container-wrapper {
+  max-width: 1480px;
+  margin-inline: auto;
+}
+
+header .container-wrapper {
+  padding-inline: 1.5rem;
+}
+
+main .container-wrapper {
+  padding-inline: 1rem;
+}
+
+[data-slot="sidebar-wrapper"] {
+  --sidebar-width: 16.5rem !important;
+}
+
+[data-slot="sidebar"] {
+  top: calc(var(--header-height) + 0.75rem) !important;
+  height: calc(100svh - var(--header-height) - 2rem) !important;
+}
+
+[data-slot="sidebar"] > .h-9 {
+  height: 0.5rem;
+}
+
+[data-sidebar="content"] {
+  width: 14.75rem !important;
+  margin-inline: 0 !important;
+  padding-inline: 0.5rem !important;
+}
+
+[data-sidebar="group"] {
+  padding-block: 0.35rem !important;
+}
+
+[data-sidebar="group-label"] {
+  height: 1.75rem !important;
+  color: color-mix(in oklab, var(--color-muted-foreground) 85%, var(--color-foreground));
+  font-size: 0.75rem !important;
+}
+
+[data-sidebar="menu"] {
+  gap: 0.125rem !important;
+}
+
+[data-sidebar="menu-button"] {
+  width: 100% !important;
+  min-height: 1.9rem !important;
+  height: auto !important;
+  padding: 0.38rem 0.5rem !important;
+  border-radius: 0.45rem !important;
+  font-size: 0.84rem !important;
+  line-height: 1.3 !important;
+}
+
+[data-sidebar="menu-button"][data-active="true"] {
+  background-color: color-mix(in oklab, var(--theme-accent) 10%, var(--color-background));
+  border-color: color-mix(in oklab, var(--theme-accent) 18%, var(--color-border));
+  color: var(--color-foreground);
+}
+
+[data-slot="docs"] {
+  gap: 1.5rem;
+  font-size: 1rem !important;
+  min-width: 0;
+}
+
+[data-slot="docs"] > *,
+[data-slot="sidebar-wrapper"],
+main,
+article,
+.typography {
+  min-width: 0;
+}
+
+article {
+  max-width: 840px;
+  padding: 1.25rem 0 4rem;
+}
+
+#page-header {
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+#page-header h1 {
+  max-width: 48rem;
+  font-size: clamp(1.75rem, 2.2vw, 2.25rem) !important;
+  line-height: 1.18 !important;
+  letter-spacing: 0 !important;
+}
+
+#page-header + * {
+  margin-top: 0;
+}
+
+.typography {
+  color: color-mix(in oklab, var(--color-foreground) 88%, var(--color-muted-foreground));
+  font-size: 1rem;
+  line-height: 1.82;
+}
+
+.typography h2 {
+  margin-top: 2.25rem !important;
+  margin-bottom: 0.75rem !important;
+  font-size: 1.45rem !important;
+  line-height: 1.35 !important;
+  letter-spacing: 0 !important;
+}
+
+.typography h3 {
+  margin-top: 1.75rem !important;
+  margin-bottom: 0.55rem !important;
+  font-size: 1.13rem !important;
+  line-height: 1.4 !important;
+  letter-spacing: 0 !important;
+}
+
+.typography p,
+.typography ul,
+.typography ol {
+  margin-top: 0.75rem !important;
+  margin-bottom: 0.75rem !important;
+}
+
+.typography li {
+  margin-top: 0.28rem !important;
+  padding-left: 0.05rem;
+}
+
+.typography blockquote {
+  margin-block: 1rem !important;
+  padding: 0.85rem 1rem !important;
+  border-left: 3px solid color-mix(in oklab, var(--theme-accent) 45%, var(--color-border));
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--color-muted) 40%, transparent);
+}
+
+.typography table {
+  font-size: 0.92rem;
+}
+
+.typography table th,
+.typography table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.typography .table-wrapper {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.typography .table-wrapper table {
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+}
+
+.typography pre,
+.typography code {
+  border-radius: 0.45rem;
+}
+
+.typography pre {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mermaid {
+  max-width: 100%;
+  margin-block: 1.25rem;
+  padding: 1rem;
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 0.6rem;
+  background: var(--color-background);
+}
+
+.mermaid svg {
+  margin-inline: auto;
+}
+
+@media (min-width: 1280px) {
+  [data-slot="docs"] > .sticky {
+    width: 13.5rem !important;
+  }
+}
+
+@media (max-width: 1279px) {
+  article {
+    max-width: 900px;
+    padding-inline: 1rem;
+  }
+}
+
+@media (max-width: 767px) {
+  html,
+  body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  body {
+    --header-height: 3.5rem;
+  }
+
+  header .container-wrapper,
+  main .container-wrapper {
+    padding-inline: 0.75rem !important;
+  }
+
+  article {
+    width: 100%;
+    max-width: 100%;
+    padding-top: 0.9rem;
+    padding-inline: 0;
+  }
+
+  #page-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .typography {
+    font-size: 0.98rem;
+    line-height: 1.78;
+  }
+
+  .typography h2 {
+    font-size: 1.35rem !important;
+  }
+
+  .typography .table-wrapper,
+  .typography pre,
+  .mermaid {
+    margin-inline: 0;
+    max-width: calc(100vw - 1.5rem);
+  }
+
+  .typography table {
+    font-size: 0.9rem;
+  }
+
+  .typography table th,
+  .typography table td {
+    min-width: 7rem;
+    max-width: 14rem;
+  }
+}
