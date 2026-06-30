@@ -15,7 +15,9 @@ Online site: https://chiga0.github.io/agent-research/
 - [事件溯源、JSONL 与回放](docs/implementation/event-sourcing-and-replay.md)
 - [单 Agent 基座选型](docs/implementation/single-agent-strategy.md)
 - [从单 Agent 执行单元到多 Agent 编排](docs/implementation/single-to-multi-agent-implementation-plan.md)
+- [外部方案对比与多方向审计](docs/implementation/alternative-solutions-comparative-audit.md)
 - [方案审计与 Review 记录](docs/implementation/review-and-audit-record.md)
+- [实施 Roadmap](docs/implementation/implementation-roadmap.md)
 
 ## Local preview
 

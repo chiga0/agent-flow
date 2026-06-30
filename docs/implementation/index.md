@@ -28,7 +28,9 @@
 - [事件溯源、JSONL 与回放](event-sourcing-and-replay.md)：回答 JSONL 是否可复现 qwen-code 场景，以及完整回放还缺什么。
 - [单 Agent 基座选型](single-agent-strategy.md)：比较直接部署、fork、抽取核心和从头实现。
 - [从单 Agent 执行单元到多 Agent 编排](single-to-multi-agent-implementation-plan.md)：给出可实施的多 Agent 演进路线。
+- [外部方案对比与多方向审计](alternative-solutions-comparative-audit.md)：对比托管运行时、SDK、编排框架、云沙箱和当前 SAEU 方案。
 - [方案审计与 Review 记录](review-and-audit-record.md)：记录多轮审计结论、风险和 Go/No-Go。
+- [实施 Roadmap](implementation-roadmap.md)：跟踪阶段、状态、验收标准和替代方案评估节点。
 
 ## 目标形态
 
