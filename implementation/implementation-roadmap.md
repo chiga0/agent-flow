@@ -98,6 +98,13 @@ P1 cloud-ready 最小验收：
 | 部署 | 提供 systemd 或 Docker Compose，在一台 VPS 上重启后可恢复服务 |
 | 验证脚本 | 一条脚本能跑通 health -> capabilities -> create qwen run -> SSE -> artifact check |
 
+本轮新增工程门禁：
+
+- Runtime CI：style、compile、90%+ runtime coverage、MkDocs strict build。
+- 集成测试：Run Manager HTTP、SSE、auth、fake adapter、qwen fake daemon adapter。
+- 部署产物：Dockerfile、Docker Compose、systemd service/env example。
+- 验收脚本：`scripts/validate_runtime.py`。
+
 ## P2：审计、权限、恢复硬化
 
 状态：`not_started`
