@@ -13,11 +13,13 @@ class RunManager:
         self,
         artifact_root: Path,
         adapters: dict[str, RuntimeAdapter] | None = None,
+        qwen_base_url: str | None = None,
+        qwen_token: str | None = None,
     ):
         self.store = RunStore(artifact_root)
         self.adapters = adapters or {
             "fake": FakeAdapter(),
-            "qwen": QwenServeAdapter(),
+            "qwen": QwenServeAdapter(base_url=qwen_base_url, token=qwen_token),
         }
 
     def capabilities(self) -> dict[str, Any]:
@@ -70,4 +72,3 @@ class RunManager:
         if adapter is None:
             raise ValueError(f"unknown adapter: {name}")
         return adapter
-

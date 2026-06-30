@@ -121,7 +121,11 @@ class QwenServeAdapter(RuntimeAdapter):
             self._cancelled.add(run.run_id)
         if session_id:
             try:
-                self._request("POST", f"/session/{session_id}/cancel", {"reason": reason or "cancelled"})
+                self._request(
+                    "POST",
+                    f"/session/{session_id}/cancel",
+                    {"reason": reason or "cancelled"},
+                )
             except Exception as exc:  # noqa: BLE001
                 store.append_event(
                     run.run_id,
@@ -154,6 +158,15 @@ class QwenServeAdapter(RuntimeAdapter):
                 "POST",
                 f"/session/{session_id}/prompt",
                 {"prompt": [{"type": "text", "text": prompt}]},
+            )
+            store.append_raw_event(
+                run_id,
+                self.name,
+                {
+                    "kind": "prompt_response",
+                    "prompt_number": prompt_number,
+                    "response": response,
+                },
             )
             store.write_json(
                 run_id,
@@ -248,7 +261,9 @@ class QwenServeAdapter(RuntimeAdapter):
             return
         store.append_event(run_id, "adapter.event", {"adapter": self.name, "raw": payload})
 
-    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _request(
+        self, method: str, path: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         request = self._build_request(method, path, payload)
         try:
             with urllib.request.urlopen(request, timeout=60) as response:

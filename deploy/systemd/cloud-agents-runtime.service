@@ -1,0 +1,25 @@
+[Unit]
+Description=Cloud Agents Runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/agent-research
+EnvironmentFile=/etc/cloud-agents-runtime.env
+ExecStart=/usr/bin/python3 -m runtime.cloud_agents_runtime \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --artifact-root /var/lib/cloud-agents-runtime/artifacts \
+  --protect-health
+Restart=always
+RestartSec=5
+User=cloudagents
+Group=cloudagents
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/cloud-agents-runtime
+
+[Install]
+WantedBy=multi-user.target

@@ -32,13 +32,18 @@ This is still a P1 prototype, not the cloud-ready MVP. The missing pieces are:
 ## Run locally
 
 ```bash
-python3 -m runtime.cloud_agents_runtime --host 127.0.0.1 --port 8765
+export RUN_MANAGER_TOKEN=dev-token
+python3 -m runtime.cloud_agents_runtime \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --token "$RUN_MANAGER_TOKEN"
 ```
 
 Create a run:
 
 ```bash
 curl -s http://127.0.0.1:8765/runs \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"prompt":"hello runtime","adapter":"fake"}'
 ```
@@ -46,13 +51,15 @@ curl -s http://127.0.0.1:8765/runs \
 Stream events:
 
 ```bash
-curl -N http://127.0.0.1:8765/runs/<run_id>/events
+curl -N http://127.0.0.1:8765/runs/<run_id>/events \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN"
 ```
 
 Send another prompt:
 
 ```bash
 curl -s http://127.0.0.1:8765/runs/<run_id>/input \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"prompt":"continue"}'
 ```
@@ -61,6 +68,7 @@ Cancel:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8765/runs/<run_id>/cancel \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"reason":"manual stop"}'
 ```
@@ -69,28 +77,38 @@ curl -s -X POST http://127.0.0.1:8765/runs/<run_id>/cancel \
 
 ```bash
 python3 -m unittest discover -s runtime/tests
+python3 scripts/check_runtime_coverage.py
+python3 scripts/check_style.py
 ```
 
 ## Validate fake adapter
 
 ```bash
-python3 -m runtime.cloud_agents_runtime --host 127.0.0.1 --port 8765
+export RUN_MANAGER_TOKEN=dev-token
+python3 -m runtime.cloud_agents_runtime \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --token "$RUN_MANAGER_TOKEN"
 ```
 
 In another terminal:
 
 ```bash
 RUN_JSON=$(curl -s http://127.0.0.1:8765/runs \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"prompt":"hello runtime","adapter":"fake"}')
 RUN_ID=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])' <<< "$RUN_JSON")
-curl -N "http://127.0.0.1:8765/runs/$RUN_ID/events"
+curl -N "http://127.0.0.1:8765/runs/$RUN_ID/events" \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN"
 ```
 
 Acceptance:
 
 - `/health` returns `{"ok": true}`.
 - `/capabilities` lists `fake` and `qwen`.
+- API routes other than `/health` require `Authorization: Bearer ...` when
+  `RUN_MANAGER_TOKEN` is set.
 - `POST /runs` returns a `run_id`.
 - SSE emits `run.created`, `run.started`, `input.accepted`,
   `message.delta`, `step.completed`, and `run.completed`.
@@ -111,13 +129,19 @@ Then start the Run Manager:
 ```bash
 export QWEN_SERVE_URL=http://127.0.0.1:4170
 export QWEN_SERVE_TOKEN=
-python3 -m runtime.cloud_agents_runtime --host 127.0.0.1 --port 8765
+export RUN_MANAGER_TOKEN=dev-token
+python3 -m runtime.cloud_agents_runtime \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --token "$RUN_MANAGER_TOKEN" \
+  --qwen-url "$QWEN_SERVE_URL"
 ```
 
 Create a qwen-backed run:
 
 ```bash
 curl -s http://127.0.0.1:8765/runs \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"prompt":"say hello from qwen","adapter":"qwen"}'
 ```
@@ -128,6 +152,18 @@ Acceptance:
 - SSE exposes canonical events.
 - Raw qwen SSE frames are saved in `raw_events.jsonl`.
 - `POST /runs/{run_id}/cancel` maps to qwen session cancel.
+
+## Validate a running service
+
+```bash
+python3 scripts/validate_runtime.py \
+  --base-url http://127.0.0.1:8765 \
+  --token "$RUN_MANAGER_TOKEN" \
+  --adapter fake \
+  --artifact-root runtime/artifacts
+```
+
+Use `--adapter qwen` after starting `qwen serve`.
 
 ## Minimal cloud deployment target
 
@@ -141,3 +177,26 @@ The first cloud-runnable slice should include:
 Do not expose this POC directly to the internet. It does not yet include Run
 Manager authentication, tenant isolation, or durable database-backed event
 storage.
+
+### Docker Compose
+
+```bash
+export RUN_MANAGER_TOKEN="$(openssl rand -hex 32)"
+docker compose -f deploy/docker-compose.runtime.yml up -d --build
+python3 scripts/validate_runtime.py \
+  --base-url http://127.0.0.1:8765 \
+  --token "$RUN_MANAGER_TOKEN" \
+  --adapter fake
+```
+
+### systemd
+
+```bash
+sudo useradd --system --create-home --shell /usr/sbin/nologin cloudagents
+sudo mkdir -p /opt/agent-research /var/lib/cloud-agents-runtime/artifacts
+sudo chown -R cloudagents:cloudagents /var/lib/cloud-agents-runtime
+sudo cp deploy/systemd/cloud-agents-runtime.env.example /etc/cloud-agents-runtime.env
+sudo cp deploy/systemd/cloud-agents-runtime.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now cloud-agents-runtime
+```

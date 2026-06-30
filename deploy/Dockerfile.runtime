@@ -1,0 +1,16 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+COPY runtime /app/runtime
+COPY scripts /app/scripts
+
+RUN useradd --create-home --shell /usr/sbin/nologin runtime
+RUN mkdir -p /data/artifacts && chown -R runtime:runtime /data/artifacts /app
+
+USER runtime
+
+EXPOSE 8765
+
+CMD ["python3", "-m", "runtime.cloud_agents_runtime", "--host", "0.0.0.0", "--port", "8765", "--artifact-root", "/data/artifacts", "--protect-health"]
+

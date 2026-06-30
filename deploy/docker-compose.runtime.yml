@@ -1,0 +1,18 @@
+services:
+  runtime:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.runtime
+    environment:
+      RUN_MANAGER_TOKEN: ${RUN_MANAGER_TOKEN:?set RUN_MANAGER_TOKEN}
+      QWEN_SERVE_URL: ${QWEN_SERVE_URL:-}
+      QWEN_SERVE_TOKEN: ${QWEN_SERVE_TOKEN:-}
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - runtime-artifacts:/data/artifacts
+    restart: unless-stopped
+
+volumes:
+  runtime-artifacts:
+

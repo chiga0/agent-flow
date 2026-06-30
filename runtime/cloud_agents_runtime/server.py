@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from http import HTTPStatus
@@ -11,17 +12,26 @@ from typing import Any
 from urllib.parse import urlparse
 
 from . import __version__
+from .auth import AuthConfig, is_authorized
 from .manager import RunManager
 from .models import RunSpec
+from .supervisor import qwen_supervisor_from_env
 
 
-def make_handler(manager: RunManager) -> type[BaseHTTPRequestHandler]:
+def make_handler(
+    manager: RunManager,
+    auth_config: AuthConfig | None = None,
+) -> type[BaseHTTPRequestHandler]:
+    auth_config = auth_config or AuthConfig()
+
     class RuntimeHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = f"cloud-agents-runtime/{__version__}"
 
         def do_GET(self) -> None:
             path = urlparse(self.path).path
+            if not self.require_auth(path):
+                return
             parts = split_path(path)
             if path == "/health":
                 self.write_json({"ok": True, "version": __version__})
@@ -46,6 +56,8 @@ def make_handler(manager: RunManager) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:
             path = urlparse(self.path).path
+            if not self.require_auth(path):
+                return
             parts = split_path(path)
             try:
                 payload = self.read_json()
@@ -60,11 +72,17 @@ def make_handler(manager: RunManager) -> type[BaseHTTPRequestHandler]:
                         self.write_error(HTTPStatus.BAD_REQUEST, "prompt is required")
                         return
                     manager.send_input(parts[1], prompt)
-                    self.write_json({"accepted": True, "run_id": parts[1]}, status=HTTPStatus.ACCEPTED)
+                    self.write_json(
+                        {"accepted": True, "run_id": parts[1]},
+                        status=HTTPStatus.ACCEPTED,
+                    )
                     return
                 if len(parts) == 3 and parts[0] == "runs" and parts[2] == "cancel":
                     manager.cancel(parts[1], payload.get("reason"))
-                    self.write_json({"cancelled": True, "run_id": parts[1]}, status=HTTPStatus.ACCEPTED)
+                    self.write_json(
+                        {"cancelled": True, "run_id": parts[1]},
+                        status=HTTPStatus.ACCEPTED,
+                    )
                     return
             except KeyError:
                 self.write_error(HTTPStatus.NOT_FOUND, "run not found")
@@ -106,6 +124,16 @@ def make_handler(manager: RunManager) -> type[BaseHTTPRequestHandler]:
             except (BrokenPipeError, ConnectionResetError):
                 return
 
+        def require_auth(self, path: str) -> bool:
+            if is_authorized(auth_config, path, self.headers.get("authorization")):
+                return True
+            self.write_json(
+                {"error": "unauthorized"},
+                status=HTTPStatus.UNAUTHORIZED,
+                headers={"www-authenticate": "Bearer"},
+            )
+            return False
+
         def read_json(self) -> dict[str, Any]:
             length = int(self.headers.get("content-length", "0") or "0")
             if length == 0:
@@ -120,11 +148,14 @@ def make_handler(manager: RunManager) -> type[BaseHTTPRequestHandler]:
             self,
             payload: dict[str, Any],
             status: HTTPStatus = HTTPStatus.OK,
+            headers: dict[str, str] | None = None,
         ) -> None:
             body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
             self.send_response(status)
             self.send_header("content-type", "application/json; charset=utf-8")
             self.send_header("content-length", str(len(body)))
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(body)
 
@@ -138,7 +169,10 @@ def make_handler(manager: RunManager) -> type[BaseHTTPRequestHandler]:
             self.wfile.flush()
 
         def log_message(self, fmt: str, *args: Any) -> None:
-            sys.stderr.write("%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), fmt % args))
+            sys.stderr.write(
+                "%s - - [%s] %s\n"
+                % (self.address_string(), self.log_date_time_string(), fmt % args)
+            )
 
     return RuntimeHandler
 
@@ -156,9 +190,20 @@ def parse_last_event_id(value: str | None) -> int:
         return 0
 
 
-def build_server(host: str, port: int, artifact_root: Path) -> ThreadingHTTPServer:
-    manager = RunManager(artifact_root=artifact_root)
-    return ThreadingHTTPServer((host, port), make_handler(manager))
+def build_server(
+    host: str,
+    port: int,
+    artifact_root: Path,
+    auth_config: AuthConfig | None = None,
+    qwen_base_url: str | None = None,
+    qwen_token: str | None = None,
+) -> ThreadingHTTPServer:
+    manager = RunManager(
+        artifact_root=artifact_root,
+        qwen_base_url=qwen_base_url,
+        qwen_token=qwen_token,
+    )
+    return ThreadingHTTPServer((host, port), make_handler(manager, auth_config=auth_config))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -171,16 +216,53 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("runtime/artifacts"),
         help="directory for run artifacts",
     )
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("RUN_MANAGER_TOKEN"),
+        help="bearer token for Run Manager API; defaults to RUN_MANAGER_TOKEN",
+    )
+    parser.add_argument(
+        "--protect-health",
+        action="store_true",
+        default=os.environ.get("RUN_MANAGER_PROTECT_HEALTH") == "1",
+        help="require bearer token for /health too",
+    )
+    parser.add_argument(
+        "--qwen-url",
+        default=os.environ.get("QWEN_SERVE_URL"),
+        help="existing qwen serve base URL",
+    )
+    parser.add_argument(
+        "--qwen-token",
+        default=os.environ.get("QWEN_SERVE_TOKEN"),
+        help="bearer token for qwen serve",
+    )
     args = parser.parse_args(argv)
-    server = build_server(args.host, args.port, args.artifact_root)
+    supervisor = qwen_supervisor_from_env()
+    if supervisor:
+        supervisor.start()
+    server = build_server(
+        args.host,
+        args.port,
+        args.artifact_root,
+        auth_config=AuthConfig(token=args.token, protect_health=args.protect_health),
+        qwen_base_url=args.qwen_url,
+        qwen_token=args.qwen_token,
+    )
     print(f"cloud-agents-runtime listening on http://{args.host}:{args.port}")
     print(f"artifacts: {args.artifact_root}")
+    if args.token:
+        print("run manager auth: enabled")
+    if args.qwen_url:
+        print(f"qwen serve: {args.qwen_url}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nshutting down")
     finally:
         server.server_close()
+        if supervisor:
+            supervisor.stop()
     return 0
 
 
