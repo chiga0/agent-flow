@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://chiga0.github.io/agent-research/implementation/sandbox-isolation/">
+        <link rel="canonical" href="https://chiga0.github.io/agent-research/implementation/alternative-solutions-comparative-audit/">
       
       
-        <link rel="prev" href="../qwen-serve-single-agent-cloud-unit/">
+        <link rel="prev" href="../single-to-multi-agent-implementation-plan/">
       
       
-        <link rel="next" href="../protocol-acp-a2a/">
+        <link rel="next" href="../review-and-audit-record/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -24,7 +24,7 @@
     
     
       
-        <title>沙箱与隔离方案 - Agent Research</title>
+        <title>外部方案对比与多方向审计 - Agent Research</title>
       
     
     
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              沙箱与隔离方案
+              外部方案对比与多方向审计
             
           </span>
         </div>
@@ -393,32 +393,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    沙箱与隔离方案
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../sandbox-isolation/" class="md-nav__link">
         
   
   
@@ -429,140 +407,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="目录">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      目录
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#_2" class="md-nav__link">
-    <span class="md-ellipsis">
-      隔离目标
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_3" class="md-nav__link">
-    <span class="md-ellipsis">
-      推荐分级
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#docker" class="md-nav__link">
-    <span class="md-ellipsis">
-      Docker 运行策略
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_4" class="md-nav__link">
-    <span class="md-ellipsis">
-      网络控制
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="网络控制">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#a" class="md-nav__link">
-    <span class="md-ellipsis">
-      模式 A：受控出口网络
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#b" class="md-nav__link">
-    <span class="md-ellipsis">
-      模式 B：模型代理隔离
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#workspace" class="md-nav__link">
-    <span class="md-ellipsis">
-      文件系统与 workspace
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_5" class="md-nav__link">
-    <span class="md-ellipsis">
-      权限策略
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#vps" class="md-nav__link">
-    <span class="md-ellipsis">
-      什么时候需要第二台 VPS
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#docker_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      Docker 的边界
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_6" class="md-nav__link">
-    <span class="md-ellipsis">
-      最小落地清单
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_7" class="md-nav__link">
-    <span class="md-ellipsis">
-      参考资料
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -687,10 +531,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../alternative-solutions-comparative-audit/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    外部方案对比与多方向审计
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -701,6 +567,140 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      总结结论
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      调研对象
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      对比审计
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="对比审计">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      评价维度
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      对比矩阵
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      对比结论
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      正向审计
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      无方向审计
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      反向审计
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      是否存在更好的整体替代方案
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      对当前方案的修订建议
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      参考资料
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1007,7 +1007,7 @@
         <li class="md-nav__item">
   <a href="#_2" class="md-nav__link">
     <span class="md-ellipsis">
-      隔离目标
+      总结结论
     </span>
   </a>
   
@@ -1016,16 +1016,7 @@
         <li class="md-nav__item">
   <a href="#_3" class="md-nav__link">
     <span class="md-ellipsis">
-      推荐分级
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#docker" class="md-nav__link">
-    <span class="md-ellipsis">
-      Docker 运行策略
+      调研对象
     </span>
   </a>
   
@@ -1034,26 +1025,35 @@
         <li class="md-nav__item">
   <a href="#_4" class="md-nav__link">
     <span class="md-ellipsis">
-      网络控制
+      对比审计
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="网络控制">
+    <nav class="md-nav" aria-label="对比审计">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#a" class="md-nav__link">
+  <a href="#_5" class="md-nav__link">
     <span class="md-ellipsis">
-      模式 A：受控出口网络
+      评价维度
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#b" class="md-nav__link">
+  <a href="#_6" class="md-nav__link">
     <span class="md-ellipsis">
-      模式 B：模型代理隔离
+      对比矩阵
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      对比结论
     </span>
   </a>
   
@@ -1065,52 +1065,52 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#workspace" class="md-nav__link">
+  <a href="#_8" class="md-nav__link">
     <span class="md-ellipsis">
-      文件系统与 workspace
+      正向审计
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#_5" class="md-nav__link">
+  <a href="#_9" class="md-nav__link">
     <span class="md-ellipsis">
-      权限策略
+      无方向审计
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#vps" class="md-nav__link">
+  <a href="#_10" class="md-nav__link">
     <span class="md-ellipsis">
-      什么时候需要第二台 VPS
+      反向审计
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#docker_1" class="md-nav__link">
+  <a href="#_11" class="md-nav__link">
     <span class="md-ellipsis">
-      Docker 的边界
+      是否存在更好的整体替代方案
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#_6" class="md-nav__link">
+  <a href="#_12" class="md-nav__link">
     <span class="md-ellipsis">
-      最小落地清单
+      对当前方案的修订建议
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#_7" class="md-nav__link">
+  <a href="#_13" class="md-nav__link">
     <span class="md-ellipsis">
       参考资料
     </span>
@@ -1137,244 +1137,564 @@
   
 
 
-<h1 id="_1">沙箱与隔离方案<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h1>
+<h1 id="_1">外部方案对比与多方向审计<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h1>
 <blockquote>
-<p>结论：1-2 台小 VPS 不需要一开始上 Kubernetes 或多 ECS。建议用 Docker/rootless Docker、Git worktree、资源限制、网络出口控制和 model proxy 起步；当任务包含不可信代码或高风险网络访问时，把 sandbox worker 放到第二台 VPS。</p>
+<p>调研日期：2026-06-30<br />
+目标：在已经确定 <code>qwen serve</code> SAEU 路线后，再对比当前更成熟或相近的方案，并用对比审计、正向审计、无方向审计、反向审计验证当前方案是否需要调整。</p>
 </blockquote>
-<h2 id="_2">隔离目标<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
-<p>Agent 沙箱不是只防止误删文件，它至少要控制五类风险：</p>
+<h2 id="_2">总结结论<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<p>当前方案不需要推翻。更稳妥的调整是：</p>
+<ul>
+<li>保留 <code>qwen serve</code> SAEU 作为第一版单 Agent 执行单元。</li>
+<li>把 SAEU contract 做成不可变的内部边界，避免绑定 qwen 私有 API。</li>
+<li>允许未来替换三类组件：</li>
+<li>执行器：Qwen Code、Claude Code、OpenCode、OpenHands、自研 worker。</li>
+<li>沙箱：Docker/rootless Docker、E2B、Daytona、OpenHands Runtime、microVM。</li>
+<li>编排器：Postgres queue、Temporal、LangGraph/LangSmith。</li>
+<li>A2A 放在系统边界，不取代内部 SAEU contract。</li>
+<li>Roadmap 中加入“替代方案评估里程碑”，避免后续架构锁死。</li>
+</ul>
+<p>一句话：<strong>当前路线是低资源 VPS 条件下可实施性最高的路线；外部成熟方案更适合成为后续替换模块，而不是第一天整体替换。</strong></p>
+<h2 id="_3">调研对象<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>风险</th>
+<th>类别</th>
+<th>方案</th>
+<th>价值点</th>
+<th>对当前方案的启发</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>托管 Agent Runtime</td>
+<td>AWS Bedrock AgentCore</td>
+<td>Runtime、Gateway、Memory、Identity、Observability、内置工具</td>
+<td>证明 Agent Runtime 应拆成运行、工具、身份、观测、记忆等模块</td>
+</tr>
+<tr>
+<td>托管 Agent 平台</td>
+<td>Microsoft Foundry Agent Service</td>
+<td>托管部署、身份、memory、observability、任意框架/模型</td>
+<td>适合企业云上生产，但不适合 1-2 台 VPS 起步</td>
+</tr>
+<tr>
+<td>托管 Agent Runtime</td>
+<td>Google ADK + Agent Runtime</td>
+<td>ADK 开发、多 Agent、Agent Runtime 部署治理</td>
+<td>适合 Google Cloud 生态，可作为未来云端迁移参考</td>
+</tr>
+<tr>
+<td>Agent SDK</td>
+<td>OpenAI Agents SDK</td>
+<td>Runner、tools、guardrails、handoffs、sessions、tracing</td>
+<td>可作为业务 Agent SDK 参考，但不替代 coding agent harness</td>
+</tr>
+<tr>
+<td>可恢复编排</td>
+<td>LangGraph / LangSmith</td>
+<td>durable execution、streaming、human-in-the-loop</td>
+<td>可作为 supervisor/workflow 层候选</td>
+</tr>
+<tr>
+<td>Durable workflow</td>
+<td>Temporal</td>
+<td>长流程、Signal/Query/Update、Activity retry</td>
+<td>适合后期接管 mission/run lifecycle</td>
+</tr>
+<tr>
+<td>云沙箱</td>
+<td>E2B</td>
+<td>为 Agent 提供安全云端 sandbox、支持 coding agents</td>
+<td>可替代自建 Docker sandbox</td>
+</tr>
+<tr>
+<td>云沙箱</td>
+<td>Daytona</td>
+<td>快速、可恢复、隔离的 AI agent sandbox</td>
+<td>可作为高并发/更强隔离替代</td>
+</tr>
+<tr>
+<td>Coding Agent 平台</td>
+<td>OpenHands / OpenHands Enterprise</td>
+<td>自托管 coding agents、runtime、event-sourced replay</td>
+<td>可作为执行器或竞品参考</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_4">对比审计<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<h3 id="_5">评价维度<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>低资源可实施性</td>
+<td>是否适合 1-2 台小 VPS 起步</td>
+</tr>
+<tr>
+<td>Coding Agent 贴合度</td>
+<td>是否天然支持代码编辑、shell、git、diff、review</td>
+</tr>
+<tr>
+<td>审计与重放</td>
+<td>是否支持事件、trace、artifact、deterministic replay</td>
+</tr>
+<tr>
+<td>可恢复性</td>
+<td>是否支持断线、崩溃、长任务恢复</td>
+</tr>
+<tr>
+<td>权限与 HITL</td>
+<td>是否支持工具审批、人类介入</td>
+</tr>
+<tr>
+<td>沙箱隔离</td>
+<td>是否提供强隔离工作区</td>
+</tr>
+<tr>
+<td>协议互操作</td>
+<td>是否适合 A2A/MCP/自定义协议</td>
+</tr>
+<tr>
+<td>迁移成本</td>
+<td>对当前方案的替换成本</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_6">对比矩阵<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>低资源</th>
+<th>Coding 贴合</th>
+<th>审计重放</th>
+<th>恢复</th>
+<th>权限/HITL</th>
+<th>沙箱</th>
+<th>互操作</th>
+<th>判断</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>当前 qwen serve SAEU</td>
+<td>高</td>
+<td>高</td>
+<td>中，需外部补齐</td>
+<td>中，需外部补齐</td>
+<td>高</td>
+<td>中</td>
+<td>高</td>
+<td>MVP 主线</td>
+</tr>
+<tr>
+<td>AWS Bedrock AgentCore</td>
+<td>低</td>
+<td>中</td>
+<td>高</td>
+<td>高</td>
+<td>高</td>
+<td>高</td>
+<td>中</td>
+<td>企业 AWS 路线</td>
+</tr>
+<tr>
+<td>Microsoft Foundry Agent Service</td>
+<td>低</td>
+<td>中</td>
+<td>高</td>
+<td>高</td>
+<td>高</td>
+<td>中</td>
+<td>中</td>
+<td>Azure 企业路线</td>
+</tr>
+<tr>
+<td>Google ADK + Agent Runtime</td>
+<td>低</td>
+<td>中</td>
+<td>高</td>
+<td>高</td>
+<td>高</td>
+<td>中</td>
+<td>中</td>
+<td>Google Cloud 路线</td>
+</tr>
+<tr>
+<td>OpenAI Agents SDK</td>
+<td>中</td>
+<td>中</td>
+<td>高</td>
+<td>中</td>
+<td>高</td>
+<td>低</td>
+<td>中</td>
+<td>业务 Agent SDK，不是 coding runtime</td>
+</tr>
+<tr>
+<td>LangGraph/LangSmith</td>
+<td>中</td>
+<td>中</td>
+<td>高</td>
+<td>高</td>
+<td>高</td>
+<td>低</td>
+<td>中</td>
+<td>Supervisor/workflow 候选</td>
+</tr>
+<tr>
+<td>Temporal</td>
+<td>中</td>
+<td>低</td>
+<td>中</td>
+<td>高</td>
+<td>高</td>
+<td>低</td>
+<td>高</td>
+<td>长流程编排候选</td>
+</tr>
+<tr>
+<td>E2B</td>
+<td>中</td>
+<td>高</td>
+<td>中</td>
+<td>中</td>
+<td>低</td>
+<td>高</td>
+<td>中</td>
+<td>沙箱替代候选</td>
+</tr>
+<tr>
+<td>Daytona</td>
+<td>中</td>
+<td>高</td>
+<td>中</td>
+<td>中</td>
+<td>低</td>
+<td>高</td>
+<td>中</td>
+<td>沙箱替代候选</td>
+</tr>
+<tr>
+<td>OpenHands Enterprise</td>
+<td>中</td>
+<td>高</td>
+<td>高</td>
+<td>中</td>
+<td>中</td>
+<td>高</td>
+<td>中</td>
+<td>执行器/平台替代候选</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_7">对比结论<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h3>
+<p>当前方案的优势：</p>
+<ul>
+<li>最贴合用户当前资源约束。</li>
+<li>能直接复用 Qwen Code 的 coding harness。</li>
+<li>可快速实现单 Agent 云端执行单元。</li>
+<li>不绑定 AWS/Azure/GCP。</li>
+<li>后续可逐步接入 A2A、MCP、Temporal、外部沙箱。</li>
+</ul>
+<p>当前方案的短板：</p>
+<ul>
+<li>qwen serve 仍是 experimental/local-first，需要外部 Supervisor 补强。</li>
+<li>审计、重放、恢复不能依赖 qwen 自身 event ring。</li>
+<li>Docker 在恶意代码场景下不是强安全边界。</li>
+<li>多 Agent 编排需要自建 Run Manager 和 Event Store。</li>
+</ul>
+<p>外部方案带来的改进方向：</p>
+<ul>
+<li>如果沙箱成为瓶颈，优先评估 E2B/Daytona，而不是自研 microVM。</li>
+<li>如果 mission/run workflow 变复杂，引入 Temporal 或 LangGraph，而不是把状态机继续堆进 Supervisor。</li>
+<li>如果进入企业云场景，可评估 AgentCore/Foundry/Google Agent Runtime。</li>
+<li>如果需要另一个 coding agent runtime，可把 OpenHands 作为 SAEU adapter 试点。</li>
+</ul>
+<h2 id="_8">正向审计<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h2>
+<p>正向审计从目标出发，检查当前方案是否满足目标。</p>
+<table>
+<thead>
+<tr>
 <th>目标</th>
+<th>当前方案能力</th>
+<th>审计结论</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>文件系统破坏</td>
-<td>Agent 只能写自己的 workspace，不能碰宿主机和其他 run</td>
+<td>单 Agent 可长期运行</td>
+<td>qwen serve + Supervisor + Event Store</td>
+<td>可行</td>
 </tr>
 <tr>
-<td>进程失控</td>
-<td>限制 CPU、内存、进程数、运行时长，避免拖垮 VPS</td>
+<td>可外部通信</td>
+<td>SAEU contract + REST/SSE + A2A Gateway</td>
+<td>可行</td>
 </tr>
 <tr>
-<td>网络外联</td>
-<td>默认最小网络权限，必要时经过 egress proxy</td>
+<td>实时状态</td>
+<td>qwen SSE -&gt; canonical events -&gt; Run Manager SSE</td>
+<td>可行</td>
 </tr>
 <tr>
-<td>密钥泄漏</td>
-<td>真实模型 key、Git 凭证、云密钥不进入 Agent 容器</td>
+<td>权限请求</td>
+<td>qwen permission mediation -&gt; Permission Service</td>
+<td>可行</td>
 </tr>
 <tr>
-<td>工具滥用</td>
-<td>高风险 shell、git push、外部目录、密钥读取必须审批</td>
+<td>审计</td>
+<td>canonical events + artifact package</td>
+<td>可行</td>
+</tr>
+<tr>
+<td>重放</td>
+<td>UI replay、transcript replay、后续 deterministic replay</td>
+<td>可行，但分阶段</td>
+</tr>
+<tr>
+<td>可恢复</td>
+<td>Last-Event-ID、load/resume、workspace snapshot、Supervisor recovery</td>
+<td>可行，但必须外部持久化</td>
+</tr>
+<tr>
+<td>多 Agent 编排</td>
+<td>mission/task/run + SAEU queue + artifact 协作</td>
+<td>可行</td>
+</tr>
+<tr>
+<td>小 VPS 起步</td>
+<td>并发 1-2，Docker sandbox，Postgres queue</td>
+<td>可行</td>
+</tr>
+<tr>
+<td>未来替换方案</td>
+<td>SAEU adapter 边界</td>
+<td>可行</td>
 </tr>
 </tbody>
 </table>
-<h2 id="_3">推荐分级<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<p>正向审计结论：当前方案满足 MVP 到 Beta 的目标，但必须按 Roadmap 先实现 Event Store、Artifact Store、Permission Service 和 Supervisor，而不是只启动 qwen serve。</p>
+<h2 id="_9">无方向审计<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h2>
+<p>无方向审计不从目标出发，而是从组件、边界和随机故障点横向扫描。</p>
 <table>
 <thead>
 <tr>
-<th>等级</th>
-<th>适用任务</th>
-<th>隔离方式</th>
-<th>部署建议</th>
+<th>区域</th>
+<th>可能问题</th>
+<th>缓解</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>L0</td>
-<td>自己可信仓库、只读分析</td>
-<td>Git worktree + 进程超时</td>
-<td>本机或单 VPS</td>
+<td>qwen serve</td>
+<td>daemon experimental，API 可能变动</td>
+<td>adapter 封装；版本 pin；capabilities preflight</td>
 </tr>
 <tr>
-<td>L1</td>
-<td>普通代码修改、测试、构建</td>
-<td>Docker + cgroups + seccomp + worktree</td>
-<td>单 VPS 可用</td>
+<td>Event Store</td>
+<td>写入失败导致无审计执行</td>
+<td>写失败则 pause/cancel run，不能继续</td>
 </tr>
 <tr>
-<td>L2</td>
-<td>第三方仓库、未知脚本、网络工具</td>
-<td>Docker + egress proxy + 独立 worker 节点</td>
-<td>双 VPS 更稳</td>
+<td>SSE</td>
+<td>event ring gap</td>
+<td>外部 canonical event store；gap event；load/resume 补救</td>
 </tr>
 <tr>
-<td>L3</td>
-<td>恶意代码假设、强安全边界</td>
-<td>microVM/Firecracker/gVisor/Kata</td>
-<td>小 VPS 不建议起步</td>
+<td>Permission</td>
+<td>审批超时或多客户端冲突</td>
+<td>timeout 默认 deny/cancel；记录投票策略</td>
+</tr>
+<tr>
+<td>Workspace</td>
+<td>并发写冲突</td>
+<td>每个 coder 独立 worktree；merge 单独执行</td>
+</tr>
+<tr>
+<td>Sandbox</td>
+<td>Docker escape 或误挂载</td>
+<td>非 root、cap drop、不挂 Docker socket；高风险任务独立 VPS</td>
+</tr>
+<tr>
+<td>Model Proxy</td>
+<td>key 泄漏或成本失控</td>
+<td>scoped token、预算、审计、限流</td>
+</tr>
+<tr>
+<td>MCP</td>
+<td>工具权限过宽</td>
+<td>MCP Gateway 登记、按 run 注入最小权限</td>
+</tr>
+<tr>
+<td>Artifact</td>
+<td>大文件撑爆 VPS</td>
+<td>retention policy、压缩、外部对象存储迁移点</td>
+</tr>
+<tr>
+<td>Supervisor</td>
+<td>规则复杂化</td>
+<td>到阈值后迁移 Temporal/LangGraph</td>
 </tr>
 </tbody>
 </table>
-<p>当前资源条件下，优先实现 L1，再用第二台 VPS 获得 L2 的爆炸半径隔离。</p>
-<h2 id="docker">Docker 运行策略<a class="headerlink" href="#docker" title="Permanent link">&para;</a></h2>
-<p>建议每个 run 一个容器，每个容器绑定一个独立 workspace：</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--name<span class="w"> </span>agent-run-xxx<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--memory<span class="o">=</span>768m<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--cpus<span class="o">=</span><span class="m">0</span>.75<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>--pids-limit<span class="o">=</span><span class="m">256</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>--cap-drop<span class="o">=</span>ALL<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span>--security-opt<span class="o">=</span>no-new-privileges<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span>--security-opt<span class="o">=</span><span class="nv">seccomp</span><span class="o">=</span>default<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span>--read-only<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span>--tmpfs<span class="w"> </span>/tmp:rw,noexec,nosuid,size<span class="o">=</span>128m<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span>--network<span class="w"> </span>none<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span>-u<span class="w"> </span><span class="m">1000</span>:1000<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span>-v<span class="w"> </span>/srv/agent/workspaces/run-xxx:/workspace:rw<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span>-w<span class="w"> </span>/workspace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">  </span>qwen-code-runner:latest
-</code></pre></div>
-<p>说明：</p>
-<ul>
-<li><code>--memory</code>、<code>--cpus</code>、<code>--pids-limit</code> 控制资源。</li>
-<li><code>--cap-drop=ALL</code> 和 <code>no-new-privileges</code> 降低提权风险。</li>
-<li><code>--read-only</code> 让容器根文件系统不可写，只开放 <code>/workspace</code> 和 <code>/tmp</code>。</li>
-<li><code>--network none</code> 是最安全默认值，但 coding agent 通常需要模型 API 和包管理网络，因此生产中更常用受控网络。</li>
-<li><code>-u 1000:1000</code> 避免容器内 root 写出 root-owned 文件。</li>
-</ul>
-<h2 id="_4">网络控制<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
-<p>Qwen Code 需要访问模型 API，部分任务也会用到 GitHub、npm、pip、apt 或文档站。不要把真实 API key 和全量公网直接交给容器。</p>
-<p>推荐两种模式：</p>
-<h3 id="a">模式 A：受控出口网络<a class="headerlink" href="#a" title="Permanent link">&para;</a></h3>
-<p>容器加入专用 Docker network，只能访问 egress proxy：</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>agent container -&gt; egress proxy -&gt; allowlist domains
-</code></pre></div>
-<p>allowlist 起步可以包含：</p>
-<ul>
-<li>模型网关域名。</li>
-<li>GitHub 只读访问。</li>
-<li>npm/pip registry。</li>
-<li>用户明确允许的业务域名。</li>
-</ul>
-<h3 id="b">模式 B：模型代理隔离<a class="headerlink" href="#b" title="Permanent link">&para;</a></h3>
-<p>Agent 只知道内部 <code>MODEL_PROXY_URL</code>，不持有真实模型 key：</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>agent container -&gt; model proxy -&gt; OpenAI / Anthropic / Qwen / Gemini
-</code></pre></div>
-<p>model proxy 负责：</p>
-<ul>
-<li>注入真实 API key。</li>
-<li>按 tenant/run 限额。</li>
-<li>记录 token、成本、延迟和错误。</li>
-<li>做模型降级、重试和熔断。</li>
-</ul>
-<p>这比把 <code>OPENAI_API_KEY</code>、<code>ANTHROPIC_API_KEY</code>、<code>DASHSCOPE_API_KEY</code> 直接注入容器安全得多。</p>
-<h2 id="workspace">文件系统与 workspace<a class="headerlink" href="#workspace" title="Permanent link">&para;</a></h2>
-<p>每个 run 应当有独立目录：</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>/srv/agent/
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  workspaces/
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    run-001/
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    run-002/
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>  artifacts/
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    run-001/
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>      transcript.jsonl
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>      diff.patch
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>      final.md
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>  tmp/
-</code></pre></div>
-<p>推荐规则：</p>
-<ul>
-<li>从 Git 仓库创建 worktree 或 shallow clone。</li>
-<li>workspace 只挂载当前 run 目录。</li>
-<li>artifact 目录由 worker supervisor 写入，Agent 不直接写系统级 artifact 索引。</li>
-<li>禁止挂载宿主机 <code>/var/run/docker.sock</code>。</li>
-<li>禁止挂载用户 home、SSH key、云厂商 credential 目录。</li>
-</ul>
-<h2 id="_5">权限策略<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
-<p>高风险动作必须进入审批或策略拒绝：</p>
+<p>无方向审计结论：最大风险不在 qwen serve 本身，而在“外部补强组件是否真的实现”。Roadmap 必须把 Event Store、Permission Service、Artifact Collector 列为早期硬化阶段，并在这些能力完成前限制多 Agent 扩张。</p>
+<h2 id="_10">反向审计<a class="headerlink" href="#_10" title="Permanent link">&para;</a></h2>
+<p>反向审计从失败事故倒推当前设计能否承受。</p>
 <table>
 <thead>
 <tr>
-<th>动作</th>
-<th>默认策略</th>
+<th>事故</th>
+<th>如果发生会怎样</th>
+<th>当前方案是否能处理</th>
+<th>必须动作</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>读取 <code>.env</code>、<code>id_rsa</code>、云 credential</td>
-<td>deny 或 ask</td>
+<td>qwen daemon 崩溃</td>
+<td>session_died，SSE 终止</td>
+<td>能检测，恢复依赖外部状态</td>
+<td>保存 crash diagnostics，尝试 load/resume</td>
 </tr>
 <tr>
-<td>写 workspace 外目录</td>
-<td>deny</td>
+<td>Supervisor 重启</td>
+<td>SSE 订阅丢失</td>
+<td>能处理</td>
+<td>扫描 running runs，Last-Event-ID reconnect</td>
 </tr>
 <tr>
-<td><code>rm -rf</code>、磁盘清理、权限变更</td>
-<td>ask</td>
+<td>VPS 重启</td>
+<td>容器可能消失</td>
+<td>部分处理</td>
+<td>systemd + DB running scan + recovery policy</td>
 </tr>
 <tr>
-<td><code>git push</code>、发布包、部署命令</td>
-<td>ask</td>
+<td>审批没人响应</td>
+<td>run 卡住</td>
+<td>能处理</td>
+<td>permission timeout，默认 cancel/deny</td>
 </tr>
 <tr>
-<td>外部网络扫描、curl 任意地址</td>
-<td>ask 或 deny</td>
+<td>qwen event ring 被覆盖</td>
+<td>中间事件丢失</td>
+<td>可检测</td>
+<td>外部 Event Store 是唯一审计源</td>
 </tr>
 <tr>
-<td>安装系统包</td>
-<td>ask</td>
+<td>Agent 误删 workspace</td>
+<td>run 失败</td>
+<td>部分处理</td>
+<td>git worktree + checkpoint + artifact</td>
 </tr>
 <tr>
-<td>启动长期 daemon</td>
-<td>ask 并设置超时</td>
+<td>Agent 泄漏 key</td>
+<td>严重事故</td>
+<td>可预防</td>
+<td>key 不进容器，model proxy only</td>
+</tr>
+<tr>
+<td>多 Agent patch 冲突</td>
+<td>merge 失败</td>
+<td>能处理</td>
+<td>独立 worktree + merge agent +人工审批</td>
+</tr>
+<tr>
+<td>模型 API 限流</td>
+<td>run 失败或变慢</td>
+<td>可处理</td>
+<td>model proxy retry/backoff/budget</td>
+</tr>
+<tr>
+<td>DB 不可用</td>
+<td>系统不可审计</td>
+<td>高风险</td>
+<td>暂停新 run；running run 进入 degraded</td>
 </tr>
 </tbody>
 </table>
-<p>Qwen Code 和 OpenCode 都已经体现了类似思路：权限不是“允许 shell”这么粗，而是对工具、路径、命令、模式和会话状态做细粒度控制。</p>
-<h2 id="vps">什么时候需要第二台 VPS<a class="headerlink" href="#vps" title="Permanent link">&para;</a></h2>
-<p>如果满足任一条件，建议把 sandbox worker 拆到第二台机器：</p>
+<p>反向审计结论：当前方案能覆盖大部分预期事故；唯一不能接受的是“Event Store 不可用时继续执行”。这条必须作为硬性系统规则。</p>
+<h2 id="_11">是否存在更好的整体替代方案<a class="headerlink" href="#_11" title="Permanent link">&para;</a></h2>
+<p>如果约束是“1-2 台小 VPS、希望先落地 coding agent、多 Agent 后续演进”，没有看到明显优于当前路线的整体替代方案。</p>
+<p>更好的单点替代如下：</p>
+<table>
+<thead>
+<tr>
+<th>替代点</th>
+<th>更好的候选</th>
+<th>何时替换</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>沙箱</td>
+<td>E2B / Daytona</td>
+<td>Docker 资源隔离、恢复、并发、恶意代码风险成为瓶颈</td>
+</tr>
+<tr>
+<td>长流程编排</td>
+<td>Temporal</td>
+<td>mission 跨小时/跨天、审批等待、fan-out/fan-in 复杂</td>
+</tr>
+<tr>
+<td>Agent workflow</td>
+<td>LangGraph/LangSmith</td>
+<td>Supervisor 需要状态图、HITL、durable execution</td>
+</tr>
+<tr>
+<td>企业云托管</td>
+<td>AgentCore / Foundry / Google Agent Runtime</td>
+<td>进入企业云、合规和托管预算充足</td>
+</tr>
+<tr>
+<td>Coding Agent 平台</td>
+<td>OpenHands Enterprise</td>
+<td>希望直接采用已有自托管 coding agent 平台</td>
+</tr>
+<tr>
+<td>业务 Agent SDK</td>
+<td>OpenAI Agents SDK</td>
+<td>要做非 coding 的业务 agent、handoff、guardrails、tracing</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_12">对当前方案的修订建议<a class="headerlink" href="#_12" title="Permanent link">&para;</a></h2>
+<p>需要修订：</p>
 <ul>
-<li>运行陌生用户提交的仓库。</li>
-<li>允许 Agent 执行测试脚本、安装依赖或访问公网。</li>
-<li>需要跑多个并发 Agent。</li>
-<li>宿主机上有重要数据库、密钥或其他服务。</li>
-<li>任务会修改部署配置、CI/CD、云资源。</li>
+<li>Roadmap 中加入状态跟踪。</li>
+<li>Roadmap P2 必须包含 Event Store、Permission Service、Artifact Collector。</li>
+<li>Roadmap P5 增加 E2B/Daytona sandbox adapter 评估。</li>
+<li>Roadmap P5 增加 Temporal/LangGraph orchestrator adapter 评估。</li>
+<li>Roadmap P5 增加 A2A Gateway 评估。</li>
 </ul>
-<p>两台 VPS 的最小网络拓扑：</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>VPS-1 control plane:
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  API / Postgres / Event Store / Model Proxy
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>VPS-2 sandbox worker:
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>  Worker Supervisor / Docker / Workspaces
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>连接方式:
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>  WireGuard 或 Tailscale 内网
-</code></pre></div>
-<h2 id="docker_1">Docker 的边界<a class="headerlink" href="#docker_1" title="Permanent link">&para;</a></h2>
-<p>Docker 是很好的工程隔离工具，但不是恶意代码强安全边界：</p>
+<p>不需要修订：</p>
 <ul>
-<li>容器共享宿主机内核。</li>
-<li>内核漏洞可能导致逃逸。</li>
-<li>rootful Docker daemon 权限很高。</li>
-<li>网络、挂载、capability 配置错误会直接破坏隔离。</li>
+<li>不需要放弃 qwen serve SAEU。</li>
+<li>不需要第一天上 AgentCore/Foundry/Google Agent Runtime。</li>
+<li>不需要第一天上 Temporal。</li>
+<li>不需要从头实现 coding agent。</li>
 </ul>
-<p>因此：</p>
+<h2 id="_13">参考资料<a class="headerlink" href="#_13" title="Permanent link">&para;</a></h2>
 <ul>
-<li>普通 coding agent：Docker 足够起步。</li>
-<li>不可信代码：至少独立 worker VPS。</li>
-<li>恶意对抗场景：需要 microVM、gVisor、Kata 或云厂商隔离环境。</li>
-</ul>
-<h2 id="_6">最小落地清单<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
-<ol>
-<li>为每个 run 创建独立 workspace。</li>
-<li>以非 root 用户运行容器。</li>
-<li>设置 CPU、内存、进程数、运行时长。</li>
-<li>禁止 Docker socket 和宿主机敏感目录挂载。</li>
-<li>模型 key 只放在 model proxy。</li>
-<li>高风险工具调用进入 permission flow。</li>
-<li>容器 stdout/stderr、Agent JSONL、diff、artifact 持久化。</li>
-<li>run 结束后清理容器，按保留策略清理 workspace。</li>
-</ol>
-<h2 id="_7">参考资料<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h2>
-<ul>
-<li><a href="https://docs.docker.com/engine/containers/resource_constraints/">Docker resource constraints</a></li>
-<li><a href="https://docs.docker.com/engine/security/rootless/">Docker rootless mode</a></li>
-<li><a href="https://docs.docker.com/engine/security/seccomp/">Docker seccomp</a></li>
-<li><a href="https://docs.docker.com/engine/network/drivers/none/">Docker none network driver</a></li>
+<li><a href="https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html">AWS Bedrock AgentCore</a></li>
+<li><a href="https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-configure.html">AWS Bedrock AgentCore Observability</a></li>
+<li><a href="https://learn.microsoft.com/en-us/azure/foundry/agents/overview">Microsoft Foundry Agent Service</a></li>
+<li><a href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/build/adk">Google Agent Development Kit</a></li>
+<li><a href="https://adk.dev/deploy/agent-runtime/">Google Agent Runtime</a></li>
+<li><a href="https://openai.github.io/openai-agents-python/agents/">OpenAI Agents SDK</a></li>
+<li><a href="https://openai.github.io/openai-agents-python/tracing/">OpenAI Agents SDK Tracing</a></li>
+<li><a href="https://docs.langchain.com/oss/python/langgraph/overview">LangGraph Overview</a></li>
+<li><a href="https://www.langchain.com/langsmith/deployment">LangSmith Deployment</a></li>
+<li><a href="https://e2b.dev/docs">E2B Documentation</a></li>
+<li><a href="https://e2b.dev/docs/use-cases/coding-agents">E2B Coding Agents</a></li>
+<li><a href="https://www.daytona.io/">Daytona</a></li>
+<li><a href="https://docs.openhands.dev/enterprise">OpenHands Enterprise</a></li>
 </ul>
 
 
