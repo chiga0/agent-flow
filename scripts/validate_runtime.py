@@ -25,6 +25,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"health: {health}")
     capabilities = client.get("/capabilities")
     print(f"capabilities adapters: {sorted(capabilities['adapters'])}")
+    queue = client.get("/queue")
+    workers = queue.get("workers") or []
+    print(f"queue counts: {queue.get('counts', {})}; workers: {len(workers)}")
+    if not workers:
+        print("no runtime workers registered", file=sys.stderr)
+        return 1
     run = client.post("/runs", {"prompt": args.prompt, "adapter": args.adapter})
     run_id = run["run_id"]
     print(f"run: {run_id}")

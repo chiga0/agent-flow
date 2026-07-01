@@ -1,9 +1,9 @@
 # Cloud Agents Runtime
 
-This directory contains the P1/P2 implementation slice from the roadmap: a
-single SAEU Run Manager with a pluggable runtime adapter boundary, durable event
-storage, audit artifacts, permission resolution, replay tooling, and cloud
-deployment assets.
+This directory contains the P1/P2 implementation slice plus the first P3 queue
+slice from the roadmap: a single SAEU Run Manager with a pluggable runtime
+adapter boundary, durable event storage, audit artifacts, permission resolution,
+run queue leases, worker heartbeat, replay tooling, and cloud deployment assets.
 
 The current implementation intentionally uses only the Python standard library.
 It is small enough to audit and easy to replace once the API contract is proven.
@@ -21,12 +21,16 @@ Postgres when multiple control-plane instances are required.
   decision.
 - `GET /runs/{run_id}` returns current state.
 - `GET /health` and `GET /capabilities` expose runtime status.
+- `GET /queue` exposes queued/running job leases and worker status.
+- `GET /workers` exposes worker heartbeat and capacity.
 - `GET /` serves the browser management console.
 - `GET /runs/{run_id}/events.json` returns canonical events for UI replay.
 - `GET /runs/{run_id}/artifacts` lists artifact files for the run.
 - Raw run specs, inputs, canonical events, and adapter artifacts are written to
   `runtime/artifacts/`.
 - Canonical events are persisted in `runtime.db` and `events.jsonl`.
+- Run queue state is persisted in `run_jobs`; local worker state is persisted in
+  `workers`.
 - `diagnostics.json` is maintained per run.
 - `scripts/replay_run.py` can replay events, SSE frames, or rebuilt state from
   artifacts.
@@ -42,11 +46,16 @@ reverse proxy. Do not expose the Run Manager directly to the public internet.
 
 ```bash
 export RUN_MANAGER_TOKEN=dev-token
+export RUN_MANAGER_WORKER_CAPACITY=1
 python3 -m runtime.cloud_agents_runtime \
   --host 127.0.0.1 \
   --port 8765 \
   --token "$RUN_MANAGER_TOKEN"
 ```
+
+Set `RUN_MANAGER_WORKER_CAPACITY=2` or pass `--worker-capacity 2` to allow two
+concurrent SAEU runs on the same VPS. Keep it at `1` for the smallest qwen
+deployment until workspace and resource isolation are configured.
 
 Create a run:
 
@@ -89,6 +98,15 @@ curl -s -X POST http://127.0.0.1:8765/runs/<run_id>/permissions/<permission_id> 
   -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"decision":"approve","decided_by":"operator","reason":"reviewed"}'
+```
+
+Inspect queue and workers:
+
+```bash
+curl -s http://127.0.0.1:8765/queue \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN"
+curl -s http://127.0.0.1:8765/workers \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN"
 ```
 
 Replay from artifacts:
@@ -134,18 +152,21 @@ Acceptance:
 
 - `/health` returns `{"ok": true}`.
 - `/capabilities` lists `fake` and `qwen`.
+- `/queue` returns job counts, job leases, and worker heartbeat records.
+- `/workers` returns active worker capacity and heartbeat time.
 - API routes other than `/health` require `Authorization: Bearer ...` when
   `RUN_MANAGER_TOKEN` is set.
 - `POST /runs` returns a `run_id`.
-- SSE emits `run.created`, `run.started`, `input.accepted`,
-  `message.delta`, `step.completed`, and `run.completed`.
+- SSE emits `run.created`, `run.queued`, `lease.claimed`, `run.started`,
+  `input.accepted`, `message.delta`, `step.completed`, and `run.completed`.
 - SSE honors `Last-Event-ID`; if the client asks for an event sequence beyond
   what the store has, the server records and streams `event.gap_detected`.
 - `POST /runs/{run_id}/permissions/{permission_id}` records
   `permission.resolved` in the same audit trail.
 - The run directory contains `run_spec.json`, `events.jsonl`,
   `raw_events.jsonl`, `input_1.json`, `diagnostics.json`, and `final_1.json`.
-- The artifact root contains `runtime.db`.
+- The artifact root contains `runtime.db` with `runs`, `run_events`,
+  `raw_events`, `run_jobs`, and `workers`.
 
 ## Validate qwen adapter
 
@@ -202,6 +223,8 @@ Use `--adapter qwen` after starting `qwen serve`.
 The current cloud-runnable slice includes:
 
 - Run Manager bound to `127.0.0.1` with bearer-token auth.
+- Local worker queue with persisted `run_jobs`, worker heartbeat, lease
+  reclamation, and per-worker capacity.
 - Managed `qwen serve` process for one workspace when `QWEN_SERVE_COMMAND` is
   configured.
 - Persistent artifact directory on disk with `runtime.db` and JSONL artifacts.

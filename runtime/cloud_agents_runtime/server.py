@@ -42,6 +42,12 @@ def make_handler(
             if path == "/capabilities":
                 self.write_json(manager.capabilities())
                 return
+            if path == "/queue":
+                self.write_json(manager.queue_status())
+                return
+            if path == "/workers":
+                self.write_json({"workers": manager.queue_status()["workers"]})
+                return
             if len(parts) == 1 and parts[0] == "runs":
                 self.write_json({"runs": [run.to_dict() for run in manager.store.list_runs()]})
                 return
@@ -250,13 +256,44 @@ def build_server(
     auth_config: AuthConfig | None = None,
     qwen_base_url: str | None = None,
     qwen_token: str | None = None,
+    worker_capacity: int | None = None,
+    worker_id: str | None = None,
+    lease_ttl_seconds: int | None = None,
 ) -> ThreadingHTTPServer:
     manager = RunManager(
         artifact_root=artifact_root,
         qwen_base_url=qwen_base_url,
         qwen_token=qwen_token,
+        worker_capacity=worker_capacity,
+        worker_id=worker_id,
+        lease_ttl_seconds=lease_ttl_seconds,
+        heartbeat_enabled=True,
     )
-    return ThreadingHTTPServer((host, port), make_handler(manager, auth_config=auth_config))
+    return RuntimeHTTPServer((host, port), make_handler(manager, auth_config=auth_config), manager)
+
+
+class RuntimeHTTPServer(ThreadingHTTPServer):
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        handler_class: type[BaseHTTPRequestHandler],
+        manager: RunManager,
+    ):
+        super().__init__(server_address, handler_class)
+        self.manager = manager
+
+    def server_close(self) -> None:
+        self.manager.shutdown()
+        super().server_close()
+
+
+def parse_optional_int(value: str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -290,6 +327,23 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("QWEN_SERVE_TOKEN"),
         help="bearer token for qwen serve",
     )
+    parser.add_argument(
+        "--worker-capacity",
+        type=int,
+        default=parse_optional_int(os.environ.get("RUN_MANAGER_WORKER_CAPACITY")),
+        help="max concurrent SAEU runs for this local worker",
+    )
+    parser.add_argument(
+        "--worker-id",
+        default=os.environ.get("RUN_MANAGER_WORKER_ID"),
+        help="stable id for this local worker heartbeat",
+    )
+    parser.add_argument(
+        "--lease-ttl-seconds",
+        type=int,
+        default=parse_optional_int(os.environ.get("RUN_MANAGER_LEASE_TTL_SECONDS")),
+        help="seconds before an unrefreshed run lease can be reclaimed",
+    )
     args = parser.parse_args(argv)
     supervisor = qwen_supervisor_from_env()
     if supervisor:
@@ -301,6 +355,9 @@ def main(argv: list[str] | None = None) -> int:
         auth_config=AuthConfig(token=args.token, protect_health=args.protect_health),
         qwen_base_url=args.qwen_url,
         qwen_token=args.qwen_token,
+        worker_capacity=args.worker_capacity,
+        worker_id=args.worker_id,
+        lease_ttl_seconds=args.lease_ttl_seconds,
     )
     print(f"cloud-agents-runtime listening on http://{args.host}:{args.port}")
     print(f"artifacts: {args.artifact_root}")
@@ -308,6 +365,7 @@ def main(argv: list[str] | None = None) -> int:
         print("run manager auth: enabled")
     if args.qwen_url:
         print(f"qwen serve: {args.qwen_url}")
+    print(f"worker capacity: {server.manager.worker_capacity}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -25,7 +25,7 @@ from runtime.cloud_agents_runtime.adapters.qwen import (
 from runtime.cloud_agents_runtime.auth import AuthConfig, is_authorized
 from runtime.cloud_agents_runtime.manager import RunManager
 from runtime.cloud_agents_runtime.models import RunSpec
-from runtime.cloud_agents_runtime.server import parse_last_event_id
+from runtime.cloud_agents_runtime.server import parse_last_event_id, parse_optional_int
 from runtime.cloud_agents_runtime.store import RunStore
 from runtime.cloud_agents_runtime.supervisor import QwenServeProcess, qwen_supervisor_from_env
 
@@ -93,70 +93,80 @@ class RuntimeEdgeTest(unittest.TestCase):
         self.assertEqual(parse_last_event_id("bad"), 0)
         self.assertEqual(parse_last_event_id("-1"), 0)
         self.assertEqual(parse_last_event_id("7"), 7)
+        self.assertIsNone(parse_optional_int(None))
+        self.assertIsNone(parse_optional_int(""))
+        self.assertIsNone(parse_optional_int("bad"))
+        self.assertEqual(parse_optional_int("4"), 4)
 
     def test_qwen_not_configured_and_inactive_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manager = RunManager(Path(tmp), adapters={"qwen": QwenServeAdapter()})
-            run = manager.create_run(RunSpec(prompt=None, adapter="qwen"))
-            self.assertEqual(manager.get_run(run.run_id).status, "failed")
-            manager.send_input(run.run_id, "late prompt")
-            events = [event.type for event in manager.store.events_since(run.run_id)]
-            self.assertIn("adapter.not_configured", events)
-            self.assertIn("input.rejected", events)
+            try:
+                run = manager.create_run(RunSpec(prompt=None, adapter="qwen"))
+                self.assertEqual(manager.get_run(run.run_id).status, "failed")
+                manager.send_input(run.run_id, "late prompt")
+                events = [event.type for event in manager.store.events_since(run.run_id)]
+                self.assertIn("adapter.not_configured", events)
+                self.assertIn("input.rejected", events)
+            finally:
+                manager.shutdown()
 
     def test_qwen_event_mapping_and_request_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = RunStore(Path(tmp))
-            run = store.create_run(RunSpec(adapter="qwen"))
-            adapter = QwenServeAdapter(base_url="http://127.0.0.1:1")
-            adapter._map_qwen_event(run.run_id, "x", "text", store)
-            adapter._map_qwen_event(
-                run.run_id,
-                "permission_request",
-                {"type": "permission_request"},
-                store,
-            )
-            adapter._map_qwen_event(
-                run.run_id,
-                "permission_resolved",
-                {"type": "permission_resolved"},
-                store,
-            )
-            adapter._map_qwen_event(run.run_id, "session_died", {"type": "session_died"}, store)
-            adapter._map_qwen_event(run.run_id, "other", {"type": "other"}, store)
-            names = [event.type for event in store.events_since(run.run_id)]
-            self.assertIn("permission.requested", names)
-            self.assertIn("permission.resolved", names)
-            self.assertIn("run.failed", names)
+            try:
+                run = store.create_run(RunSpec(adapter="qwen"))
+                adapter = QwenServeAdapter(base_url="http://127.0.0.1:1")
+                adapter._map_qwen_event(run.run_id, "x", "text", store)
+                adapter._map_qwen_event(
+                    run.run_id,
+                    "permission_request",
+                    {"type": "permission_request"},
+                    store,
+                )
+                adapter._map_qwen_event(
+                    run.run_id,
+                    "permission_resolved",
+                    {"type": "permission_resolved"},
+                    store,
+                )
+                adapter._map_qwen_event(run.run_id, "session_died", {"type": "session_died"}, store)
+                adapter._map_qwen_event(run.run_id, "other", {"type": "other"}, store)
+                names = [event.type for event in store.events_since(run.run_id)]
+                self.assertIn("permission.requested", names)
+                self.assertIn("permission.resolved", names)
+                self.assertIn("run.failed", names)
 
-            complete_run = store.create_run(RunSpec(adapter="qwen"))
-            adapter._active_prompts[complete_run.run_id] = 1
-            adapter._map_qwen_event(
-                complete_run.run_id,
-                "turn_complete",
-                {"type": "turn_complete", "data": {"promptId": "missing"}},
-                store,
-            )
-            self.assertEqual(store.get_run(complete_run.run_id).status, "completed")
+                complete_run = store.create_run(RunSpec(adapter="qwen"))
+                adapter._active_prompts[complete_run.run_id] = 1
+                adapter._map_qwen_event(
+                    complete_run.run_id,
+                    "turn_complete",
+                    {"type": "turn_complete", "data": {"promptId": "missing"}},
+                    store,
+                )
+                self.assertEqual(store.get_run(complete_run.run_id).status, "completed")
 
-            error_run = store.create_run(RunSpec(adapter="qwen"))
-            adapter._map_qwen_event(
-                error_run.run_id,
-                "turn_error",
-                {"type": "turn_error", "data": {"message": "boom"}},
-                store,
-            )
-            self.assertEqual(store.get_run(error_run.run_id).status, "failed")
+                error_run = store.create_run(RunSpec(adapter="qwen"))
+                adapter._map_qwen_event(
+                    error_run.run_id,
+                    "turn_error",
+                    {"type": "turn_error", "data": {"message": "boom"}},
+                    store,
+                )
+                self.assertEqual(store.get_run(error_run.run_id).status, "failed")
 
-            gap_run = store.create_run(RunSpec(adapter="qwen"))
-            adapter._record_qwen_gap(gap_run.run_id, "1", "4", store)
-            self.assertIn(
-                "event.gap_detected",
-                [event.type for event in store.events_since(gap_run.run_id)],
-            )
-            self.assertEqual(parse_json_or_text("{"), "{")
-            self.assertEqual(parse_int("7"), 7)
-            self.assertIsNone(parse_int("x"))
+                gap_run = store.create_run(RunSpec(adapter="qwen"))
+                adapter._record_qwen_gap(gap_run.run_id, "1", "4", store)
+                self.assertIn(
+                    "event.gap_detected",
+                    [event.type for event in store.events_since(gap_run.run_id)],
+                )
+                self.assertEqual(parse_json_or_text("{"), "{")
+                self.assertEqual(parse_int("7"), 7)
+                self.assertIsNone(parse_int("x"))
+            finally:
+                store.close()
 
     def test_small_adapter_and_store_edges(self) -> None:
         self.assertEqual(FakeAdapter._chunks(""), ["empty prompt"])
@@ -180,12 +190,15 @@ class RuntimeEdgeTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             store = RunStore(Path(tmp))
-            run = store.create_run(RunSpec(adapter="fake"))
-            store.append_event(run.run_id, "input.accepted", {})
-            self.assertEqual(store.get_run(run.run_id).status, "queued")
-            store.update_status(run.run_id, "manual")
-            self.assertEqual(store.get_run(run.run_id).status, "manual")
-            self.assertEqual(store.wait_for_events(run.run_id, 999, timeout=0.01), [])
+            try:
+                run = store.create_run(RunSpec(adapter="fake"))
+                store.append_event(run.run_id, "input.accepted", {})
+                self.assertEqual(store.get_run(run.run_id).status, "queued")
+                store.update_status(run.run_id, "manual")
+                self.assertEqual(store.get_run(run.run_id).status, "manual")
+                self.assertEqual(store.wait_for_events(run.run_id, 999, timeout=0.01), [])
+            finally:
+                store.close()
 
     def test_qwen_cancel_and_http_error_paths(self) -> None:
         with running_fake_qwen() as qwen_url:
@@ -194,9 +207,12 @@ class RuntimeEdgeTest(unittest.TestCase):
                     Path(tmp),
                     adapters={"qwen": QwenServeAdapter(base_url=qwen_url)},
                 )
-                run = manager.create_run(RunSpec(adapter="qwen"))
-                manager.cancel(run.run_id, "stop")
-                self.assertEqual(manager.get_run(run.run_id).status, "cancelled")
+                try:
+                    run = manager.create_run(RunSpec(adapter="qwen"))
+                    manager.cancel(run.run_id, "stop")
+                    self.assertEqual(manager.get_run(run.run_id).status, "cancelled")
+                finally:
+                    manager.shutdown()
 
         with running_error_qwen() as qwen_url:
             with tempfile.TemporaryDirectory() as tmp:
@@ -204,8 +220,11 @@ class RuntimeEdgeTest(unittest.TestCase):
                     Path(tmp),
                     adapters={"qwen": QwenServeAdapter(base_url=qwen_url)},
                 )
-                run = manager.create_run(RunSpec(adapter="qwen"))
-                self.assertEqual(manager.get_run(run.run_id).status, "failed")
+                try:
+                    run = manager.create_run(RunSpec(adapter="qwen"))
+                    self.wait_for_status(manager, run.run_id, "failed")
+                finally:
+                    manager.shutdown()
 
     def test_supervisor_env_and_process_lifecycle(self) -> None:
         with patched_env(
@@ -254,6 +273,15 @@ class RuntimeEdgeTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(request, timeout=5)
         self.assertEqual(ctx.exception.code, code.value)
+
+    def wait_for_status(self, manager: RunManager, run_id: str, status: str) -> None:
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            current = manager.get_run(run_id)
+            if current and current.status == status:
+                return
+            time.sleep(0.02)
+        self.fail(f"run {run_id} did not reach {status}")
 
 
 class HTTPErrorCode(IntEnum):

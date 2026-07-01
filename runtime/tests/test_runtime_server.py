@@ -31,6 +31,16 @@ class RuntimeServerTest(unittest.TestCase):
                 headers={"authorization": "Bearer secret"},
             )
             self.assertIn("fake", capabilities["adapters"])
+            queue = request_json(
+                f"{base_url}/queue",
+                headers={"authorization": "Bearer secret"},
+            )
+            self.assertIn("workers", queue)
+            workers = request_json(
+                f"{base_url}/workers",
+                headers={"authorization": "Bearer secret"},
+            )
+            self.assertGreaterEqual(workers["workers"][0]["capacity"], 1)
 
     def test_fake_run_streams_sse_and_writes_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -151,6 +161,7 @@ class running_runtime:
         artifact_root: Path | None = None,
         token: str | None = None,
         qwen_url: str | None = None,
+        worker_capacity: int | None = None,
     ):
         self.tmp = tempfile.TemporaryDirectory() if artifact_root is None else None
         self.artifact_root = artifact_root or Path(self.tmp.name)
@@ -160,6 +171,7 @@ class running_runtime:
             self.artifact_root,
             auth_config=AuthConfig(token=token),
             qwen_base_url=qwen_url,
+            worker_capacity=worker_capacity,
         )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 

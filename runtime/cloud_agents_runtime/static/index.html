@@ -157,6 +157,11 @@
       gap: 8px;
       margin-bottom: 12px;
     }
+    .queue-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
     .metric {
       border: 1px solid var(--line);
       border-radius: 7px;
@@ -274,6 +279,18 @@
       </section>
       <section>
         <div class="section-body">
+          <h2>Queue</h2>
+          <div class="queue-grid">
+            <div class="metric"><div>Queued</div><strong id="qQueued">0</strong></div>
+            <div class="metric"><div>Running</div><strong id="qRunning">0</strong></div>
+            <div class="metric"><div>Capacity</div><strong id="qCapacity">0</strong></div>
+            <div class="metric"><div>Active</div><strong id="qActive">0</strong></div>
+          </div>
+          <div id="workerText" class="muted mono" style="margin-top: 10px;">-</div>
+        </div>
+      </section>
+      <section>
+        <div class="section-body">
           <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
             <h2>Runs</h2>
             <span class="muted" id="runCount">0 runs</span>
@@ -324,6 +341,7 @@
       selected: null,
       events: [],
       artifacts: [],
+      queue: { counts: {}, workers: [] },
       source: null
     };
 
@@ -380,6 +398,27 @@
       }
       renderRuns();
       renderDetail();
+    }
+
+    async function loadQueue() {
+      state.queue = await api("queue");
+      renderQueue();
+    }
+
+    function renderQueue() {
+      const counts = state.queue.counts || {};
+      const workers = state.queue.workers || [];
+      const capacity = workers.reduce((total, worker) => total + Number(worker.capacity || 0), 0);
+      const active = workers.reduce((total, worker) => {
+        return total + Number(worker.active_count || 0);
+      }, 0);
+      document.querySelector("#qQueued").textContent = counts.queued || 0;
+      document.querySelector("#qRunning").textContent = counts.running || 0;
+      document.querySelector("#qCapacity").textContent = capacity;
+      document.querySelector("#qActive").textContent = active;
+      document.querySelector("#workerText").textContent = workers.map((worker) => {
+        return `${worker.worker_id} · ${worker.status} · ${fmt(worker.heartbeat_at)}`;
+      }).join(" / ") || "-";
     }
 
     function renderRuns() {
@@ -503,7 +542,8 @@
         "run.created", "run.started", "input.accepted", "step.started",
         "message.delta", "step.completed", "run.completed", "run.failed",
         "run.cancelled", "permission.requested", "permission.resolved",
-        "event.gap_detected"
+        "event.gap_detected", "run.queued", "lease.claimed", "lease.expired",
+        "stream.warning"
       ].forEach((name) => source.addEventListener(name, appendEvent));
       source.onerror = () => {
         closeStream();
@@ -595,6 +635,7 @@
     async function refresh() {
       await loadHealth();
       await loadCapabilities();
+      await loadQueue();
       await loadRuns(true);
       if (state.selected) await loadEventsJson();
     }
@@ -603,7 +644,10 @@
       setHealth(false, "Load failed");
       document.querySelector("#createError").textContent = error.message;
     });
-    setInterval(() => loadRuns(true).catch(() => {}), 5000);
+    setInterval(() => {
+      loadQueue().catch(() => {});
+      loadRuns(true).catch(() => {});
+    }, 5000);
   </script>
 </body>
 </html>

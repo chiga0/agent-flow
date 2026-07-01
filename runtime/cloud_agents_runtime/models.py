@@ -55,3 +55,34 @@ class RunState:
         data["spec"] = self.spec.to_dict()
         return data
 
+
+@dataclass
+class RunJob:
+    run_id: str
+    status: str = "queued"
+    worker_id: str | None = None
+    queued_at: str = field(default_factory=utc_now)
+    started_at: str | None = None
+    completed_at: str | None = None
+    heartbeat_at: str | None = None
+    lease_expires_at: str | None = None
+    attempts: int = 0
+    updated_at: str = field(default_factory=utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class WorkerState:
+    worker_id: str
+    status: str = "active"
+    capacity: int = 1
+    active_count: int = 0
+    lease_ttl_seconds: int = 60
+    heartbeat_at: str = field(default_factory=utc_now)
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

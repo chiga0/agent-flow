@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from .events import RuntimeEvent, TERMINAL_RUN_EVENTS, utc_now
-from .models import RunSpec, RunState
+from .models import RunJob, RunSpec, RunState, WorkerState
 
 
 class RunStore:
@@ -18,11 +20,18 @@ class RunStore:
         self._db = sqlite3.connect(self.db_path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._runs: dict[str, RunState] = {}
+        self._jobs: dict[str, RunJob] = {}
+        self._workers: dict[str, WorkerState] = {}
         self._events: dict[str, list[RuntimeEvent]] = {}
         self._conditions: dict[str, threading.Condition] = {}
+        self._event_listeners: list[Callable[[RuntimeEvent], None]] = []
         self._lock = threading.RLock()
         self._init_db()
         self._load_from_db()
+
+    def add_event_listener(self, listener: Callable[[RuntimeEvent], None]) -> None:
+        with self._lock:
+            self._event_listeners.append(listener)
 
     def create_run(self, spec: RunSpec) -> RunState:
         with self._lock:
@@ -44,6 +53,167 @@ class RunStore:
     def list_runs(self) -> list[RunState]:
         with self._lock:
             return list(self._runs.values())
+
+    def enqueue_run(self, run_id: str) -> RunJob:
+        with self._lock:
+            self._require_run(run_id)
+            job = RunJob(run_id=run_id)
+            self._jobs[run_id] = job
+            self._persist_job(job)
+        self.append_event(run_id, "run.queued", {"queued_at": job.queued_at})
+        return job
+
+    def register_worker(
+        self,
+        worker_id: str,
+        capacity: int,
+        lease_ttl_seconds: int,
+    ) -> WorkerState:
+        with self._lock:
+            now = utc_now()
+            worker = self._workers.get(worker_id)
+            if worker is None:
+                worker = WorkerState(
+                    worker_id=worker_id,
+                    capacity=capacity,
+                    lease_ttl_seconds=lease_ttl_seconds,
+                    heartbeat_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            worker.status = "active"
+            worker.capacity = capacity
+            worker.lease_ttl_seconds = lease_ttl_seconds
+            worker.active_count = self.active_job_count(worker_id)
+            worker.heartbeat_at = now
+            worker.updated_at = now
+            self._workers[worker_id] = worker
+            self._persist_worker(worker)
+            return worker
+
+    def heartbeat_worker(
+        self,
+        worker_id: str,
+        capacity: int,
+        lease_ttl_seconds: int,
+    ) -> WorkerState:
+        with self._lock:
+            worker = self.register_worker(worker_id, capacity, lease_ttl_seconds)
+            now = utc_now()
+            lease_expires_at = utc_now_plus(lease_ttl_seconds)
+            for job in self._jobs.values():
+                if job.status != "running" or job.worker_id != worker_id:
+                    continue
+                if self._runs[job.run_id].status in {"completed", "failed", "cancelled"}:
+                    continue
+                job.heartbeat_at = now
+                job.lease_expires_at = lease_expires_at
+                job.updated_at = now
+                self._persist_job(job)
+            return worker
+
+    def active_job_count(self, worker_id: str) -> int:
+        with self._lock:
+            return sum(
+                1
+                for job in self._jobs.values()
+                if job.status == "running" and job.worker_id == worker_id
+            )
+
+    def queued_job_count(self) -> int:
+        with self._lock:
+            return sum(1 for job in self._jobs.values() if job.status == "queued")
+
+    def claim_next_job(
+        self,
+        worker_id: str,
+        lease_ttl_seconds: int,
+    ) -> RunJob | None:
+        with self._lock:
+            queued = sorted(
+                (job for job in self._jobs.values() if job.status == "queued"),
+                key=lambda job: (job.queued_at, job.run_id),
+            )
+            if not queued:
+                return None
+            job = queued[0]
+            now = utc_now()
+            job.status = "running"
+            job.worker_id = worker_id
+            job.started_at = job.started_at or now
+            job.heartbeat_at = now
+            job.lease_expires_at = utc_now_plus(lease_ttl_seconds)
+            job.attempts += 1
+            job.updated_at = now
+            self._persist_job(job)
+            worker = self._workers.get(worker_id)
+            if worker:
+                worker.active_count = self.active_job_count(worker_id)
+                worker.updated_at = now
+                self._persist_worker(worker)
+        self.append_event(
+            job.run_id,
+            "lease.claimed",
+            {
+                "worker_id": worker_id,
+                "attempts": job.attempts,
+                "lease_expires_at": job.lease_expires_at,
+            },
+        )
+        return job
+
+    def cancel_job(self, run_id: str) -> bool:
+        with self._lock:
+            job = self._jobs.get(run_id)
+            if job is None or job.status != "queued":
+                return False
+            now = utc_now()
+            job.status = "cancelled"
+            job.completed_at = now
+            job.lease_expires_at = None
+            job.updated_at = now
+            self._persist_job(job)
+            return True
+
+    def recover_expired_leases(self) -> list[str]:
+        recovered: list[tuple[str, str | None, int]] = []
+        with self._lock:
+            now = datetime.now(timezone.utc)
+            for job in self._jobs.values():
+                if job.status != "running" or not iso_before(job.lease_expires_at, now):
+                    continue
+                run = self._runs[job.run_id]
+                if run.status in {"completed", "failed", "cancelled"}:
+                    self._finish_job(run.run_id, run.status)
+                    continue
+                previous_worker = job.worker_id
+                job.status = "queued"
+                job.worker_id = None
+                job.heartbeat_at = None
+                job.lease_expires_at = None
+                job.updated_at = utc_now()
+                self._persist_job(job)
+                recovered.append((job.run_id, previous_worker, job.attempts))
+        for run_id, previous_worker, attempts in recovered:
+            self.append_event(
+                run_id,
+                "lease.expired",
+                {"previous_worker_id": previous_worker, "attempts": attempts},
+            )
+        return [run_id for run_id, _previous_worker, _attempts in recovered]
+
+    def queue_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            jobs = sorted(self._jobs.values(), key=lambda job: (job.queued_at, job.run_id))
+            workers = sorted(self._workers.values(), key=lambda worker: worker.worker_id)
+            counts: dict[str, int] = {}
+            for job in jobs:
+                counts[job.status] = counts.get(job.status, 0) + 1
+            return {
+                "counts": counts,
+                "jobs": [job.to_dict() for job in jobs],
+                "workers": [worker.to_dict() for worker in workers],
+            }
 
     def update_status(self, run_id: str, status: str) -> None:
         with self._lock:
@@ -72,7 +242,12 @@ class RunStore:
     ) -> RuntimeEvent:
         with self._lock:
             run = self._require_run(run_id)
-            if event_type == "run.started":
+            already_terminal = run.status in {"completed", "failed", "cancelled"}
+            if already_terminal:
+                pass
+            elif event_type == "run.queued":
+                run.status = "queued"
+            elif event_type == "run.started":
                 run.status = "running"
             elif event_type == "run.completed":
                 run.status = "completed"
@@ -95,12 +270,20 @@ class RunStore:
             run.updated_at = event.created_at
             self._append_jsonl(run_id, "events.jsonl", event.to_dict())
             self._insert_event(event)
+            if event_type in TERMINAL_RUN_EVENTS:
+                self._finish_job(run_id, run.status)
             self._persist_run(run)
             self._write_diagnostics(run_id)
             if event_type.startswith("permission."):
                 self.write_json(run_id, f"{event_type}_{event.sequence}.json", event.to_dict())
             self._conditions[run_id].notify_all()
-            return event
+            listeners = list(self._event_listeners)
+        for listener in listeners:
+            try:
+                listener(event)
+            except Exception:
+                pass
+        return event
 
     def append_raw_event(self, run_id: str, source: str, payload: Any) -> None:
         self._append_jsonl(
@@ -190,6 +373,10 @@ class RunStore:
     def run_dir(self, run_id: str) -> Path:
         return self.artifact_root / run_id
 
+    def close(self) -> None:
+        with self._lock:
+            self._db.close()
+
     def _append_jsonl(self, run_id: str, name: str, payload: Any) -> None:
         path = self.run_dir(run_id) / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,6 +419,28 @@ class RunStore:
               payload_json text not null,
               created_at text not null
             );
+            create table if not exists run_jobs (
+              run_id text primary key,
+              status text not null,
+              worker_id text,
+              queued_at text not null,
+              started_at text,
+              completed_at text,
+              heartbeat_at text,
+              lease_expires_at text,
+              attempts integer not null,
+              updated_at text not null
+            );
+            create table if not exists workers (
+              worker_id text primary key,
+              status text not null,
+              capacity integer not null,
+              active_count integer not null,
+              lease_ttl_seconds integer not null,
+              heartbeat_at text not null,
+              created_at text not null,
+              updated_at text not null
+            );
             """
         )
         self._db.commit()
@@ -263,6 +472,30 @@ class RunStore:
                     created_at=row["created_at"],
                 )
                 self._events.setdefault(row["run_id"], []).append(event)
+            for row in self._db.execute("select * from run_jobs order by queued_at"):
+                self._jobs[row["run_id"]] = RunJob(
+                    run_id=row["run_id"],
+                    status=row["status"],
+                    worker_id=row["worker_id"],
+                    queued_at=row["queued_at"],
+                    started_at=row["started_at"],
+                    completed_at=row["completed_at"],
+                    heartbeat_at=row["heartbeat_at"],
+                    lease_expires_at=row["lease_expires_at"],
+                    attempts=row["attempts"],
+                    updated_at=row["updated_at"],
+                )
+            for row in self._db.execute("select * from workers order by worker_id"):
+                self._workers[row["worker_id"]] = WorkerState(
+                    worker_id=row["worker_id"],
+                    status=row["status"],
+                    capacity=row["capacity"],
+                    active_count=row["active_count"],
+                    lease_ttl_seconds=row["lease_ttl_seconds"],
+                    heartbeat_at=row["heartbeat_at"],
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                )
 
     def _persist_run(self, run: RunState) -> None:
         self._db.execute(
@@ -292,6 +525,66 @@ class RunStore:
         )
         self._db.commit()
 
+    def _persist_job(self, job: RunJob) -> None:
+        self._db.execute(
+            """
+            insert into run_jobs(
+              run_id, status, worker_id, queued_at, started_at, completed_at,
+              heartbeat_at, lease_expires_at, attempts, updated_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(run_id) do update set
+              status=excluded.status,
+              worker_id=excluded.worker_id,
+              started_at=excluded.started_at,
+              completed_at=excluded.completed_at,
+              heartbeat_at=excluded.heartbeat_at,
+              lease_expires_at=excluded.lease_expires_at,
+              attempts=excluded.attempts,
+              updated_at=excluded.updated_at
+            """,
+            (
+                job.run_id,
+                job.status,
+                job.worker_id,
+                job.queued_at,
+                job.started_at,
+                job.completed_at,
+                job.heartbeat_at,
+                job.lease_expires_at,
+                job.attempts,
+                job.updated_at,
+            ),
+        )
+        self._db.commit()
+
+    def _persist_worker(self, worker: WorkerState) -> None:
+        self._db.execute(
+            """
+            insert into workers(
+              worker_id, status, capacity, active_count, lease_ttl_seconds,
+              heartbeat_at, created_at, updated_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(worker_id) do update set
+              status=excluded.status,
+              capacity=excluded.capacity,
+              active_count=excluded.active_count,
+              lease_ttl_seconds=excluded.lease_ttl_seconds,
+              heartbeat_at=excluded.heartbeat_at,
+              updated_at=excluded.updated_at
+            """,
+            (
+                worker.worker_id,
+                worker.status,
+                worker.capacity,
+                worker.active_count,
+                worker.lease_ttl_seconds,
+                worker.heartbeat_at,
+                worker.created_at,
+                worker.updated_at,
+            ),
+        )
+        self._db.commit()
+
     def _insert_event(self, event: RuntimeEvent) -> None:
         self._db.execute(
             """
@@ -310,6 +603,23 @@ class RunStore:
         )
         self._db.commit()
 
+    def _finish_job(self, run_id: str, terminal_status: str) -> None:
+        job = self._jobs.get(run_id)
+        if job is None or job.status in {"completed", "failed", "cancelled"}:
+            return
+        now = utc_now()
+        job.status = terminal_status
+        job.completed_at = now
+        job.heartbeat_at = now
+        job.lease_expires_at = None
+        job.updated_at = now
+        self._persist_job(job)
+        if job.worker_id and job.worker_id in self._workers:
+            worker = self._workers[job.worker_id]
+            worker.active_count = self.active_job_count(job.worker_id)
+            worker.updated_at = now
+            self._persist_worker(worker)
+
     def _write_diagnostics(self, run_id: str) -> None:
         run = self._require_run(run_id)
         diagnostics = {
@@ -323,10 +633,26 @@ class RunStore:
             "prompt_count": run.prompt_count,
             "artifact_dir": str(self.run_dir(run_id)),
         }
+        job = self._jobs.get(run_id)
+        if job:
+            diagnostics["job"] = job.to_dict()
         self.write_json(run_id, "diagnostics.json", diagnostics)
 
 
 def utc_now_from_timestamp(timestamp: float) -> str:
-    from datetime import datetime, timezone
-
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat(timespec="milliseconds")
+
+
+def utc_now_plus(seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat(
+        timespec="milliseconds"
+    )
+
+
+def iso_before(value: str | None, moment: datetime) -> bool:
+    if not value:
+        return False
+    try:
+        return datetime.fromisoformat(value) <= moment
+    except ValueError:
+        return False

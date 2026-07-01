@@ -5,6 +5,8 @@ services:
       dockerfile: deploy/Dockerfile.runtime
     environment:
       RUN_MANAGER_TOKEN: ${RUN_MANAGER_TOKEN:?set RUN_MANAGER_TOKEN}
+      RUN_MANAGER_WORKER_CAPACITY: ${RUN_MANAGER_WORKER_CAPACITY:-1}
+      RUN_MANAGER_LEASE_TTL_SECONDS: ${RUN_MANAGER_LEASE_TTL_SECONDS:-60}
       QWEN_SERVE_URL: ${QWEN_SERVE_URL:-}
       QWEN_SERVE_TOKEN: ${QWEN_SERVE_TOKEN:-}
     ports:
@@ -15,4 +17,3 @@ services:
 
 volumes:
   runtime-artifacts:
-
