@@ -1074,6 +1074,23 @@ External Agent
 </tr>
 </tbody>
 </table></div>
+<h2 id="p5-poc">当前 P5 POC 落点<a class="headerlink" href="#p5-poc" title="Permanent link">&para;</a></h2>
+<p>当前仓库已实现最小互操作验证，目标是证明 SAEU contract 不会锁死，而不是声明完整协议兼容。</p>
+<h3 id="acp-poc">ACP POC<a class="headerlink" href="#acp-poc" title="Permanent link">&para;</a></h3>
+<p><code>/acp</code> 使用 JSON-RPC-over-HTTP 暴露：</p>
+<ul>
+<li><code>initialize</code></li>
+<li><code>run.create</code></li>
+<li><code>run.status</code></li>
+<li><code>run.input</code></li>
+<li><code>run.cancel</code></li>
+</ul>
+<p>这验证了 ACP-style client 可以通过稳定接口控制 SAEU run。后续若升级到官方 Streamable HTTP / WebSocket，需要保持方法语义映射到同一组 Run Manager API。</p>
+<h3 id="a2a-gateway-poc">A2A Gateway POC<a class="headerlink" href="#a2a-gateway-poc" title="Permanent link">&para;</a></h3>
+<p><code>/.well-known/agent-card.json</code> 暴露 agent card 形状；<code>POST /a2a/tasks</code> 把外部 task 映射为内部 mission；<code>GET /a2a/tasks/{task_id}</code> 返回 mission status、artifact refs 和内部 snapshot。</p>
+<p>当前未实现完整 A2A JSON-RPC lifecycle、streaming、push notification、auth federation，也不暴露内部 memory/tools。</p>
+<h3 id="temporal-poc">Temporal POC<a class="headerlink" href="#temporal-poc" title="Permanent link">&para;</a></h3>
+<p><code>GET /temporal/workflows/missions/{mission_id}/plan</code> 和 <code>GET /temporal/workflows/runs/{run_id}/plan</code> 导出 workflow plan，展示哪些步骤会成为 Temporal Workflow/Activity/Signal/Query。当前没有引入 Temporal SDK 或 worker。</p>
 <h2 id="_4">权限请求如何处理<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
 <p>如果外部 A2A 客户端支持交互式输入，可以把内部 <code>permission.requested</code> 映射成 A2A 的“需要用户输入/审批”状态或扩展 metadata；如果客户端不支持，则走本系统自己的 Web/API 审批面。</p>
 <p>建议：</p>
@@ -1386,6 +1403,34 @@ External Agent
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#_3');">
             推荐协议架构
         </a>
+        
+
+        
+        <a href="#p5-poc"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#p5-poc');">
+            当前 P5 POC 落点
+        </a>
+        
+        
+        <a href="#acp-poc"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#acp-poc');">
+            ACP POC
+        </a>
+        
+        <a href="#a2a-gateway-poc"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#a2a-gateway-poc');">
+            A2A Gateway POC
+        </a>
+        
+        <a href="#temporal-poc"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#temporal-poc');">
+            Temporal POC
+        </a>
+        
         
 
         

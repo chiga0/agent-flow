@@ -888,6 +888,20 @@
 <li>直接执行 qwen-code model loop。</li>
 </ul>
 <p>这些内容应当放到 Event Store、artifact 文件或对象存储中，Temporal 只保存引用和关键状态。</p>
+<h2 id="poc">当前 POC<a class="headerlink" href="#poc" title="Permanent link">&para;</a></h2>
+<p>当前仓库没有引入 Temporal SDK，也不启动 Temporal Service。P5.3 只提供 workflow plan export：</p>
+<ul>
+<li><code>GET /temporal/workflows/runs/{run_id}/plan</code> 导出 <code>AgentRunWorkflow</code> 草案。</li>
+<li><code>GET /temporal/workflows/missions/{mission_id}/plan</code> 导出 <code>MissionWorkflow</code> 草案。</li>
+</ul>
+<p>这些 plan 会列出 Activity、Signal、Query、event-store ref 和 artifact ref，用来审计“如果引入 Temporal，哪些状态应该进入 Workflow history，哪些仍留在业务 Event Store”。</p>
+<p>POC 边界：</p>
+<ul>
+<li>不保存 token delta、tool stdout 或大 artifact 到 Temporal history。</li>
+<li>不替代当前 Run Manager queue/reconcile。</li>
+<li>不提供 Temporal Worker、Task Queue 或 SDK workflow 代码。</li>
+<li>后续接入 Temporal 时，优先把 <code>mission -&gt; task</code> 的粗粒度 DAG 编排迁移为 Workflow，SAEU run 仍作为 Activity/外部执行单元。</li>
+</ul>
 <h2 id="agent-workflow">Agent Workflow 草案<a class="headerlink" href="#agent-workflow" title="Permanent link">&para;</a></h2>
 <div class="mermaid">sequenceDiagram
     participant API as API
@@ -1316,6 +1330,14 @@ VPS-2: Agent worker + Docker sandbox</code></pre>
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#agent');">
             适合 Agent 系统的部分
+        </a>
+        
+
+        
+        <a href="#poc"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#poc');">
+            当前 POC
         </a>
         
 

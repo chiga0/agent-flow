@@ -1081,6 +1081,33 @@ qwen 第一实现: qwen serve HTTP/SSE + ACP bridge，后续优先 `/acp` Stream
 <li>人工 override、审批超时、merge/deploy gate 尚未实现。</li>
 <li>qwen reviewer 必须按提示写出 <code>review_gate.json</code>；否则 mission 会保守阻塞为 <code>needs_human</code>。</li>
 </ul>
+<h2 id="2026-07-01-p42p43p5-poc">2026-07-01 P4.2/P4.3/P5 POC 实施审计<a class="headerlink" href="#2026-07-01-p42p43p5-poc" title="Permanent link">&para;</a></h2>
+<h3 id="_31">已落地能力<a class="headerlink" href="#_31" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>POST /missions/{mission_id}/review-gate/override</code> 支持人工 <code>approve</code> / <code>deny</code>。</li>
+<li>approve override 会写入 <code>review_gate_override.json</code>、记录 <code>review.gate_override_recorded</code>，并恢复未启动下游 task。</li>
+<li>新增 <code>release-gate</code> profile，使用 <code>release_gate.json</code> 和 <code>merge_deploy.gate_*</code> 事件做 merge/deploy 前置 gate。</li>
+<li>qwen adapter 会从 gate task 的最终文本 fenced JSON 中抽取 gate artifact。</li>
+<li><code>/acp</code> 提供 JSON-RPC-over-HTTP POC：<code>initialize</code>、<code>run.create</code>、<code>run.status</code>、<code>run.input</code>、<code>run.cancel</code>。</li>
+<li><code>/.well-known/agent-card.json</code>、<code>/a2a/tasks</code> 提供 A2A Gateway POC，把外部 task 映射成内部 mission。</li>
+<li><code>/temporal/workflows/.../plan</code> 导出 <code>AgentRunWorkflow</code> / <code>MissionWorkflow</code> plan，明确 Temporal 只管理粗粒度编排引用。</li>
+</ul>
+<h3 id="_32">审计结论<a class="headerlink" href="#_32" title="Permanent link">&para;</a></h3>
+<ul>
+<li>正向审计：blocked reviewer gate 经人工 approve 后可以恢复下游 task，mission 最终完成。</li>
+<li>反向审计：release gate 的 critical/block 会阻塞 deploy/report 下游 task。</li>
+<li>qwen 接入审计：qwen final text 中的 fenced JSON 能落为 <code>review_gate.json</code>，再由 supervisor 统一评估。</li>
+<li>协议边界审计：ACP/A2A/Temporal 当前都是 POC wrapper，不替代内部 SAEU contract，也不承诺完整协议兼容。</li>
+<li>恢复审计：override、gate、A2A task、Temporal plan 都通过 mission/run DB snapshot 和 artifact 引用恢复上下文。</li>
+</ul>
+<h3 id="_33">剩余风险<a class="headerlink" href="#_33" title="Permanent link">&para;</a></h3>
+<ul>
+<li>ACP endpoint 只是 JSON-RPC-over-HTTP POC，还不是官方 Streamable HTTP/WebSocket 完整实现。</li>
+<li>A2A Gateway 尚未实现完整 JSON-RPC task lifecycle、streaming、push notification 和 auth federation。</li>
+<li>Temporal POC 只导出 workflow plan，没有启动 Temporal Service、Worker 或 Python SDK workflow。</li>
+<li>qwen gate extraction 依赖模型按提示输出 fenced JSON；不从任意自然语言推断风险。</li>
+<li>人工 override 尚未实现审批超时、多人审批、策略引擎或审计签名。</li>
+</ul>
 <h2 id="go-no-go">Go / No-Go 决策<a class="headerlink" href="#go-no-go" title="Permanent link">&para;</a></h2>
 <h3 id="go">Go<a class="headerlink" href="#go" title="Permanent link">&para;</a></h3>
 <ul>
@@ -1102,7 +1129,7 @@ qwen 第一实现: qwen serve HTTP/SSE + ACP bridge，后续优先 `/acp` Stream
 <li>把所有 SubAgent 都强制拆成独立 daemon。</li>
 <li>从头实现 coding agent core。</li>
 </ul>
-<h2 id="_31">最终可实施判断<a class="headerlink" href="#_31" title="Permanent link">&para;</a></h2>
+<h2 id="_34">最终可实施判断<a class="headerlink" href="#_34" title="Permanent link">&para;</a></h2>
 <p>方案可行，且适合 1-2 台 VPS 起步。推荐第一阶段只实现一个 qwen serve SAEU adapter，把审计、权限、事件、artifact 和恢复做扎实；第二阶段再抽象 ACP-compatible runtime adapter；第三阶段再做常驻 Supervisor + SubAgent + SAEU 的多 Agent 编排。</p>
 <p>只要不跳过单 Agent 单元稳定性，多 Agent 编排不会建立在松散 CLI 进程上，而是建立在可管理、可恢复、可审计的执行单元上。</p>
   </div>
@@ -1631,6 +1658,34 @@ qwen 第一实现: qwen serve HTTP/SSE + ACP bridge，后续优先 `/acp` Stream
         
 
         
+        <a href="#2026-07-01-p42p43p5-poc"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#2026-07-01-p42p43p5-poc');">
+            2026-07-01 P4.2/P4.3/P5 POC 实施审计
+        </a>
+        
+        
+        <a href="#_31"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#_31');">
+            已落地能力
+        </a>
+        
+        <a href="#_32"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#_32');">
+            审计结论
+        </a>
+        
+        <a href="#_33"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#_33');">
+            剩余风险
+        </a>
+        
+        
+
+        
         <a href="#go-no-go"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#go-no-go');">
@@ -1653,9 +1708,9 @@ qwen 第一实现: qwen serve HTTP/SSE + ACP bridge，后续优先 `/acp` Stream
         
 
         
-        <a href="#_31"
+        <a href="#_34"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#_31');">
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#_34');">
             最终可实施判断
         </a>
         

@@ -1216,6 +1216,16 @@
 <td><code>review_gate.json</code> 可触发 pass/warn/block/needs_human，阻塞下游 task</td>
 </tr>
 <tr>
+<td>reviewer override</td>
+<td><code>done</code></td>
+<td>blocked mission 可记录人工 approve/deny；approve 后恢复下游 task</td>
+</tr>
+<tr>
+<td>merge/deploy gate</td>
+<td><code>done</code></td>
+<td><code>release-gate</code> profile 通过 <code>release_gate.json</code> 触发 <code>merge_deploy.gate_*</code></td>
+</tr>
+<tr>
 <td>final report</td>
 <td><code>done</code></td>
 <td>汇总所有子任务和 artifact 引用</td>
@@ -1225,24 +1235,27 @@
 <p>P4 当前实现：</p>
 <ul>
 <li><code>GET /profiles</code>、<code>GET /profiles/{profile_id}</code>、<code>POST /profiles</code> 提供 profile registry。</li>
-<li>内置 <code>planner</code>、<code>coder</code>、<code>tester</code>、<code>reviewer</code>、<code>doc-writer</code> profile。</li>
+<li>内置 <code>planner</code>、<code>coder</code>、<code>tester</code>、<code>reviewer</code>、<code>release-gate</code>、<code>doc-writer</code> profile。</li>
 <li><code>POST /missions</code> 创建 mission，并支持 <code>sequential</code>、<code>fanout</code>、<code>custom</code> 三种策略。</li>
 <li>每个 ready task 都创建一个普通 SAEU run，继承 P1-P3 的 workspace、resource、queue、event、artifact、cleanup 能力。</li>
 <li>task run spec 写入 <code>mission_id</code>、<code>task_id</code>、<code>task_profile</code>、<code>profile_snapshot</code> 和 dependency artifact refs。</li>
 <li><code>GET /missions/{mission_id}</code>、<code>events.json</code>、<code>artifacts</code> 可恢复 mission 状态和审计链。</li>
 <li><code>POST /missions/{mission_id}/cancel</code> 会取消 active child run，并把 pending task 标为 cancelled。</li>
 <li>reviewer task 可通过 <code>review_gate.json</code> 输出结构化 gate；高/严重 finding、<code>block</code>、<code>needs_human</code>、缺失或非法 gate 都会让 mission 进入 <code>blocked</code>。</li>
+<li><code>POST /missions/{mission_id}/review-gate/override</code> 可记录人工 approve/deny；approve 会让 blocked mission 恢复并继续调度未启动下游 task。</li>
+<li><code>release-gate</code> 可通过 <code>release_gate.json</code> 输出 merge/deploy gate，事件前缀为 <code>merge_deploy.gate_*</code>。</li>
+<li>qwen adapter 会从 gate task 最终文本中的 fenced JSON 抽取 gate artifact，降低真实 qwen reviewer 只输出文本时的接入摩擦。</li>
 <li>mission artifact 存放在 <code>artifact_root/missions/&lt;mission_id&gt;/</code>，包含 manifest、events、task JSON 和 final report。</li>
 </ul>
 <p>P4 剩余风险：</p>
 <ul>
 <li>Supervisor 目前是确定性 in-process controller，还不是有长期记忆的 Project Agent SAEU。</li>
-<li>reviewer gate 已支持结构化阻塞；更细的 finding 分类、人工 override、merge/deploy gate 仍属于 P6 hardening。</li>
+<li>reviewer gate 已支持结构化阻塞、人工 override 和 release gate；更细的 finding 分类、审批超时和策略化 merge/deploy gate 仍属于 P6 hardening。</li>
 <li>artifact handoff 当前传递稳定引用，不复制 sibling workspace，也不做 patch merge。</li>
 <li>qwen adapter 仍是单 <code>qwen serve</code> endpoint；强隔离多 qwen daemon registry 属于后续 worker/container 化。</li>
 </ul>
 <h2 id="p5">P5：外部协议与替代组件评估<a class="headerlink" href="#p5" title="Permanent link">&para;</a></h2>
-<p>状态：<code>not_started</code></p>
+<p>状态：<code>poc_in_progress</code></p>
 <p>目标：</p>
 <ul>
 <li>验证当前架构不会锁死。</li>
@@ -1260,13 +1273,13 @@
 <tbody>
 <tr>
 <td>A2A Gateway POC</td>
-<td><code>not_started</code></td>
-<td>外部 task 可映射成 mission/run</td>
+<td><code>poc_done</code></td>
+<td><code>/.well-known/agent-card.json</code>、<code>/a2a/tasks</code> 可把外部 task 映射成 mission</td>
 </tr>
 <tr>
-<td>ACP Streamable HTTP POC</td>
-<td><code>not_started</code></td>
-<td>一个非 qwen worker 可通过 ACP 远程协议接入</td>
+<td>ACP JSON-RPC-over-HTTP POC</td>
+<td><code>poc_done</code></td>
+<td><code>/acp</code> 可 create/status/input/cancel run；尚非完整 Streamable HTTP/WebSocket</td>
 </tr>
 <tr>
 <td>E2B sandbox adapter POC</td>
@@ -1280,8 +1293,8 @@
 </tr>
 <tr>
 <td>Temporal workflow POC</td>
-<td><code>not_started</code></td>
-<td><code>AgentRunWorkflow</code> 可管理单 run</td>
+<td><code>poc_done</code></td>
+<td>可导出 <code>AgentRunWorkflow</code> / <code>MissionWorkflow</code> plan；尚未接 Temporal worker</td>
 </tr>
 <tr>
 <td>LangGraph supervisor POC</td>
@@ -1403,8 +1416,8 @@
 <ol>
 <li>用 fake adapter 跑通 P4 mission/profile smoke。</li>
 <li>等部署密钥可用后，用 qwen serve 验收单 run 和两 task mission。</li>
-<li>设计 reviewer gate 人工 override 和 merge/deploy gate。</li>
-<li>评估 P5 的 ACP Streamable HTTP adapter 和 A2A Gateway。</li>
+<li>用真实 qwen reviewer 验收 fenced JSON gate artifact extraction。</li>
+<li>决定 P5 ACP/A2A POC 是否升级到官方 SDK/完整协议实现。</li>
 <li>评估 Temporal/LangGraph 是否接管 durable mission workflow。</li>
 </ol>
 <p>P4 已能证明 <code>mission -&gt; task -&gt; profile -&gt; SAEU run</code> 的基础编排闭环；P5/P6 再决定是否把 mission workflow 迁移到 Temporal/LangGraph，或引入云沙箱。</p>
