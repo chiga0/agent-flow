@@ -265,7 +265,9 @@ server {
 }
 EOF
   else
-    echo "PUBLIC_DOMAIN=$PUBLIC_DOMAIN has no local letsencrypt certificate; skipping HTTPS block" >&2
+    echo \
+      "PUBLIC_DOMAIN=$PUBLIC_DOMAIN has no local letsencrypt certificate; skipping HTTPS block" \
+      >&2
   fi
 fi
 nginx -t
