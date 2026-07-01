@@ -1078,7 +1078,7 @@
 <li>artifact 收集失败必须体现在 terminal failure reason 中。</li>
 </ul>
 <h2 id="p3-saeu">P3：多 SAEU 并发与任务队列<a class="headerlink" href="#p3-saeu" title="Permanent link">&para;</a></h2>
-<p>状态：<code>in_progress</code></p>
+<p>状态：<code>done</code></p>
 <p>目标：</p>
 <ul>
 <li>在一台 VPS 上安全运行 1-2 个 SAEU。</li>
@@ -1122,8 +1122,8 @@
 </tr>
 <tr>
 <td>cleanup policy</td>
-<td><code>not_started</code></td>
-<td>workspace/artifact 按保留策略清理</td>
+<td><code>done</code></td>
+<td>terminal run 的 workspace/artifact 可按保留策略清理；SQLite 审计事件保留</td>
 </tr>
 <tr>
 <td>双 VPS worker 模式</td>
@@ -1142,6 +1142,7 @@
 <li>浏览器控制台增加 Queue 面板，显示 queued/running/capacity/active 和 worker heartbeat。</li>
 <li>单进程 Run Manager 现在可以用 capacity=1 验证排队，用 capacity=2 在单 VPS 上跑 1-2 个 SAEU。</li>
 <li>Docker Compose 和 systemd 部署默认把整个执行单元限制在 1 CPU / 1G memory / 512 tasks/pids。</li>
+<li>cleanup policy 默认启用：workspace 保留 7 天，artifact 保留 30 天，后台每小时扫描；<code>POST /cleanup</code> 可手动触发一次清理。</li>
 </ul>
 <p>P3 剩余风险：</p>
 <ul>
