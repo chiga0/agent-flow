@@ -244,6 +244,37 @@ qwen serve 已有：
 - Permission timeout 的自动 deny/cancel 尚未进入 P2 MVP；当前先保证人工决策的完整审计链。
 - stdout/stderr 类 worker 进程日志将在独立 sandbox worker 引入后纳入 artifact manifest。
 
+## 2026-07-01 P3 实施审计
+
+### 项目测试要求
+
+- Runtime CI 必须通过 `python3 scripts/check_style.py`。
+- Runtime CI 必须通过 `python3 -m compileall -q runtime scripts`。
+- Runtime CI 必须通过 `python3 scripts/check_runtime_coverage.py`，runtime 覆盖率门槛为 90%。
+- Runtime CI 必须通过 `mkdocs build --strict`。
+- 本地 smoke 需要覆盖 health、capabilities、queue、create run、SSE、artifact、`runtime.db`。
+
+### 多轮审计结论
+
+- 正向审计：jobs/leases、worker heartbeat、capacity、per-run workspace、resource policy、timeout watchdog、cleanup policy 都有 runtime tests 覆盖。
+- 反向审计：覆盖 unknown adapter、远程 repo 拒绝、超资源请求拒绝、queued run 不清理、shared workspace 不清理、unauthorized cleanup。
+- 恢复审计：artifact 被清理后，canonical events 仍保留在 SQLite；`scripts/replay_run.py` 已支持从 `runtime.db` fallback replay。
+- 隔离审计：local git source 使用 detached worktree；cleanup 现在优先用 `git worktree remove --force`，避免源仓库残留 stale worktree metadata。
+- 运维审计：`POST /cleanup` 需要 bearer token；默认 retention 下不会误删新完成 run。
+
+### 新增回归覆盖
+
+- artifact cleanup 后仍可通过 DB fallback 运行 `scripts/replay_run.py --format state`。
+- artifact 先清理、workspace 后清理时，不会重新留下 artifact 目录。
+- git worktree cleanup 后，`git worktree list --porcelain` 不再包含已删除 workspace。
+- cleanup policy 在 API 层受 auth 保护，并通过 `/capabilities` 暴露。
+
+### P3 剩余风险
+
+- CPU/memory/pids 当前是执行单元级限制；严格 per-run cgroup 需要容器 worker。
+- 双 VPS worker 模式仍是 deferred；当前 P3 完成的是单 VPS / local worker 主线。
+- SQLite 适合当前单控制面 MVP；多控制面需要迁移到 Postgres 或等价外部事件库。
+
 ## Go / No-Go 决策
 
 ### Go

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -112,12 +113,15 @@ class CleanupManager:
             return
         if not path.exists():
             return
-        shutil.rmtree(path)
+        remove_workspace(path, allocation)
         payload = {
             "path": str(path),
+            "strategy": allocation.get("strategy"),
             "retention_seconds": self.policy.workspace_retention_seconds,
         }
         self.store.append_event(run.run_id, "cleanup.workspace_deleted", payload)
+        if "cleanup.artifacts_deleted" in event_types:
+            shutil.rmtree(self.store.run_dir(run.run_id), ignore_errors=True)
         result.workspaces_deleted.append({"run_id": run.run_id, **payload})
 
     def _cleanup_artifacts(
@@ -161,6 +165,22 @@ def directory_size(path: Path) -> int:
         if child.is_file():
             total += child.stat().st_size
     return total
+
+
+def remove_workspace(path: Path, allocation: dict[str, Any]) -> None:
+    source_path = allocation.get("source_path")
+    if allocation.get("strategy") == "git_worktree" and isinstance(source_path, str):
+        try:
+            subprocess.run(
+                ["git", "-C", source_path, "worktree", "remove", "--force", str(path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+    shutil.rmtree(path)
 
 
 def is_relative_to(path: Path, parent: Path) -> bool:

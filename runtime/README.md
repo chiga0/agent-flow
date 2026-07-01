@@ -48,7 +48,7 @@ Postgres when multiple control-plane instances are required.
   events remain in `runtime.db` after artifact cleanup.
 - `diagnostics.json` is maintained per run.
 - `scripts/replay_run.py` can replay events, SSE frames, or rebuilt state from
-  artifacts.
+  artifacts, and falls back to `runtime.db` after artifact JSONL cleanup.
 
 The default adapter is `fake`, which lets the full API run without a model or
 qwen daemon. The `qwen` adapter can connect to an existing `qwen serve`

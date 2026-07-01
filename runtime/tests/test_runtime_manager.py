@@ -466,6 +466,104 @@ class RunManagerTest(unittest.TestCase):
                     [event.type for event in manager.store.events_since(run.run_id)],
                 )
                 self.assertEqual(manager.store.list_artifacts(run.run_id), [])
+
+                replay = subprocess.run(
+                    [
+                        sys.executable,
+                        "scripts/replay_run.py",
+                        "--artifact-root",
+                        str(root),
+                        "--run-id",
+                        run.run_id,
+                        "--format",
+                        "state",
+                    ],
+                    check=True,
+                    cwd=Path(__file__).resolve().parents[2],
+                    capture_output=True,
+                    text=True,
+                )
+                replay_state = json.loads(replay.stdout)
+                self.assertEqual(replay_state["status"], "completed")
+                self.assertEqual(replay_state["last_event"], "cleanup.artifacts_deleted")
+
+                workspace = Path(manager.get_run(run.run_id).spec.workspace)
+                manager.cleanup_manager.policy = CleanupPolicy(
+                    enabled=False,
+                    workspace_retention_seconds=0,
+                    artifact_retention_seconds=999999,
+                )
+                second_result = manager.cleanup_once()
+                self.assertFalse(workspace.exists())
+                self.assertFalse(run_dir.exists())
+                self.assertEqual(
+                    second_result["workspaces_deleted"][0]["run_id"],
+                    run.run_id,
+                )
+            finally:
+                manager.shutdown()
+
+    def test_cleanup_policy_removes_git_worktree_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            subprocess.run(["git", "init"], cwd=source, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.email", "runtime@example.test"],
+                cwd=source,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Runtime Test"],
+                cwd=source,
+                check=True,
+            )
+            (source / "README.md").write_text("hello cleanup\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=source, check=True)
+            subprocess.run(
+                ["git", "commit", "--no-verify", "-m", "seed"],
+                cwd=source,
+                check=True,
+                capture_output=True,
+            )
+
+            artifact_root = root / "artifacts"
+            manager = RunManager(
+                artifact_root,
+                worker_capacity=0,
+                worker_id="cleanup-worker",
+                cleanup_policy=CleanupPolicy(
+                    enabled=False,
+                    workspace_retention_seconds=0,
+                    artifact_retention_seconds=999999,
+                ),
+            )
+            try:
+                run = manager.create_run(
+                    RunSpec(
+                        prompt="cleanup git worktree",
+                        adapter="fake",
+                        workspace=str(source),
+                    )
+                )
+                workspace = Path(manager.get_run(run.run_id).spec.workspace)
+                self.assertTrue(workspace.exists())
+                manager.cancel(run.run_id, "terminal before cleanup")
+
+                result = manager.cleanup_once()
+                self.assertFalse(workspace.exists())
+                self.assertEqual(
+                    result["workspaces_deleted"][0]["strategy"],
+                    "git_worktree",
+                )
+                worktrees = subprocess.run(
+                    ["git", "-C", str(source), "worktree", "list", "--porcelain"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotIn(str(workspace), worktrees.stdout)
             finally:
                 manager.shutdown()
 
