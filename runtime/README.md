@@ -1,10 +1,11 @@
 # Cloud Agents Runtime
 
-This directory contains the P1/P2 implementation slice plus the local P3 runtime
-slice from the roadmap: a single SAEU Run Manager with a pluggable runtime
-adapter boundary, durable event storage, audit artifacts, permission resolution,
-run queue leases, worker heartbeat, resource policy, cleanup policy, replay
-tooling, and cloud deployment assets.
+This directory contains the P1/P2 implementation slice plus the local P3/P4
+runtime slice from the roadmap: a single SAEU Run Manager with a pluggable
+runtime adapter boundary, durable event storage, audit artifacts, permission
+resolution, run queue leases, worker heartbeat, resource policy, cleanup policy,
+profile registry, mission/task orchestration, replay tooling, and cloud
+deployment assets.
 
 The current implementation intentionally uses only the Python standard library.
 It is small enough to audit and easy to replace once the API contract is proven.
@@ -28,11 +29,29 @@ Postgres when multiple control-plane instances are required.
 - `GET /runs/{run_id}/events.json` returns canonical events for UI replay.
 - `GET /runs/{run_id}/artifacts` lists artifact files for the run.
 - `POST /cleanup` triggers one retention-policy cleanup pass.
+- `GET /profiles` and `GET /profiles/{profile_id}` expose built-in and custom
+  agent profiles.
+- `POST /profiles` creates a versioned user profile. Built-in profiles must be
+  copied to a new id before editing.
+- `POST /missions` creates a mission DAG and schedules each ready task as a
+  normal SAEU run.
+- `GET /missions`, `GET /missions/{mission_id}`,
+  `GET /missions/{mission_id}/events.json`, and
+  `GET /missions/{mission_id}/artifacts` expose mission state, audit events,
+  and final report artifacts.
+- `POST /missions/{mission_id}/cancel` cancels active child runs and marks
+  pending tasks cancelled.
 - Raw run specs, inputs, canonical events, and adapter artifacts are written to
   `runtime/artifacts/`.
 - Canonical events are persisted in `runtime.db` and `events.jsonl`.
 - Run queue state is persisted in `run_jobs`; local worker state is persisted in
   `workers`.
+- Built-in profiles currently include `planner`, `coder`, `tester`, `reviewer`,
+  and `doc-writer`. Each task stores a resolved profile snapshot before its run
+  starts, so later profile edits do not change historical audit meaning.
+- Mission artifacts are written to `runtime/artifacts/missions/<mission_id>/`.
+  They include `mission_spec.json`, `mission_manifest.json`, `events.jsonl`,
+  `task_<task_id>.json`, and `final_report.md`.
 - Each run receives a resolved workspace before it is queued. Local git sources
   use a detached worktree under `artifact_root/workspaces/<run_id>`; runs
   without a source receive an empty isolated directory. Remote repo cloning is
@@ -150,6 +169,37 @@ python3 scripts/replay_run.py \
   --format state
 ```
 
+Create a two-task mission:
+
+```bash
+curl -s http://127.0.0.1:8765/missions \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{
+    "goal": "validate mission orchestration",
+    "strategy": "custom",
+    "adapter": "fake",
+    "tasks": [
+      {"id": "plan", "profile": "planner", "prompt": "plan the work"},
+      {
+        "id": "review",
+        "profile": "reviewer",
+        "depends_on": ["plan"],
+        "prompt": "review the plan"
+      }
+    ]
+  }'
+```
+
+Inspect mission state:
+
+```bash
+curl -s http://127.0.0.1:8765/missions/<mission_id> \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN"
+curl -s http://127.0.0.1:8765/missions/<mission_id>/events.json \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN"
+```
+
 ## Test
 
 ```bash
@@ -186,11 +236,16 @@ Acceptance:
 - `/capabilities` lists `fake` and `qwen`.
 - `/capabilities` exposes runtime resource defaults and maximums.
 - `/capabilities` exposes cleanup retention policy.
+- `/capabilities` exposes built-in profiles and mission orchestration features.
 - `/queue` returns job counts, job leases, and worker heartbeat records.
 - `/workers` returns active worker capacity and heartbeat time.
+- `/profiles` returns `planner`, `coder`, `tester`, `reviewer`, and
+  `doc-writer`.
 - API routes other than `/health` require `Authorization: Bearer ...` when
   `RUN_MANAGER_TOKEN` is set.
 - `POST /runs` returns a `run_id`.
+- `POST /missions` returns a `mission_id`; each task has a profile snapshot and
+  a child SAEU `run_id` once scheduled.
 - SSE emits `run.created`, `workspace.prepared`, `resources.resolved`,
   `run.queued`, `lease.claimed`, `run.started`, `input.accepted`,
   `message.delta`, `step.completed`, and `run.completed`.
@@ -202,7 +257,10 @@ Acceptance:
   `raw_events.jsonl`, `input_1.json`, `workspace.json`, `resources.json`,
   `diagnostics.json`, and `final_1.json`.
 - The artifact root contains `runtime.db` with `runs`, `run_events`,
-  `raw_events`, `run_jobs`, and `workers`.
+  `raw_events`, `run_jobs`, `workers`, `agent_profiles`, `missions`,
+  `mission_tasks`, and `mission_events`.
+- A completed mission directory contains `mission_manifest.json`,
+  `events.jsonl`, task JSON files, and `final_report.md`.
 
 ## Validate qwen adapter
 
@@ -249,10 +307,13 @@ python3 scripts/validate_runtime.py \
   --base-url http://127.0.0.1:8765 \
   --token "$RUN_MANAGER_TOKEN" \
   --adapter fake \
-  --artifact-root runtime/artifacts
+  --artifact-root runtime/artifacts \
+  --validate-mission
 ```
 
-Use `--adapter qwen` after starting `qwen serve`.
+Use `--adapter qwen` after starting `qwen serve`. Leave off
+`--validate-mission` for quick qwen smoke tests, because it creates multiple
+child runs.
 
 ## Minimal cloud deployment target
 
@@ -266,6 +327,11 @@ The current cloud-runnable slice includes:
 - Per-run resource policy with `resources.resolved`, `resources.json`, and a
   timeout watchdog.
 - Cleanup policy for terminal run workspaces and artifact directories.
+- Profile registry and mission/task DAG tables, with profile snapshots copied
+  into each child run spec.
+- Mission supervisor that maps `mission -> task -> profile -> SAEU run`,
+  supports sequential and fan-out/fan-in DAGs, artifact reference handoff, and a
+  final report artifact.
 - Managed `qwen serve` process for one workspace when `QWEN_SERVE_COMMAND` is
   configured.
 - Persistent artifact directory on disk with `runtime.db` and JSONL artifacts.
@@ -273,9 +339,20 @@ The current cloud-runnable slice includes:
   limits.
 - CI gates for style, compile, 90%+ runtime coverage, and MkDocs strict build.
 - Validation script for fake/qwen runs and required artifacts.
+- Optional validation script coverage for P4 mission/profile orchestration via
+  `--validate-mission`.
 
 HTTPS/reverse proxy and multi-tenant isolation remain deployment-layer concerns
 for the next hardening phase.
+
+P4 limits in this MVP:
+
+- The supervisor is a deterministic in-process controller, not yet a long-lived
+  Project Agent with its own memory model.
+- Reviewer gate records reviewer output as a task artifact, but automatic
+  high-risk finding detection and merge blocking are not implemented yet.
+- Artifact handoff passes stable artifact references into child run prompts; it
+  does not copy sibling workspaces or expose uncontrolled shared memory.
 
 ### Docker Compose
 

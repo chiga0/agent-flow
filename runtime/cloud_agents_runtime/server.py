@@ -48,6 +48,42 @@ def make_handler(
             if path == "/workers":
                 self.write_json({"workers": manager.queue_status()["workers"]})
                 return
+            if len(parts) == 1 and parts[0] == "profiles":
+                self.write_json({"profiles": manager.list_profiles()})
+                return
+            if len(parts) == 2 and parts[0] == "profiles":
+                profile = manager.get_profile(parts[1])
+                if profile is None:
+                    self.write_error(HTTPStatus.NOT_FOUND, "profile not found")
+                    return
+                self.write_json(profile)
+                return
+            if len(parts) == 1 and parts[0] == "missions":
+                self.write_json({"missions": manager.list_missions()})
+                return
+            if len(parts) == 2 and parts[0] == "missions":
+                mission = manager.get_mission(parts[1])
+                if mission is None:
+                    self.write_error(HTTPStatus.NOT_FOUND, "mission not found")
+                    return
+                self.write_json(mission)
+                return
+            if len(parts) == 3 and parts[0] == "missions" and parts[2] == "events.json":
+                try:
+                    events = manager.store.mission_events_since(parts[1])
+                except KeyError:
+                    self.write_error(HTTPStatus.NOT_FOUND, "mission not found")
+                    return
+                self.write_json({"events": [event.to_dict() for event in events]})
+                return
+            if len(parts) == 3 and parts[0] == "missions" and parts[2] == "artifacts":
+                try:
+                    artifacts = manager.store.list_mission_artifacts(parts[1])
+                except KeyError:
+                    self.write_error(HTTPStatus.NOT_FOUND, "mission not found")
+                    return
+                self.write_json({"artifacts": artifacts})
+                return
             if len(parts) == 1 and parts[0] == "runs":
                 self.write_json({"runs": [run.to_dict() for run in manager.store.list_runs()]})
                 return
@@ -88,6 +124,22 @@ def make_handler(
                 payload = self.read_json()
                 if len(parts) == 1 and parts[0] == "cleanup":
                     self.write_json({"cleanup": manager.cleanup_once()})
+                    return
+                if len(parts) == 1 and parts[0] == "profiles":
+                    profile = manager.create_profile(payload)
+                    self.write_json(profile, status=HTTPStatus.CREATED)
+                    return
+                if len(parts) == 1 and parts[0] == "missions":
+                    mission = manager.create_mission(payload)
+                    self.write_json(mission, status=HTTPStatus.CREATED)
+                    return
+                if len(parts) == 3 and parts[0] == "missions" and parts[2] == "cancel":
+                    try:
+                        mission = manager.cancel_mission(parts[1], payload.get("reason"))
+                    except KeyError:
+                        self.write_error(HTTPStatus.NOT_FOUND, "mission not found")
+                        return
+                    self.write_json(mission, status=HTTPStatus.ACCEPTED)
                     return
                 if len(parts) == 1 and parts[0] == "runs":
                     spec = RunSpec.from_payload(payload)

@@ -24,7 +24,8 @@ from runtime.cloud_agents_runtime.adapters.qwen import (
 )
 from runtime.cloud_agents_runtime.auth import AuthConfig, is_authorized
 from runtime.cloud_agents_runtime.manager import RunManager
-from runtime.cloud_agents_runtime.models import RunSpec
+from runtime.cloud_agents_runtime.missions import build_task_definitions, run_status_to_task_status
+from runtime.cloud_agents_runtime.models import MissionSpec, RunSpec, clean_identifier
 from runtime.cloud_agents_runtime.server import parse_last_event_id, parse_optional_int
 from runtime.cloud_agents_runtime.store import RunStore
 from runtime.cloud_agents_runtime.supervisor import QwenServeProcess, qwen_supervisor_from_env
@@ -39,6 +40,34 @@ class RuntimeEdgeTest(unittest.TestCase):
             self.assert_http_error(f"{base_url}/missing", HTTPErrorCode.NOT_FOUND)
             self.assert_http_error(f"{base_url}/runs/missing", HTTPErrorCode.NOT_FOUND)
             self.assert_http_error(f"{base_url}/runs/missing/events", HTTPErrorCode.NOT_FOUND)
+            self.assert_http_error(f"{base_url}/profiles/missing", HTTPErrorCode.NOT_FOUND)
+            self.assert_http_error(f"{base_url}/missions/missing", HTTPErrorCode.NOT_FOUND)
+            self.assert_http_error(
+                f"{base_url}/missions/missing/events.json",
+                HTTPErrorCode.NOT_FOUND,
+            )
+            self.assert_http_error(
+                f"{base_url}/missions/missing/artifacts",
+                HTTPErrorCode.NOT_FOUND,
+            )
+            self.assert_http_error(
+                f"{base_url}/missions/missing/cancel",
+                HTTPErrorCode.NOT_FOUND,
+                method="POST",
+                body={},
+            )
+            self.assert_http_error(
+                f"{base_url}/profiles",
+                HTTPErrorCode.BAD_REQUEST,
+                method="POST",
+                body={"id": "bad/profile"},
+            )
+            self.assert_http_error(
+                f"{base_url}/missions",
+                HTTPErrorCode.BAD_REQUEST,
+                method="POST",
+                body={},
+            )
             self.assert_http_error(
                 f"{base_url}/runs/missing/input",
                 HTTPErrorCode.BAD_REQUEST,
@@ -97,6 +126,69 @@ class RuntimeEdgeTest(unittest.TestCase):
         self.assertIsNone(parse_optional_int(""))
         self.assertIsNone(parse_optional_int("bad"))
         self.assertEqual(parse_optional_int("4"), 4)
+
+    def test_mission_model_and_dag_validation_edges(self) -> None:
+        with self.assertRaisesRegex(ValueError, "goal is required"):
+            MissionSpec.from_payload({})
+        with self.assertRaisesRegex(ValueError, "strategy must"):
+            MissionSpec.from_payload({"goal": "x", "strategy": "weird"})
+        with self.assertRaisesRegex(ValueError, "tasks must be a list"):
+            MissionSpec.from_payload({"goal": "x", "tasks": "bad"})
+        with self.assertRaisesRegex(ValueError, "custom strategy requires tasks"):
+            MissionSpec.from_payload({"goal": "x", "strategy": "custom"})
+        with self.assertRaisesRegex(ValueError, "profile is required"):
+            clean_identifier("", "profile")
+        with self.assertRaisesRegex(ValueError, "may only contain"):
+            clean_identifier("bad/profile", "profile")
+
+        spec = MissionSpec.from_payload(
+            {
+                "goal": "x",
+                "strategy": "custom",
+                "tasks": [{"title": "Generated", "prompt": "p"}],
+            }
+        )
+        self.assertEqual(build_task_definitions(spec)[0]["id"], "task_1_coder")
+        with self.assertRaisesRegex(ValueError, "each task"):
+            build_task_definitions(
+                MissionSpec.from_payload(
+                    {"goal": "x", "strategy": "custom", "tasks": ["bad"]}
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "duplicate task"):
+            build_task_definitions(
+                MissionSpec.from_payload(
+                    {
+                        "goal": "x",
+                        "strategy": "custom",
+                        "tasks": [{"id": "a"}, {"id": "a"}],
+                    }
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "depends_on must"):
+            build_task_definitions(
+                MissionSpec.from_payload(
+                    {
+                        "goal": "x",
+                        "strategy": "custom",
+                        "tasks": [{"id": "a", "depends_on": "b"}],
+                    }
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "cycle"):
+            build_task_definitions(
+                MissionSpec.from_payload(
+                    {
+                        "goal": "x",
+                        "strategy": "custom",
+                        "tasks": [
+                            {"id": "a", "depends_on": ["b"]},
+                            {"id": "b", "depends_on": ["a"]},
+                        ],
+                    }
+                )
+            )
+        self.assertIsNone(run_status_to_task_status("created"))
 
     def test_qwen_not_configured_and_inactive_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -275,6 +275,35 @@ qwen serve 已有：
 - 双 VPS worker 模式仍是 deferred；当前 P3 完成的是单 VPS / local worker 主线。
 - SQLite 适合当前单控制面 MVP；多控制面需要迁移到 Postgres 或等价外部事件库。
 
+## 2026-07-01 P4 实施审计
+
+### 已落地能力
+
+- Profile Registry：内置 `planner`、`coder`、`tester`、`reviewer`、`doc-writer`，并支持用户 profile 版本化。
+- Mission 数据模型：`missions`、`mission_tasks`、`mission_events` 与 run 表共存于 SQLite。
+- Supervisor MVP：确定性 `MissionManager` 负责 ready task 识别、创建 SAEU run、监听 run terminal event 并推进依赖。
+- DAG 策略：支持 `sequential`、`fanout`、`custom`；custom DAG 做 duplicate、missing dependency、cycle 校验。
+- Artifact handoff：下游 task run spec 写入 dependency artifact refs，不共享 sibling workspace。
+- Final report：mission 完成后生成 `final_report.md`，并持久化 `mission_manifest.json` 与 task JSON。
+- API：`/profiles`、`/missions`、mission events/artifacts、mission cancel 已接入 Run Manager HTTP 层。
+- 验收脚本：`scripts/validate_runtime.py --validate-mission` 可做两 task mission smoke。
+
+### 多轮审计结论
+
+- 正向审计：`mission -> task -> profile -> SAEU run` 已复用 P1-P3 的 run queue、workspace、resource、event、artifact 和 cleanup 能力。
+- 反向审计：覆盖 unknown profile、unknown adapter、bad DAG、cycle、duplicate task、bad mission payload。
+- 取消审计：测试发现 active child run 先取消会把 pending dependent task 标成 `blocked`；已修复为先取消无 run 的 pending task，再取消 active child run。
+- 恢复审计：mission/task/profile 进入 SQLite；`MissionManager.reconcile()` 会在启动时同步已有 task run 状态并继续调度 ready task。
+- 隔离审计：P4 没有引入跨 task 共享可写 workspace；profile 里的 workspace policy 先作为审计模板，不绕过 P3 workspace allocator。
+- 覆盖率审计：新增 P4 后 runtime coverage 维持在 90% 以上，满足 CI 门槛。
+
+### P4 剩余风险
+
+- Supervisor 仍是规则控制器，不是长期 Project Agent；长期 memory、目标管理和人机协作需要后续设计。
+- Reviewer gate 尚未解析 reviewer artifact 中的高风险 finding，也不会自动阻塞 merge。
+- Artifact handoff 只传 artifact 引用，不做 patch merge、diff conflict 解决或 artifact 内容内联。
+- qwen 多 workspace 强隔离仍需 per-workspace daemon registry 或容器 worker；当前 mission 多 task 可以用 fake 完整验收，qwen 真实多 task 要等部署密钥恢复后再跑。
+
 ## Go / No-Go 决策
 
 ### Go

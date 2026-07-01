@@ -18,6 +18,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prompt", default="hello cloud runtime")
     parser.add_argument("--artifact-root", type=pathlib.Path)
     parser.add_argument("--timeout", type=float, default=20.0)
+    parser.add_argument(
+        "--validate-mission",
+        action="store_true",
+        help="also validate the P4 mission/profile API with a two-task mission",
+    )
     args = parser.parse_args(argv)
 
     client = Client(args.base_url, args.token)
@@ -69,7 +74,59 @@ def main(argv: list[str] | None = None) -> int:
         if not (args.artifact_root / "runtime.db").exists():
             print("missing runtime.db", file=sys.stderr)
             return 1
+    if args.validate_mission and not validate_mission(client, args):
+        return 1
     return 0
+
+
+def validate_mission(client: "Client", args: argparse.Namespace) -> bool:
+    profiles = client.get("/profiles")
+    profile_ids = {profile["id"] for profile in profiles.get("profiles", [])}
+    print(f"profiles: {sorted(profile_ids)}")
+    if "planner" not in profile_ids or "reviewer" not in profile_ids:
+        print("missing built-in profiles", file=sys.stderr)
+        return False
+    mission = client.post(
+        "/missions",
+        {
+            "goal": "validate runtime mission orchestration",
+            "strategy": "custom",
+            "adapter": args.adapter,
+            "tasks": [
+                {"id": "plan", "profile": "planner", "prompt": "plan the validation"},
+                {
+                    "id": "review",
+                    "profile": "reviewer",
+                    "depends_on": ["plan"],
+                    "prompt": "review the validation result",
+                },
+            ],
+        },
+    )
+    mission_id = mission["mission_id"]
+    print(f"mission: {mission_id}")
+    deadline = time.monotonic() + args.timeout
+    state: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        state = client.get(f"/missions/{mission_id}")
+        if state["status"] in {"completed", "failed", "cancelled"}:
+            break
+        time.sleep(0.2)
+    print(f"mission state: {state.get('status')}")
+    if state.get("status") != "completed":
+        return False
+    events = client.get(f"/missions/{mission_id}/events.json")
+    names = [event["type"] for event in events.get("events", [])]
+    print(f"mission events: {names}")
+    if "mission.completed" not in names:
+        return False
+    if args.artifact_root:
+        mission_dir = args.artifact_root / "missions" / mission_id
+        for name in ["mission_manifest.json", "events.jsonl", "final_report.md"]:
+            if not (mission_dir / name).exists():
+                print(f"missing mission artifact: {name}", file=sys.stderr)
+                return False
+    return True
 
 
 class Client:

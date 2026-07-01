@@ -9,7 +9,18 @@ from pathlib import Path
 from typing import Any
 
 from .events import RuntimeEvent, TERMINAL_RUN_EVENTS, utc_now
-from .models import RunJob, RunSpec, RunState, WorkerState
+from .models import (
+    AgentProfile,
+    MissionEvent,
+    MissionSpec,
+    MissionState,
+    MissionTask,
+    RunJob,
+    RunSpec,
+    RunState,
+    WorkerState,
+)
+from .profiles import builtin_profiles, latest_profiles
 
 
 class RunStore:
@@ -22,6 +33,11 @@ class RunStore:
         self._runs: dict[str, RunState] = {}
         self._jobs: dict[str, RunJob] = {}
         self._workers: dict[str, WorkerState] = {}
+        self._profiles: dict[tuple[str, int], AgentProfile] = builtin_profiles()
+        self._missions: dict[str, MissionState] = {}
+        self._mission_tasks: dict[str, list[MissionTask]] = {}
+        self._mission_events: dict[str, list[MissionEvent]] = {}
+        self._task_runs: dict[str, tuple[str, str]] = {}
         self._events: dict[str, list[RuntimeEvent]] = {}
         self._conditions: dict[str, threading.Condition] = {}
         self._event_listeners: list[Callable[[RuntimeEvent], None]] = []
@@ -53,6 +69,208 @@ class RunStore:
     def list_runs(self) -> list[RunState]:
         with self._lock:
             return list(self._runs.values())
+
+    def create_profile(self, payload: dict[str, Any]) -> AgentProfile:
+        with self._lock:
+            profile_id = str(payload.get("id") or "").strip()
+            if (profile_id, 1) in self._profiles:
+                existing = self._profiles[(profile_id, 1)]
+                if existing.source == "system":
+                    raise ValueError("copy a built-in profile to a new id before editing")
+            version = self.next_profile_version(profile_id)
+            profile = AgentProfile.from_payload(payload, version=version, source="user")
+            self._profiles[(profile.id, profile.version)] = profile
+            self._persist_profile(profile)
+            return profile
+
+    def list_profiles(self) -> list[AgentProfile]:
+        with self._lock:
+            return latest_profiles(list(self._profiles.values()))
+
+    def get_profile(
+        self,
+        profile_id: str,
+        version: int | None = None,
+    ) -> AgentProfile | None:
+        with self._lock:
+            if version is not None:
+                return self._profiles.get((profile_id, version))
+            candidates = [
+                profile
+                for key, profile in self._profiles.items()
+                if key[0] == profile_id
+            ]
+            if not candidates:
+                return None
+            return max(candidates, key=lambda profile: profile.version)
+
+    def next_profile_version(self, profile_id: str) -> int:
+        versions = [version for key, version in self._profiles if key == profile_id]
+        return (max(versions) + 1) if versions else 1
+
+    def create_mission(
+        self,
+        spec: MissionSpec,
+        mission_id: str | None = None,
+    ) -> MissionState:
+        with self._lock:
+            mission = MissionState.create(spec, mission_id=mission_id)
+            self._missions[mission.mission_id] = mission
+            self._mission_tasks[mission.mission_id] = []
+            self._mission_events[mission.mission_id] = []
+            self.mission_dir(mission.mission_id).mkdir(parents=True, exist_ok=True)
+            self.write_mission_json(mission.mission_id, "mission_spec.json", spec.to_dict())
+            self._persist_mission(mission)
+            self.append_mission_event(
+                mission.mission_id,
+                "mission.created",
+                {"spec": spec.to_dict()},
+            )
+            return mission
+
+    def get_mission(self, mission_id: str) -> MissionState | None:
+        with self._lock:
+            return self._missions.get(mission_id)
+
+    def list_missions(self) -> list[MissionState]:
+        with self._lock:
+            return list(self._missions.values())
+
+    def add_mission_task(self, task: MissionTask) -> MissionTask:
+        with self._lock:
+            self._require_mission(task.mission_id)
+            tasks = self._mission_tasks.setdefault(task.mission_id, [])
+            if any(existing.task_id == task.task_id for existing in tasks):
+                raise ValueError(f"duplicate task id: {task.task_id}")
+            tasks.append(task)
+            tasks.sort(key=lambda item: (item.order, item.task_id))
+            if task.run_id:
+                self._task_runs[task.run_id] = (task.mission_id, task.task_id)
+            self._persist_task(task)
+            self._refresh_mission_counts(task.mission_id)
+            return task
+
+    def list_mission_tasks(self, mission_id: str) -> list[MissionTask]:
+        with self._lock:
+            self._require_mission(mission_id)
+            return list(self._mission_tasks.get(mission_id, []))
+
+    def get_mission_task(self, mission_id: str, task_id: str) -> MissionTask | None:
+        with self._lock:
+            for task in self._mission_tasks.get(mission_id, []):
+                if task.task_id == task_id:
+                    return task
+            return None
+
+    def get_task_by_run_id(self, run_id: str) -> MissionTask | None:
+        with self._lock:
+            location = self._task_runs.get(run_id)
+            if not location:
+                return None
+            return self.get_mission_task(location[0], location[1])
+
+    def update_mission_task(self, task: MissionTask) -> None:
+        with self._lock:
+            tasks = self._mission_tasks.get(task.mission_id, [])
+            for index, existing in enumerate(tasks):
+                if existing.task_id == task.task_id:
+                    if existing.run_id and existing.run_id != task.run_id:
+                        self._task_runs.pop(existing.run_id, None)
+                    tasks[index] = task
+                    if task.run_id:
+                        self._task_runs[task.run_id] = (task.mission_id, task.task_id)
+                    self._persist_task(task)
+                    self._refresh_mission_counts(task.mission_id)
+                    return
+            raise KeyError(task.task_id)
+
+    def update_mission_status(self, mission_id: str, status: str) -> None:
+        with self._lock:
+            mission = self._require_mission(mission_id)
+            mission.status = status
+            mission.updated_at = utc_now()
+            self._persist_mission(mission)
+
+    def append_mission_event(
+        self,
+        mission_id: str,
+        event_type: str,
+        data: dict[str, Any] | None = None,
+    ) -> MissionEvent:
+        with self._lock:
+            mission = self._require_mission(mission_id)
+            if event_type == "mission.started" and mission.status == "created":
+                mission.status = "running"
+            elif event_type == "mission.completed":
+                mission.status = "completed"
+            elif event_type == "mission.failed":
+                mission.status = "failed"
+            elif event_type == "mission.cancelled":
+                mission.status = "cancelled"
+            events = self._mission_events.setdefault(mission_id, [])
+            event = MissionEvent(
+                type=event_type,
+                mission_id=mission_id,
+                sequence=len(events) + 1,
+                data=data or {},
+            )
+            events.append(event)
+            mission.event_count = len(events)
+            mission.updated_at = event.created_at
+            self._append_mission_jsonl(mission_id, "events.jsonl", event.to_dict())
+            self._insert_mission_event(event)
+            self._persist_mission(mission)
+            return event
+
+    def mission_events_since(
+        self,
+        mission_id: str,
+        last_sequence: int = 0,
+    ) -> list[MissionEvent]:
+        with self._lock:
+            self._require_mission(mission_id)
+            return [
+                event
+                for event in self._mission_events.get(mission_id, [])
+                if event.sequence > last_sequence
+            ]
+
+    def mission_snapshot(self, mission_id: str) -> dict[str, Any]:
+        with self._lock:
+            mission = self._require_mission(mission_id)
+            return {
+                **mission.to_dict(),
+                "tasks": [
+                    task.to_dict()
+                    for task in self._mission_tasks.get(mission_id, [])
+                ],
+            }
+
+    def write_mission_json(self, mission_id: str, name: str, payload: Any) -> Path:
+        path = self.mission_dir(mission_id) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
+    def list_mission_artifacts(self, mission_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            self._require_mission(mission_id)
+            mission_dir = self.mission_dir(mission_id)
+            artifacts: list[dict[str, Any]] = []
+            if not mission_dir.exists():
+                return artifacts
+            for path in sorted(mission_dir.iterdir()):
+                if not path.is_file():
+                    continue
+                stat = path.stat()
+                artifacts.append(
+                    {
+                        "name": path.name,
+                        "size_bytes": stat.st_size,
+                        "updated_at": utc_now_from_timestamp(stat.st_mtime),
+                    }
+                )
+            return artifacts
 
     def enqueue_run(self, run_id: str) -> RunJob:
         with self._lock:
@@ -373,6 +591,9 @@ class RunStore:
     def run_dir(self, run_id: str) -> Path:
         return self.artifact_root / run_id
 
+    def mission_dir(self, mission_id: str) -> Path:
+        return self.artifact_root / "missions" / mission_id
+
     def close(self) -> None:
         with self._lock:
             self._db.close()
@@ -384,11 +605,24 @@ class RunStore:
             handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             handle.write("\n")
 
+    def _append_mission_jsonl(self, mission_id: str, name: str, payload: Any) -> None:
+        path = self.mission_dir(mission_id) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            handle.write("\n")
+
     def _require_run(self, run_id: str) -> RunState:
         run = self._runs.get(run_id)
         if run is None:
             raise KeyError(run_id)
         return run
+
+    def _require_mission(self, mission_id: str) -> MissionState:
+        mission = self._missions.get(mission_id)
+        if mission is None:
+            raise KeyError(mission_id)
+        return mission
 
     def _init_db(self) -> None:
         self._db.executescript(
@@ -441,12 +675,71 @@ class RunStore:
               created_at text not null,
               updated_at text not null
             );
+            create table if not exists agent_profiles (
+              profile_id text not null,
+              version integer not null,
+              profile_json text not null,
+              source text not null,
+              created_at text not null,
+              updated_at text not null,
+              primary key (profile_id, version)
+            );
+            create table if not exists missions (
+              mission_id text primary key,
+              spec_json text not null,
+              status text not null,
+              created_at text not null,
+              updated_at text not null,
+              event_count integer not null,
+              task_count integer not null,
+              completed_task_count integer not null,
+              failed_task_count integer not null
+            );
+            create table if not exists mission_tasks (
+              mission_id text not null,
+              task_id text not null,
+              title text not null,
+              profile_id text not null,
+              profile_version integer not null,
+              prompt text not null,
+              task_order integer not null,
+              depends_on_json text not null,
+              status text not null,
+              run_id text,
+              profile_snapshot_json text not null,
+              result_json text not null,
+              metadata_json text not null,
+              created_at text not null,
+              updated_at text not null,
+              started_at text,
+              completed_at text,
+              primary key (mission_id, task_id)
+            );
+            create table if not exists mission_events (
+              mission_id text not null,
+              sequence integer not null,
+              event_id text not null,
+              type text not null,
+              data_json text not null,
+              created_at text not null,
+              primary key (mission_id, sequence)
+            );
             """
         )
         self._db.commit()
 
     def _load_from_db(self) -> None:
         with self._lock:
+            for row in self._db.execute("select * from agent_profiles order by profile_id"):
+                payload = json.loads(row["profile_json"])
+                profile = AgentProfile.from_payload(
+                    payload,
+                    version=row["version"],
+                    source=row["source"],
+                )
+                profile.created_at = row["created_at"]
+                profile.updated_at = row["updated_at"]
+                self._profiles[(profile.id, profile.version)] = profile
             for row in self._db.execute("select * from runs order by created_at"):
                 spec = RunSpec.from_payload(json.loads(row["spec_json"]))
                 run = RunState(
@@ -496,6 +789,59 @@ class RunStore:
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
                 )
+            for row in self._db.execute("select * from missions order by created_at"):
+                spec = MissionSpec.from_payload(json.loads(row["spec_json"]))
+                mission = MissionState(
+                    mission_id=row["mission_id"],
+                    spec=spec,
+                    status=row["status"],
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                    event_count=row["event_count"],
+                    task_count=row["task_count"],
+                    completed_task_count=row["completed_task_count"],
+                    failed_task_count=row["failed_task_count"],
+                )
+                self._missions[mission.mission_id] = mission
+                self._mission_tasks[mission.mission_id] = []
+                self._mission_events[mission.mission_id] = []
+            for row in self._db.execute(
+                "select * from mission_tasks order by mission_id, task_order, task_id"
+            ):
+                task = MissionTask(
+                    mission_id=row["mission_id"],
+                    task_id=row["task_id"],
+                    title=row["title"],
+                    profile_id=row["profile_id"],
+                    profile_version=row["profile_version"],
+                    prompt=row["prompt"],
+                    order=row["task_order"],
+                    depends_on=json.loads(row["depends_on_json"]),
+                    status=row["status"],
+                    run_id=row["run_id"],
+                    profile_snapshot=json.loads(row["profile_snapshot_json"]),
+                    result=json.loads(row["result_json"]),
+                    metadata=json.loads(row["metadata_json"]),
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                    started_at=row["started_at"],
+                    completed_at=row["completed_at"],
+                )
+                self._mission_tasks.setdefault(task.mission_id, []).append(task)
+                if task.run_id:
+                    self._task_runs[task.run_id] = (task.mission_id, task.task_id)
+            for row in self._db.execute(
+                "select * from mission_events order by mission_id, sequence"
+            ):
+                event = MissionEvent(
+                    type=row["type"],
+                    mission_id=row["mission_id"],
+                    sequence=row["sequence"],
+                    data=json.loads(row["data_json"]),
+                    id=row["event_id"],
+                    created_at=row["created_at"],
+                )
+                self._mission_events.setdefault(row["mission_id"], []).append(event)
 
     def _persist_run(self, run: RunState) -> None:
         self._db.execute(
@@ -585,6 +931,123 @@ class RunStore:
         )
         self._db.commit()
 
+    def _persist_profile(self, profile: AgentProfile) -> None:
+        self._db.execute(
+            """
+            insert into agent_profiles(
+              profile_id, version, profile_json, source, created_at, updated_at
+            ) values (?, ?, ?, ?, ?, ?)
+            on conflict(profile_id, version) do update set
+              profile_json=excluded.profile_json,
+              source=excluded.source,
+              updated_at=excluded.updated_at
+            """,
+            (
+                profile.id,
+                profile.version,
+                json.dumps(profile.to_dict(), ensure_ascii=False, sort_keys=True),
+                profile.source,
+                profile.created_at,
+                profile.updated_at,
+            ),
+        )
+        self._db.commit()
+
+    def _persist_mission(self, mission: MissionState) -> None:
+        self._db.execute(
+            """
+            insert into missions(
+              mission_id, spec_json, status, created_at, updated_at, event_count,
+              task_count, completed_task_count, failed_task_count
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(mission_id) do update set
+              spec_json=excluded.spec_json,
+              status=excluded.status,
+              updated_at=excluded.updated_at,
+              event_count=excluded.event_count,
+              task_count=excluded.task_count,
+              completed_task_count=excluded.completed_task_count,
+              failed_task_count=excluded.failed_task_count
+            """,
+            (
+                mission.mission_id,
+                json.dumps(mission.spec.to_dict(), ensure_ascii=False, sort_keys=True),
+                mission.status,
+                mission.created_at,
+                mission.updated_at,
+                mission.event_count,
+                mission.task_count,
+                mission.completed_task_count,
+                mission.failed_task_count,
+            ),
+        )
+        self._db.commit()
+
+    def _persist_task(self, task: MissionTask) -> None:
+        self._db.execute(
+            """
+            insert into mission_tasks(
+              mission_id, task_id, title, profile_id, profile_version, prompt,
+              task_order, depends_on_json, status, run_id, profile_snapshot_json,
+              result_json, metadata_json, created_at, updated_at, started_at,
+              completed_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(mission_id, task_id) do update set
+              title=excluded.title,
+              profile_id=excluded.profile_id,
+              profile_version=excluded.profile_version,
+              prompt=excluded.prompt,
+              task_order=excluded.task_order,
+              depends_on_json=excluded.depends_on_json,
+              status=excluded.status,
+              run_id=excluded.run_id,
+              profile_snapshot_json=excluded.profile_snapshot_json,
+              result_json=excluded.result_json,
+              metadata_json=excluded.metadata_json,
+              updated_at=excluded.updated_at,
+              started_at=excluded.started_at,
+              completed_at=excluded.completed_at
+            """,
+            (
+                task.mission_id,
+                task.task_id,
+                task.title,
+                task.profile_id,
+                task.profile_version,
+                task.prompt,
+                task.order,
+                json.dumps(task.depends_on, ensure_ascii=False, sort_keys=True),
+                task.status,
+                task.run_id,
+                json.dumps(task.profile_snapshot, ensure_ascii=False, sort_keys=True),
+                json.dumps(task.result, ensure_ascii=False, sort_keys=True),
+                json.dumps(task.metadata, ensure_ascii=False, sort_keys=True),
+                task.created_at,
+                task.updated_at,
+                task.started_at,
+                task.completed_at,
+            ),
+        )
+        self._db.commit()
+
+    def _insert_mission_event(self, event: MissionEvent) -> None:
+        self._db.execute(
+            """
+            insert or ignore into mission_events(
+              mission_id, sequence, event_id, type, data_json, created_at
+            ) values (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.mission_id,
+                event.sequence,
+                event.id,
+                event.type,
+                json.dumps(event.data, ensure_ascii=False, sort_keys=True),
+                event.created_at,
+            ),
+        )
+        self._db.commit()
+
     def _insert_event(self, event: RuntimeEvent) -> None:
         self._db.execute(
             """
@@ -619,6 +1082,17 @@ class RunStore:
             worker.active_count = self.active_job_count(job.worker_id)
             worker.updated_at = now
             self._persist_worker(worker)
+
+    def _refresh_mission_counts(self, mission_id: str) -> None:
+        mission = self._missions.get(mission_id)
+        if mission is None:
+            return
+        tasks = self._mission_tasks.get(mission_id, [])
+        mission.task_count = len(tasks)
+        mission.completed_task_count = sum(1 for task in tasks if task.status == "completed")
+        mission.failed_task_count = sum(1 for task in tasks if task.status == "failed")
+        mission.updated_at = utc_now()
+        self._persist_mission(mission)
 
     def _write_diagnostics(self, run_id: str) -> None:
         run = self._require_run(run_id)

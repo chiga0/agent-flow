@@ -84,6 +84,63 @@ class RuntimeServerTest(unittest.TestCase):
                 self.assertIn("workspace.json", artifact_names)
                 self.assertIn("resources.json", artifact_names)
 
+    def test_profiles_and_missions_http_api(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with running_runtime(artifact_root=Path(tmp), worker_capacity=2) as base_url:
+                profiles = request_json(f"{base_url}/profiles")
+                self.assertIn("planner", {profile["id"] for profile in profiles["profiles"]})
+                custom = request_json(
+                    f"{base_url}/profiles",
+                    method="POST",
+                    payload={
+                        "id": "doc-reviewer",
+                        "display_name": "Doc Reviewer",
+                        "runtime": {"preferred_adapter": "fake"},
+                    },
+                )
+                self.assertEqual(custom["id"], "doc-reviewer")
+                fetched = request_json(f"{base_url}/profiles/doc-reviewer")
+                self.assertEqual(fetched["version"], 1)
+
+                mission = request_json(
+                    f"{base_url}/missions",
+                    method="POST",
+                    payload={
+                        "goal": "Exercise the mission API",
+                        "strategy": "custom",
+                        "adapter": "fake",
+                        "tasks": [
+                            {"id": "plan", "profile": "planner", "prompt": "plan"},
+                            {
+                                "id": "report",
+                                "profile": "doc-reviewer",
+                                "depends_on": ["plan"],
+                                "prompt": "report",
+                            },
+                        ],
+                    },
+                )
+                mission_id = mission["mission_id"]
+                deadline = time.time() + 5
+                current: dict[str, Any] = {}
+                while time.time() < deadline:
+                    current = request_json(f"{base_url}/missions/{mission_id}")
+                    if current["status"] == "completed":
+                        break
+                    time.sleep(0.05)
+                self.assertEqual(current["status"], "completed")
+                self.assertEqual(len(current["tasks"]), 2)
+                self.assertTrue(all(task["run_id"] for task in current["tasks"]))
+
+                events = request_json(f"{base_url}/missions/{mission_id}/events.json")
+                self.assertIn("mission.completed", [event["type"] for event in events["events"]])
+                artifacts = request_json(f"{base_url}/missions/{mission_id}/artifacts")
+                artifact_names = {artifact["name"] for artifact in artifacts["artifacts"]}
+                self.assertIn("mission_manifest.json", artifact_names)
+                self.assertIn("final_report.md", artifact_names)
+                missions = request_json(f"{base_url}/missions")
+                self.assertEqual(missions["missions"][0]["mission_id"], mission_id)
+
     def test_sse_reconnect_and_gap_detection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with running_runtime(artifact_root=Path(tmp)) as base_url:

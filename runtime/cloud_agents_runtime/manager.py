@@ -11,6 +11,7 @@ from uuid import uuid4
 from .adapters import FakeAdapter, QwenServeAdapter, RuntimeAdapter
 from .cleanup import CleanupManager, CleanupPolicy
 from .events import RuntimeEvent, TERMINAL_RUN_EVENTS
+from .missions import MissionManager
 from .models import RunSpec, RunState
 from .resources import ResourceLimitConfig, ResourcePolicyResolver
 from .store import RunStore
@@ -35,6 +36,7 @@ class RunManager:
         self.workspace_allocator = WorkspaceAllocator(artifact_root)
         self.resource_resolver = ResourcePolicyResolver(resource_config)
         self.cleanup_manager = CleanupManager(self.store, cleanup_policy)
+        self.missions = MissionManager(self)
         self.adapters = adapters or {
             "fake": FakeAdapter(),
             "qwen": QwenServeAdapter(base_url=qwen_base_url, token=qwen_token),
@@ -81,6 +83,7 @@ class RunManager:
             )
             self._cleanup_thread.start()
         self._drain_queue()
+        self.missions.reconcile()
 
     def capabilities(self) -> dict[str, Any]:
         return {
@@ -105,10 +108,16 @@ class RunManager:
                 "resource_policy",
                 "run_timeout_watchdog",
                 "cleanup_policy",
+                "profile_registry",
+                "mission_task_dag",
+                "mission_supervisor",
+                "artifact_handoff",
+                "mission_final_report",
             ],
             "resource_limits": self.resource_resolver.config.to_dict(),
             "cleanup_policy": self.cleanup_manager.policy.to_dict(),
             "queue": self.queue_status(),
+            "profiles": [profile.to_dict() for profile in self.store.list_profiles()],
             "adapters": {
                 name: adapter.capabilities() for name, adapter in sorted(self.adapters.items())
             },
@@ -169,6 +178,33 @@ class RunManager:
 
     def cleanup_once(self) -> dict[str, Any]:
         return self.cleanup_manager.run_once().to_dict()
+
+    def list_profiles(self) -> list[dict[str, Any]]:
+        return [profile.to_dict() for profile in self.store.list_profiles()]
+
+    def get_profile(self, profile_id: str) -> dict[str, Any] | None:
+        profile = self.store.get_profile(profile_id)
+        return profile.to_dict() if profile else None
+
+    def create_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.missions.create_profile(payload).to_dict()
+
+    def create_mission(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.missions.create_mission(payload)
+
+    def list_missions(self) -> list[dict[str, Any]]:
+        missions = sorted(
+            self.store.list_missions(),
+            key=lambda mission: mission.created_at,
+            reverse=True,
+        )
+        return [self.store.mission_snapshot(mission.mission_id) for mission in missions]
+
+    def get_mission(self, mission_id: str) -> dict[str, Any] | None:
+        return self.missions.get_mission(mission_id)
+
+    def cancel_mission(self, mission_id: str, reason: str | None = None) -> dict[str, Any]:
+        return self.missions.cancel_mission(mission_id, reason)
 
     def shutdown(self) -> None:
         if self._closed:
@@ -291,8 +327,14 @@ class RunManager:
                 return
 
     def _on_event(self, event: RuntimeEvent) -> None:
+        self.missions.handle_run_event(event)
         if event.type in TERMINAL_RUN_EVENTS:
             self._drain_queue()
+            run = self.store.get_run(event.run_id)
+            metadata = run.spec.metadata if run else {}
+            mission_id = metadata.get("mission_id")
+            if isinstance(mission_id, str):
+                self.missions.drain_mission(mission_id)
 
 
 def positive_int(value: int | None, env_value: str | None, default: int) -> int:

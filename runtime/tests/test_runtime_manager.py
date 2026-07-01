@@ -625,6 +625,222 @@ class RunManagerTest(unittest.TestCase):
             finally:
                 manager.shutdown()
 
+    def test_profile_registry_persists_user_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = RunManager(root, worker_capacity=0, worker_id="profile-worker")
+            try:
+                profiles = manager.list_profiles()
+                self.assertIn("planner", {profile["id"] for profile in profiles})
+                custom = manager.create_profile(
+                    {
+                        "id": "security-reviewer",
+                        "display_name": "Security Reviewer",
+                        "runtime": {"preferred_adapter": "fake", "model": "audit"},
+                        "artifacts": {"required": ["security-findings.md"]},
+                    }
+                )
+                self.assertEqual(custom["version"], 1)
+                updated = manager.create_profile(
+                    {
+                        "id": "security-reviewer",
+                        "display_name": "Security Reviewer",
+                        "runtime": {"preferred_adapter": "fake", "model": "audit-v2"},
+                    }
+                )
+                self.assertEqual(updated["version"], 2)
+                self.assertEqual(
+                    manager.get_profile("security-reviewer")["runtime"]["model"],
+                    "audit-v2",
+                )
+                with self.assertRaisesRegex(ValueError, "copy a built-in profile"):
+                    manager.create_profile({"id": "coder", "display_name": "Override"})
+            finally:
+                manager.shutdown()
+
+            restored = RunManager(root, worker_capacity=0, worker_id="profile-worker")
+            try:
+                restored_profile = restored.get_profile("security-reviewer")
+                self.assertIsNotNone(restored_profile)
+                self.assertEqual(restored_profile["version"], 2)
+            finally:
+                restored.shutdown()
+
+    def test_sequential_mission_creates_profile_scoped_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = RunManager(
+                root,
+                adapters={"fake": FakeAdapter(delay_seconds=0.0)},
+                worker_capacity=2,
+                worker_id="mission-worker",
+            )
+            try:
+                mission = manager.create_mission(
+                    {
+                        "goal": "Ship a tiny audited change",
+                        "strategy": "sequential",
+                        "adapter": "fake",
+                    }
+                )
+                mission_id = mission["mission_id"]
+                self.wait_for_mission_status(manager, mission_id, "completed", timeout=5)
+
+                final = manager.get_mission(mission_id)
+                self.assertIsNotNone(final)
+                self.assertEqual(final["status"], "completed")
+                self.assertEqual(len(final["tasks"]), 5)
+                self.assertTrue(all(task["status"] == "completed" for task in final["tasks"]))
+                self.assertEqual(final["completed_task_count"], 5)
+
+                run_ids = [task["run_id"] for task in final["tasks"]]
+                self.assertEqual(len(run_ids), len(set(run_ids)))
+                for task in final["tasks"]:
+                    run = manager.get_run(task["run_id"])
+                    self.assertIsNotNone(run)
+                    self.assertEqual(run.spec.metadata["mission_id"], mission_id)
+                    self.assertEqual(run.spec.metadata["task_id"], task["task_id"])
+                    self.assertIn("profile_snapshot", run.spec.metadata)
+
+                event_names = [
+                    event.type
+                    for event in manager.store.mission_events_since(mission_id)
+                ]
+                self.assertIn("task.run_created", event_names)
+                self.assertIn("mission.completed", event_names)
+                artifacts = {
+                    artifact["name"]
+                    for artifact in manager.store.list_mission_artifacts(mission_id)
+                }
+                self.assertIn("mission_manifest.json", artifacts)
+                self.assertIn("final_report.md", artifacts)
+                self.assertTrue((root / "missions" / mission_id / "events.jsonl").exists())
+            finally:
+                manager.shutdown()
+
+    def test_custom_mission_dependency_validation_and_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = RunManager(
+                Path(tmp),
+                adapters={"fake": FakeAdapter(delay_seconds=0.0)},
+                worker_capacity=1,
+                worker_id="mission-worker",
+            )
+            try:
+                with self.assertRaisesRegex(ValueError, "unknown task"):
+                    manager.create_mission(
+                        {
+                            "goal": "bad graph",
+                            "strategy": "custom",
+                            "tasks": [
+                                {
+                                    "id": "a",
+                                    "profile": "planner",
+                                    "depends_on": ["missing"],
+                                }
+                            ],
+                        }
+                    )
+                mission = manager.create_mission(
+                    {
+                        "goal": "bad adapter",
+                        "strategy": "custom",
+                        "adapter": "missing",
+                        "tasks": [{"id": "a", "profile": "planner"}],
+                    }
+                    )
+                self.wait_for_mission_status(manager, mission["mission_id"], "failed")
+                failed = manager.get_mission(mission["mission_id"])
+                self.assertEqual(failed["tasks"][0]["status"], "failed")
+
+                with self.assertRaisesRegex(ValueError, "unknown profile"):
+                    manager.create_mission(
+                        {
+                            "goal": "missing profile",
+                            "strategy": "custom",
+                            "tasks": [{"id": "x", "profile": "missing"}],
+                        }
+                    )
+                self.assertIsNone(manager.get_mission("missing"))
+            finally:
+                manager.shutdown()
+
+    def test_fanout_mission_hands_dependency_artifacts_to_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = RunManager(
+                Path(tmp),
+                adapters={"fake": FakeAdapter(delay_seconds=0.0)},
+                worker_capacity=4,
+                worker_id="fanout-worker",
+            )
+            try:
+                mission = manager.create_mission(
+                    {
+                        "goal": "Fan out safely and fan in",
+                        "strategy": "fanout",
+                        "adapter": "fake",
+                    }
+                )
+                self.wait_for_mission_status(
+                    manager,
+                    mission["mission_id"],
+                    "completed",
+                    timeout=5,
+                )
+                final = manager.get_mission(mission["mission_id"])
+                report_task = next(
+                    task for task in final["tasks"] if task["task_id"] == "report"
+                )
+                report_run = manager.get_run(report_task["run_id"])
+                refs = report_run.spec.metadata["dependency_artifacts"]
+                self.assertEqual({ref["task_id"] for ref in refs}, {"code", "test", "review"})
+                self.assertTrue(all(ref["artifacts"] for ref in refs))
+            finally:
+                manager.shutdown()
+
+    def test_cancel_mission_cancels_running_and_pending_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = HangingAdapter()
+            manager = RunManager(
+                Path(tmp),
+                adapters={"hang": adapter},
+                worker_capacity=1,
+                worker_id="cancel-mission-worker",
+            )
+            try:
+                mission = manager.create_mission(
+                    {
+                        "goal": "cancel me",
+                        "strategy": "custom",
+                        "adapter": "hang",
+                        "tasks": [
+                            {"id": "first", "profile": "planner"},
+                            {
+                                "id": "second",
+                                "profile": "reviewer",
+                                "depends_on": ["first"],
+                            },
+                        ],
+                    }
+                )
+                mission_id = mission["mission_id"]
+                self.wait_for_task_status(manager, mission_id, "first", "running")
+                cancelled = manager.cancel_mission(mission_id, "operator stop")
+                self.assertEqual(cancelled["status"], "cancelled")
+                self.assertEqual(adapter.cancelled, [cancelled["tasks"][0]["run_id"]])
+                self.assertEqual(cancelled["tasks"][1]["status"], "cancelled")
+
+                ignored = manager.cancel_mission(mission_id, "again")
+                self.assertEqual(ignored["status"], "cancelled")
+                names = [
+                    event.type
+                    for event in manager.store.mission_events_since(mission_id)
+                ]
+                self.assertIn("mission.cancel_ignored", names)
+                self.assertEqual(names.count("mission.cancelled"), 1)
+            finally:
+                manager.shutdown()
+
     def test_expired_lease_is_recovered_to_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = RunStore(Path(tmp))
@@ -669,6 +885,39 @@ class RunManagerTest(unittest.TestCase):
                 return
             time.sleep(0.02)
         self.fail(f"run {run_id} did not reach {status}")
+
+    def wait_for_mission_status(
+        self,
+        manager: RunManager,
+        mission_id: str,
+        status: str,
+        timeout: float = 2,
+    ) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            current = manager.get_mission(mission_id)
+            if current and current["status"] == status:
+                return
+            time.sleep(0.02)
+        self.fail(f"mission {mission_id} did not reach {status}")
+
+    def wait_for_task_status(
+        self,
+        manager: RunManager,
+        mission_id: str,
+        task_id: str,
+        status: str,
+        timeout: float = 2,
+    ) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            current = manager.get_mission(mission_id)
+            if current:
+                for task in current["tasks"]:
+                    if task["task_id"] == task_id and task["status"] == status:
+                        return
+            time.sleep(0.02)
+        self.fail(f"task {mission_id}/{task_id} did not reach {status}")
 
     def wait_for_status_pair(
         self,

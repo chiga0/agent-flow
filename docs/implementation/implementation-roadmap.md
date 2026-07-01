@@ -21,8 +21,8 @@
 | P0 | 文档、边界和审计定稿 | `done` | 方案、审计、Roadmap 已入库并部署 |
 | P1 | 单 SAEU 最小闭环 | `done` | 一个 qwen serve run 可创建、输入、订阅、取消、产出 artifact，adapter 不泄漏 qwen 私有 API |
 | P2 | 审计、权限、恢复硬化 | `done` | Event Store、Permission Service、Artifact Collector 可用 |
-| P3 | 多 SAEU 并发与任务队列 | `in_progress` | 1-2 个 SAEU 并发运行，队列限流生效 |
-| P4 | Supervisor + Profile + SAEU 编排 | `not_started` | 常驻 supervisor 可基于 profile 创建一个或多个 SAEU run；SubAgent 仅作为 SAEU 内部优化 |
+| P3 | 多 SAEU 并发与任务队列 | `done` | 1-2 个 SAEU 并发运行，队列限流生效 |
+| P4 | Supervisor + Profile + SAEU 编排 | `done` | 常驻 supervisor 可基于 profile 创建一个或多个 SAEU run；SubAgent 仅作为 SAEU 内部优化 |
 | P5 | 外部协议与替代组件评估 | `not_started` | ACP Streamable HTTP、A2A Gateway、E2B/Daytona、Temporal/LangGraph/Airflow 完成试点评估 |
 | P6 | Beta 稳定化 | `not_started` | 故障演练、回放、监控、备份、部署脚本完成 |
 
@@ -184,7 +184,7 @@ P3 剩余风险：
 
 ## P4：Supervisor + Profile + SAEU 编排
 
-状态：`not_started`
+状态：`done`
 
 目标：
 
@@ -197,16 +197,34 @@ P3 剩余风险：
 
 | 任务 | 状态 | 验收 |
 | --- | --- | --- |
-| mission/task 数据模型 | `not_started` | mission 可拆多个 task |
-| Profile Registry | `not_started` | 系统内置 profile + 用户自定义 profile + 版本化 resolved profile |
-| profile 定义 | `not_started` | planner/coder/tester/reviewer/doc-writer 权限、模型、workspace、artifact 要求不同 |
-| profile -> agent instance 映射 | `not_started` | 一个 profile 可启动多个 SAEU instance |
-| task -> SAEU 调度策略 | `not_started` | mission/task DAG 中的 task 默认创建 SAEU run |
+| mission/task 数据模型 | `done` | `missions`、`mission_tasks`、`mission_events` 持久化，mission 可拆多个 task |
+| Profile Registry | `done` | 系统内置 profile + 用户自定义 profile + 版本化 resolved profile |
+| profile 定义 | `done` | planner/coder/tester/reviewer/doc-writer 权限、模型、workspace、artifact 要求不同 |
+| profile -> agent instance 映射 | `done` | 一个 profile 可启动多个 SAEU instance；每个 task run 带 profile snapshot |
+| task -> SAEU 调度策略 | `done` | mission/task DAG 中的 ready task 默认创建 SAEU run |
 | runtime SubAgent 内部优化策略 | `deferred` | 仅作为 SAEU 内部能力；不进入 MVP 平台调度 |
-| task dependency | `not_started` | 支持串行和 fan-out/fan-in |
-| artifact handoff | `not_started` | 子任务只通过 artifact 传递结果 |
-| reviewer gate | `not_started` | 高风险 finding 阻塞合并 |
-| final report | `not_started` | 汇总所有子任务和 artifact 引用 |
+| task dependency | `done` | 支持串行和 fan-out/fan-in |
+| artifact handoff | `done` | 子任务只通过 artifact 引用和事件传递结果 |
+| reviewer gate | `deferred` | 当前有 reviewer task；自动高风险 finding 阻塞合并放入 P6 hardening |
+| final report | `done` | 汇总所有子任务和 artifact 引用 |
+
+P4 当前实现：
+
+- `GET /profiles`、`GET /profiles/{profile_id}`、`POST /profiles` 提供 profile registry。
+- 内置 `planner`、`coder`、`tester`、`reviewer`、`doc-writer` profile。
+- `POST /missions` 创建 mission，并支持 `sequential`、`fanout`、`custom` 三种策略。
+- 每个 ready task 都创建一个普通 SAEU run，继承 P1-P3 的 workspace、resource、queue、event、artifact、cleanup 能力。
+- task run spec 写入 `mission_id`、`task_id`、`task_profile`、`profile_snapshot` 和 dependency artifact refs。
+- `GET /missions/{mission_id}`、`events.json`、`artifacts` 可恢复 mission 状态和审计链。
+- `POST /missions/{mission_id}/cancel` 会取消 active child run，并把 pending task 标为 cancelled。
+- mission artifact 存放在 `artifact_root/missions/<mission_id>/`，包含 manifest、events、task JSON 和 final report。
+
+P4 剩余风险：
+
+- Supervisor 目前是确定性 in-process controller，还不是有长期记忆的 Project Agent SAEU。
+- reviewer gate 只完成 reviewer task 与 artifact 汇总，尚未解析 finding 并自动阻塞 merge。
+- artifact handoff 当前传递稳定引用，不复制 sibling workspace，也不做 patch merge。
+- qwen adapter 仍是单 `qwen serve` endpoint；强隔离多 qwen daemon registry 属于后续 worker/container 化。
 
 ## P5：外部协议与替代组件评估
 
@@ -270,14 +288,12 @@ P3 剩余风险：
 
 ## 当前优先级
 
-近期只做 P1 和 P2，不提前铺太大：
+近期主线：
 
-1. qwen serve SAEU adapter。
-2. canonical event schema。
-3. Event Store。
-4. Permission Service。
-5. Artifact Collector。
-6. runtime adapter capability schema。
-7. 基础 replay。
+1. 用 fake adapter 跑通 P4 mission/profile smoke。
+2. 等部署密钥可用后，用 qwen serve 验收单 run 和两 task mission。
+3. 设计 reviewer gate finding schema。
+4. 评估 P5 的 ACP Streamable HTTP adapter 和 A2A Gateway。
+5. 评估 Temporal/LangGraph 是否接管 durable mission workflow。
 
-这些完成前，不建议投入复杂多 Agent supervisor，也不建议接入 Temporal 或云沙箱。
+P4 已能证明 `mission -> task -> profile -> SAEU run` 的基础编排闭环；P5/P6 再决定是否把 mission workflow 迁移到 Temporal/LangGraph，或引入云沙箱。
