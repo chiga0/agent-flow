@@ -32,6 +32,8 @@ class QwenServeAdapter(RuntimeAdapter):
         self.base_url = (base_url or os.environ.get("QWEN_SERVE_URL") or "").rstrip("/")
         self.token = token or os.environ.get("QWEN_SERVE_TOKEN")
         self._sessions: dict[str, str] = {}
+        self._active_prompts: dict[str, int] = {}
+        self._prompt_ids: dict[str, dict[str, int]] = {}
         self._cancelled: set[str] = set()
         self._lock = threading.Lock()
 
@@ -138,6 +140,49 @@ class QwenServeAdapter(RuntimeAdapter):
             {"adapter": self.name, "qwen_session_id": session_id, "reason": reason or "cancelled"},
         )
 
+    def resolve_permission(
+        self,
+        run: RunState,
+        permission_id: str,
+        payload: dict[str, Any],
+        store: RunStore,
+    ) -> None:
+        decision_payload = self._permission_payload(payload)
+        try:
+            response = self._request("POST", f"/permission/{permission_id}", decision_payload)
+        except Exception as exc:  # noqa: BLE001 - surface qwen mediation failure
+            store.append_event(
+                run.run_id,
+                "permission.resolve_failed",
+                {
+                    "adapter": self.name,
+                    "permission_id": permission_id,
+                    "decision": payload["decision"],
+                    "reason": str(exc),
+                },
+            )
+            raise
+        store.append_raw_event(
+            run.run_id,
+            self.name,
+            {
+                "kind": "permission_response",
+                "permission_id": permission_id,
+                "response": response,
+            },
+        )
+        store.append_event(
+            run.run_id,
+            "permission.resolved",
+            {
+                "permission_id": permission_id,
+                "decision": payload["decision"],
+                "decided_by": payload.get("decided_by"),
+                "reason": payload.get("reason"),
+                "qwen_response": response,
+            },
+        )
+
     def _post_prompt(
         self,
         run_id: str,
@@ -153,12 +198,18 @@ class QwenServeAdapter(RuntimeAdapter):
             "step.started",
             {"adapter": self.name, "prompt_number": prompt_number, "qwen_session_id": session_id},
         )
+        with self._lock:
+            self._active_prompts[run_id] = prompt_number
         try:
             response = self._request(
                 "POST",
                 f"/session/{session_id}/prompt",
                 {"prompt": [{"type": "text", "text": prompt}]},
             )
+            prompt_id = response.get("promptId") or response.get("prompt_id")
+            with self._lock:
+                if isinstance(prompt_id, str):
+                    self._prompt_ids.setdefault(run_id, {})[prompt_id] = prompt_number
             store.append_raw_event(
                 run_id,
                 self.name,
@@ -168,20 +219,14 @@ class QwenServeAdapter(RuntimeAdapter):
                     "response": response,
                 },
             )
-            store.write_json(
-                run_id,
-                f"final_{prompt_number}.json",
-                {"prompt_number": prompt_number, "qwen_response": response},
-            )
             if not self._is_cancelled(run_id):
-                store.append_event(run_id, "step.completed", {"prompt_number": prompt_number})
                 store.append_event(
                     run_id,
-                    "run.completed",
+                    "step.submitted",
                     {
                         "prompt_number": prompt_number,
-                        "stop_reason": response.get("stopReason"),
-                        "final_artifact": f"final_{prompt_number}.json",
+                        "prompt_id": prompt_id,
+                        "qwen_response": response,
                     },
                 )
         except Exception as exc:  # noqa: BLE001
@@ -197,40 +242,94 @@ class QwenServeAdapter(RuntimeAdapter):
                 )
 
     def _pump_events(self, run_id: str, session_id: str, store: RunStore) -> None:
-        try:
-            request = self._build_request("GET", f"/session/{session_id}/events")
-            with urllib.request.urlopen(request, timeout=60) as response:
-                event_name: str | None = None
-                event_id: str | None = None
-                data_lines: list[str] = []
-                for raw_line in response:
-                    if self._is_cancelled(run_id) or store.is_terminal(run_id):
-                        return
-                    line = raw_line.decode("utf-8").rstrip("\n")
-                    if line.startswith("id:"):
-                        event_id = line[3:].strip()
-                    elif line.startswith("event:"):
-                        event_name = line[6:].strip()
-                    elif line.startswith("data:"):
-                        data_lines.append(line[5:].strip())
-                    elif line == "" and data_lines:
-                        payload = parse_json_or_text("\n".join(data_lines))
-                        store.append_raw_event(
-                            run_id,
-                            self.name,
-                            {"sse_id": event_id, "event": event_name, "data": payload},
-                        )
-                        self._map_qwen_event(run_id, event_name, payload, store)
-                        event_name = None
-                        event_id = None
-                        data_lines = []
-        except Exception as exc:  # noqa: BLE001
-            if not store.is_terminal(run_id):
+        last_sse_id: str | None = None
+        reconnects = 0
+        while not self._is_cancelled(run_id) and not store.is_terminal(run_id):
+            try:
+                last_sse_id, events_seen = self._read_event_stream(
+                    run_id, session_id, last_sse_id, store
+                )
+                reconnects = 0 if events_seen else reconnects + 1
+                if store.is_terminal(run_id) or self._is_cancelled(run_id):
+                    return
                 store.append_event(
                     run_id,
                     "stream.warning",
-                    {"adapter": self.name, "reason": str(exc)},
+                    {
+                        "adapter": self.name,
+                        "reason": "qwen event stream closed before terminal event",
+                        "last_sse_id": last_sse_id,
+                        "reconnect": reconnects,
+                    },
                 )
+            except Exception as exc:  # noqa: BLE001
+                if store.is_terminal(run_id) or self._is_cancelled(run_id):
+                    return
+                reconnects += 1
+                store.append_event(
+                    run_id,
+                    "stream.warning",
+                    {
+                        "adapter": self.name,
+                        "reason": str(exc),
+                        "last_sse_id": last_sse_id,
+                        "reconnect": reconnects,
+                    },
+                )
+            if reconnects >= 3:
+                if not store.is_terminal(run_id):
+                    store.append_event(
+                        run_id,
+                        "run.failed",
+                        {
+                            "adapter": self.name,
+                            "reason": "qwen event stream disconnected",
+                            "last_sse_id": last_sse_id,
+                        },
+                    )
+                return
+
+    def _read_event_stream(
+        self,
+        run_id: str,
+        session_id: str,
+        last_sse_id: str | None,
+        store: RunStore,
+    ) -> tuple[str | None, int]:
+        headers = {"accept": "text/event-stream"}
+        if last_sse_id:
+            headers["Last-Event-ID"] = last_sse_id
+        request = self._build_request("GET", f"/session/{session_id}/events", headers=headers)
+        events_seen = 0
+        event_name: str | None = None
+        event_id: str | None = None
+        data_lines: list[str] = []
+        with urllib.request.urlopen(request, timeout=60) as response:
+            for raw_line in response:
+                if self._is_cancelled(run_id) or store.is_terminal(run_id):
+                    return last_sse_id, events_seen
+                line = raw_line.decode("utf-8").rstrip("\n")
+                if line.startswith("id:"):
+                    event_id = line[3:].strip()
+                elif line.startswith("event:"):
+                    event_name = line[6:].strip()
+                elif line.startswith("data:"):
+                    data_lines.append(line[5:].strip())
+                elif line == "" and data_lines:
+                    payload = parse_json_or_text("\n".join(data_lines))
+                    self._record_qwen_gap(run_id, last_sse_id, event_id, store)
+                    store.append_raw_event(
+                        run_id,
+                        self.name,
+                        {"sse_id": event_id, "event": event_name, "data": payload},
+                    )
+                    self._map_qwen_event(run_id, event_name, payload, store)
+                    last_sse_id = event_id or last_sse_id
+                    events_seen += 1
+                    event_name = None
+                    event_id = None
+                    data_lines = []
+        return last_sse_id, events_seen
 
     def _map_qwen_event(
         self, run_id: str, event_name: str | None, payload: Any, store: RunStore
@@ -259,7 +358,44 @@ class QwenServeAdapter(RuntimeAdapter):
         if qwen_type in {"session_died", "client_evicted"}:
             store.append_event(run_id, "run.failed", {"raw": payload})
             return
+        if qwen_type == "turn_complete":
+            self._complete_turn(run_id, payload, store)
+            return
+        if qwen_type == "turn_error":
+            store.append_event(run_id, "run.failed", {"raw": payload})
+            return
         store.append_event(run_id, "adapter.event", {"adapter": self.name, "raw": payload})
+
+    def _complete_turn(self, run_id: str, payload: dict[str, Any], store: RunStore) -> None:
+        if store.is_terminal(run_id):
+            return
+        prompt_number = self._prompt_number_for_event(run_id, payload)
+        final_artifact = f"final_{prompt_number}.json" if prompt_number else "final_qwen.json"
+        store.write_json(
+            run_id,
+            final_artifact,
+            {"prompt_number": prompt_number, "qwen_event": payload},
+        )
+        store.append_event(run_id, "step.completed", {"prompt_number": prompt_number})
+        store.append_event(
+            run_id,
+            "run.completed",
+            {
+                "prompt_number": prompt_number,
+                "final_artifact": final_artifact,
+                "raw": payload,
+            },
+        )
+
+    def _prompt_number_for_event(self, run_id: str, payload: dict[str, Any]) -> int | None:
+        data = payload.get("data")
+        prompt_id = data.get("promptId") if isinstance(data, dict) else None
+        with self._lock:
+            if isinstance(prompt_id, str):
+                prompt_number = self._prompt_ids.get(run_id, {}).get(prompt_id)
+                if prompt_number:
+                    return prompt_number
+            return self._active_prompts.get(run_id)
 
     def _request(
         self, method: str, path: str, payload: dict[str, Any] | None = None
@@ -279,19 +415,24 @@ class QwenServeAdapter(RuntimeAdapter):
         return parsed
 
     def _build_request(
-        self, method: str, path: str, payload: dict[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> urllib.request.Request:
         body = None
-        headers = {"accept": "application/json"}
+        request_headers = {"accept": "application/json"}
+        request_headers.update(headers or {})
         if payload is not None:
             body = json.dumps(payload).encode("utf-8")
-            headers["content-type"] = "application/json"
+            request_headers["content-type"] = "application/json"
         if self.token:
-            headers["authorization"] = f"Bearer {self.token}"
+            request_headers["authorization"] = f"Bearer {self.token}"
         return urllib.request.Request(
             f"{self.base_url}{path}",
             data=body,
-            headers=headers,
+            headers=request_headers,
             method=method,
         )
 
@@ -299,9 +440,49 @@ class QwenServeAdapter(RuntimeAdapter):
         with self._lock:
             return run_id in self._cancelled
 
+    def _permission_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        decision = payload["decision"]
+        if decision == "cancel":
+            return {"outcome": {"outcome": "cancelled", "reason": payload.get("reason")}}
+        option_id = payload.get("option_id") or payload.get("optionId")
+        if not isinstance(option_id, str) or not option_id:
+            option_id = "proceed_once" if decision == "approve" else "deny"
+        return {"outcome": {"outcome": "selected", "optionId": option_id}}
+
+    def _record_qwen_gap(
+        self,
+        run_id: str,
+        previous_sse_id: str | None,
+        current_sse_id: str | None,
+        store: RunStore,
+    ) -> None:
+        previous = parse_int(previous_sse_id)
+        current = parse_int(current_sse_id)
+        if previous is None or current is None or current <= previous + 1:
+            return
+        store.append_event(
+            run_id,
+            "event.gap_detected",
+            {
+                "source": "qwen_sse",
+                "previous_sse_id": previous,
+                "current_sse_id": current,
+                "missing": current - previous - 1,
+            },
+        )
+
 
 def parse_json_or_text(value: str) -> Any:
     try:
         return json.loads(value)
     except json.JSONDecodeError:
         return value
+
+
+def parse_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None

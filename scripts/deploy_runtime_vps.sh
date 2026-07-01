@@ -17,6 +17,24 @@ PUBLIC_HOST="${PUBLIC_HOST:-_}"
 BASIC_AUTH_USER="${BASIC_AUTH_USER:-cloudagents}"
 BASIC_AUTH_PASSWORD="${BASIC_AUTH_PASSWORD:-$(openssl rand -base64 18 | tr -d '=+/' | cut -c1-18)}"
 
+case "$PUBLIC_HOST" in
+  *[!A-Za-z0-9._-]*)
+    echo "PUBLIC_HOST may only contain letters, numbers, dots, underscores, or hyphens" >&2
+    exit 2
+    ;;
+esac
+
+case "$BASIC_AUTH_USER" in
+  *[!A-Za-z0-9._-]* | "")
+    echo "BASIC_AUTH_USER may only contain letters, numbers, dots, underscores, or hyphens" >&2
+    exit 2
+    ;;
+esac
+
+shell_quote() {
+  printf "%q" "$1"
+}
+
 ssh_cmd() {
   ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "$SSH_TARGET" "$@"
 }
@@ -29,14 +47,14 @@ if [[ -n "$QWEN_SETTINGS_FILE" ]]; then
 fi
 
 REMOTE_ENV=(
-  "APP_DIR='$APP_DIR'"
-  "STATE_DIR='$STATE_DIR'"
-  "REPO_URL='$REPO_URL'"
-  "NODE_PACKAGE='$NODE_PACKAGE'"
-  "HAS_QWEN_SETTINGS='$([[ -n "$QWEN_SETTINGS_FILE" ]] && echo 1 || echo 0)'"
-  "PUBLIC_HOST='$PUBLIC_HOST'"
-  "BASIC_AUTH_USER='$BASIC_AUTH_USER'"
-  "BASIC_AUTH_PASSWORD='$BASIC_AUTH_PASSWORD'"
+  "APP_DIR=$(shell_quote "$APP_DIR")"
+  "STATE_DIR=$(shell_quote "$STATE_DIR")"
+  "REPO_URL=$(shell_quote "$REPO_URL")"
+  "NODE_PACKAGE=$(shell_quote "$NODE_PACKAGE")"
+  "HAS_QWEN_SETTINGS=$(shell_quote "$([[ -n "$QWEN_SETTINGS_FILE" ]] && echo 1 || echo 0)")"
+  "PUBLIC_HOST=$(shell_quote "$PUBLIC_HOST")"
+  "BASIC_AUTH_USER=$(shell_quote "$BASIC_AUTH_USER")"
+  "BASIC_AUTH_PASSWORD=$(shell_quote "$BASIC_AUTH_PASSWORD")"
 )
 
 ssh_cmd "${REMOTE_ENV[*]} bash -s" <<'REMOTE'

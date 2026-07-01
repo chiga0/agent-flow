@@ -121,6 +121,9 @@ def make_handler(
             except ValueError as exc:
                 self.write_error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
+            except RuntimeError as exc:
+                self.write_error(HTTPStatus.BAD_GATEWAY, str(exc))
+                return
             except json.JSONDecodeError:
                 self.write_error(HTTPStatus.BAD_REQUEST, "invalid json")
                 return

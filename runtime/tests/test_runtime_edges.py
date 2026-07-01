@@ -17,7 +17,11 @@ from unittest.mock import patch
 
 from runtime.cloud_agents_runtime.adapters.base import RuntimeAdapter
 from runtime.cloud_agents_runtime.adapters.fake import FakeAdapter
-from runtime.cloud_agents_runtime.adapters.qwen import QwenServeAdapter, parse_json_or_text
+from runtime.cloud_agents_runtime.adapters.qwen import (
+    QwenServeAdapter,
+    parse_int,
+    parse_json_or_text,
+)
 from runtime.cloud_agents_runtime.auth import AuthConfig, is_authorized
 from runtime.cloud_agents_runtime.manager import RunManager
 from runtime.cloud_agents_runtime.models import RunSpec
@@ -124,7 +128,35 @@ class RuntimeEdgeTest(unittest.TestCase):
             self.assertIn("permission.requested", names)
             self.assertIn("permission.resolved", names)
             self.assertIn("run.failed", names)
+
+            complete_run = store.create_run(RunSpec(adapter="qwen"))
+            adapter._active_prompts[complete_run.run_id] = 1
+            adapter._map_qwen_event(
+                complete_run.run_id,
+                "turn_complete",
+                {"type": "turn_complete", "data": {"promptId": "missing"}},
+                store,
+            )
+            self.assertEqual(store.get_run(complete_run.run_id).status, "completed")
+
+            error_run = store.create_run(RunSpec(adapter="qwen"))
+            adapter._map_qwen_event(
+                error_run.run_id,
+                "turn_error",
+                {"type": "turn_error", "data": {"message": "boom"}},
+                store,
+            )
+            self.assertEqual(store.get_run(error_run.run_id).status, "failed")
+
+            gap_run = store.create_run(RunSpec(adapter="qwen"))
+            adapter._record_qwen_gap(gap_run.run_id, "1", "4", store)
+            self.assertIn(
+                "event.gap_detected",
+                [event.type for event in store.events_since(gap_run.run_id)],
+            )
             self.assertEqual(parse_json_or_text("{"), "{")
+            self.assertEqual(parse_int("7"), 7)
+            self.assertIsNone(parse_int("x"))
 
     def test_small_adapter_and_store_edges(self) -> None:
         self.assertEqual(FakeAdapter._chunks(""), ["empty prompt"])
@@ -133,6 +165,18 @@ class RuntimeEdgeTest(unittest.TestCase):
         adapter = QwenServeAdapter(base_url="http://example.test", token="tok")
         request = adapter._build_request("GET", "/x")
         self.assertEqual(request.headers["Authorization"], "Bearer tok")
+        self.assertEqual(
+            adapter._permission_payload({"decision": "approve"}),
+            {"outcome": {"outcome": "selected", "optionId": "proceed_once"}},
+        )
+        self.assertEqual(
+            adapter._permission_payload({"decision": "deny"}),
+            {"outcome": {"outcome": "selected", "optionId": "deny"}},
+        )
+        self.assertEqual(
+            adapter._permission_payload({"decision": "cancel", "reason": "timeout"}),
+            {"outcome": {"outcome": "cancelled", "reason": "timeout"}},
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             store = RunStore(Path(tmp))

@@ -63,20 +63,11 @@ class RunManager:
         self._adapter(run.spec.adapter).cancel(run, reason, self.store)
 
     def resolve_permission(self, run_id: str, permission_id: str, payload: dict[str, Any]) -> None:
-        self._require_run(run_id)
+        run = self._require_run(run_id)
         decision = payload.get("decision")
         if decision not in {"approve", "deny", "cancel"}:
             raise ValueError("decision must be approve, deny, or cancel")
-        self.store.append_event(
-            run_id,
-            "permission.resolved",
-            {
-                "permission_id": permission_id,
-                "decision": decision,
-                "decided_by": payload.get("decided_by"),
-                "reason": payload.get("reason"),
-            },
-        )
+        self._adapter(run.spec.adapter).resolve_permission(run, permission_id, payload, self.store)
 
     def get_run(self, run_id: str) -> RunState | None:
         return self.store.get_run(run_id)

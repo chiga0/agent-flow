@@ -129,6 +129,20 @@ class RuntimeServerTest(unittest.TestCase):
                         encoding="utf-8"
                     )
                     self.assertIn("agent_message_chunk", raw)
+                    self.assertIn("turn_complete", raw)
+                    request_json(
+                        f"{base_url}/runs/{run['run_id']}/permissions/perm-qwen",
+                        method="POST",
+                        payload={
+                            "decision": "approve",
+                            "decided_by": "tester",
+                            "option_id": "allow_once",
+                        },
+                    )
+                    self.assertEqual(
+                        FakeQwenHandler.permission_response,
+                        {"outcome": {"outcome": "selected", "optionId": "allow_once"}},
+                    )
 
 
 class running_runtime:
@@ -169,6 +183,9 @@ class running_fake_qwen:
 
     def __enter__(self) -> str:
         FakeQwenHandler.cancelled = False
+        FakeQwenHandler.permission_response = None
+        FakeQwenHandler.prompt_event = threading.Event()
+        FakeQwenHandler.event_connections = 0
         self.thread.start()
         host, port = self.server.server_address
         return f"http://{host}:{port}"
@@ -182,33 +199,44 @@ class running_fake_qwen:
 class FakeQwenHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     cancelled = False
+    permission_response: dict[str, Any] | None = None
+    prompt_event = threading.Event()
+    event_connections = 0
 
     def do_GET(self) -> None:
         if self.path == "/health":
             self.write_json({"ok": True})
             return
         if self.path == "/session/session-1/events":
+            FakeQwenHandler.event_connections += 1
+            FakeQwenHandler.prompt_event.wait(timeout=2)
             self.send_response(HTTPStatus.OK)
             self.send_header("content-type", "text/event-stream")
             self.send_header("connection", "close")
             self.end_headers()
-            frame = {
-                "id": 1,
-                "v": 1,
-                "type": "session_update",
-                "data": {
-                    "sessionUpdate": "agent_message_chunk",
-                    "content": {"type": "text", "text": "hello from qwen"},
+            self.write_sse(
+                1,
+                "session_update",
+                {
+                    "id": 1,
+                    "v": 1,
+                    "type": "session_update",
+                    "data": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": "hello from qwen"},
+                    },
                 },
-            }
-            self.wfile.write(
-                (
-                    "id: 1\n"
-                    "event: session_update\n"
-                    f"data: {json.dumps(frame)}\n\n"
-                ).encode("utf-8")
             )
-            self.wfile.flush()
+            self.write_sse(
+                2,
+                "turn_complete",
+                {
+                    "id": 2,
+                    "v": 1,
+                    "type": "turn_complete",
+                    "data": {"promptId": "prompt-1"},
+                },
+            )
             return
         self.write_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -221,12 +249,19 @@ class FakeQwenHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/session/session-1/prompt":
             self.read_body()
-            self.write_json({"stopReason": "end_turn"})
+            FakeQwenHandler.prompt_event.set()
+            self.write_json({"accepted": True, "promptId": "prompt-1"}, status=HTTPStatus.ACCEPTED)
             return
         if self.path == "/session/session-1/cancel":
             FakeQwenHandler.cancelled = True
             self.read_body()
             self.write_json({"cancelled": True})
+            return
+        if self.path == "/permission/perm-qwen":
+            FakeQwenHandler.permission_response = json.loads(
+                self.read_body().decode("utf-8")
+            )
+            self.write_json({"ok": True})
             return
         self.write_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -241,6 +276,16 @@ class FakeQwenHandler(BaseHTTPRequestHandler):
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def write_sse(self, event_id: int, event_name: str, payload: dict[str, Any]) -> None:
+        self.wfile.write(
+            (
+                f"id: {event_id}\n"
+                f"event: {event_name}\n"
+                f"data: {json.dumps(payload)}\n\n"
+            ).encode("utf-8")
+        )
+        self.wfile.flush()
 
     def log_message(self, fmt: str, *args: Any) -> None:
         return

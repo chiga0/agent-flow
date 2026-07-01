@@ -254,7 +254,9 @@ QWEN_SETTINGS_FILE=/path/to/settings.json \
 
 The runtime should remain bound to `127.0.0.1`. For browser access, put Nginx in
 front of it, require Basic Auth at the edge, and let Nginx inject the internal
-Run Manager bearer token.
+Run Manager bearer token. Do not expose this HTTP listener directly on the
+public internet; terminate TLS at Nginx, Cloudflare, a load balancer, or keep the
+route behind a VPN such as WireGuard/Tailscale.
 
 Use `deploy/nginx/cloud-agents-runtime.conf.example` as the starting point and
 write the backend auth header into:
