@@ -6,11 +6,13 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .adapters import FakeAdapter, QwenServeAdapter, RuntimeAdapter
 from .events import RuntimeEvent, TERMINAL_RUN_EVENTS
 from .models import RunSpec, RunState
 from .store import RunStore
+from .workspace import WorkspaceAllocator
 
 
 class RunManager:
@@ -26,6 +28,7 @@ class RunManager:
         heartbeat_enabled: bool = False,
     ):
         self.store = RunStore(artifact_root)
+        self.workspace_allocator = WorkspaceAllocator(artifact_root)
         self.adapters = adapters or {
             "fake": FakeAdapter(),
             "qwen": QwenServeAdapter(base_url=qwen_base_url, token=qwen_token),
@@ -84,6 +87,7 @@ class RunManager:
                 "run_leases",
                 "worker_heartbeat",
                 "worker_capacity",
+                "per_run_workspace",
             ],
             "queue": self.queue_status(),
             "adapters": {
@@ -93,7 +97,11 @@ class RunManager:
 
     def create_run(self, spec: RunSpec) -> RunState:
         self._adapter(spec.adapter)
-        run = self.store.create_run(spec)
+        run_id = f"run_{uuid4().hex}"
+        allocation = self.workspace_allocator.prepare(run_id, spec)
+        run = self.store.create_run(spec, run_id=run_id)
+        self.store.write_json(run.run_id, "workspace.json", allocation.to_dict())
+        self.store.append_event(run.run_id, "workspace.prepared", allocation.to_dict())
         self.store.enqueue_run(run.run_id)
         self._drain_queue()
         return self.store.get_run(run.run_id) or run

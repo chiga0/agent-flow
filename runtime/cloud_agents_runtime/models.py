@@ -47,8 +47,8 @@ class RunState:
     prompt_count: int = 0
 
     @classmethod
-    def create(cls, spec: RunSpec) -> "RunState":
-        return cls(run_id=f"run_{uuid4().hex}", spec=spec)
+    def create(cls, spec: RunSpec, run_id: str | None = None) -> "RunState":
+        return cls(run_id=run_id or f"run_{uuid4().hex}", spec=spec)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

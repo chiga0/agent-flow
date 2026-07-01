@@ -158,7 +158,7 @@ P2 当前判断：
 | jobs/leases 表 | `done` | SQLite `run_jobs` 表持久化 queued/running/terminal job，过期 lease 可回收到队列 |
 | worker heartbeat | `done` | SQLite `workers` 表、`/queue`、`/workers` 和浏览器控制台可见 worker 状态 |
 | per-worker capacity | `done` | `RUN_MANAGER_WORKER_CAPACITY` / `--worker-capacity` 生效，超容量 run 保持 queued |
-| per-run workspace | `not_started` | 并发 run 文件隔离 |
+| per-run workspace | `done` | 每个 run 默认分配 `artifact_root/workspaces/<run_id>`；local git source 优先使用 detached worktree |
 | resource limits | `not_started` | CPU/memory/pids 限制生效 |
 | cleanup policy | `not_started` | workspace/artifact 按保留策略清理 |
 | 双 VPS worker 模式 | `deferred` | control plane 与 sandbox worker 分离 |
@@ -166,6 +166,7 @@ P2 当前判断：
 P3 当前实现：
 
 - `POST /runs` 先写入 `run.queued`，由本地 worker 在容量允许时 claim lease。
+- 每个 run 在入队前写入 `workspace.prepared`，并保存 `workspace.json` 和 resolved workspace metadata。
 - `lease.claimed`、`lease.expired`、`run.completed` / `run.failed` / `run.cancelled` 都写入同一 canonical event stream。
 - `GET /queue` 返回 job counts、jobs 和 workers；`GET /workers` 返回 worker heartbeat 视图。
 - 浏览器控制台增加 Queue 面板，显示 queued/running/capacity/active 和 worker heartbeat。
@@ -174,7 +175,8 @@ P3 当前实现：
 P3 剩余风险：
 
 - 当前 worker 仍在 Run Manager 进程内，跨 VPS worker 需要把 claim/heartbeat 迁移到远程 worker loop。
-- 当前 workspace 仍依赖 adapter/workspace 参数，尚未强制每个 run 一个 git worktree 或容器目录。
+- 远程 repo clone/credential policy 尚未接入，当前会显式拒绝而不是静默创建空 workspace。
+- qwen adapter 仍连接一个 `qwen serve` endpoint；强隔离 qwen 并发需要 per-workspace daemon registry 或容器 worker。
 - 当前 resource limit 仍是部署层要求，尚未由 Run Manager 自动下发 cgroup/Docker 限制。
 
 ## P4：Supervisor + Profile + SAEU 编排

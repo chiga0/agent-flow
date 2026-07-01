@@ -51,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
             "raw_events.jsonl",
             "input_1.json",
             "diagnostics.json",
+            "workspace.json",
         ]
         run_dir = args.artifact_root / run_id
         missing = [name for name in required if not (run_dir / name).exists()]

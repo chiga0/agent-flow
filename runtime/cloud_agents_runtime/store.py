@@ -33,9 +33,9 @@ class RunStore:
         with self._lock:
             self._event_listeners.append(listener)
 
-    def create_run(self, spec: RunSpec) -> RunState:
+    def create_run(self, spec: RunSpec, run_id: str | None = None) -> RunState:
         with self._lock:
-            run = RunState.create(spec)
+            run = RunState.create(spec, run_id=run_id)
             self._runs[run.run_id] = run
             self._events[run.run_id] = []
             self._conditions[run.run_id] = threading.Condition(self._lock)
@@ -631,6 +631,7 @@ class RunStore:
             "updated_at": run.updated_at,
             "event_count": run.event_count,
             "prompt_count": run.prompt_count,
+            "workspace": run.spec.workspace,
             "artifact_dir": str(self.run_dir(run_id)),
         }
         job = self._jobs.get(run_id)

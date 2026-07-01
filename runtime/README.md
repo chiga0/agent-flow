@@ -31,6 +31,11 @@ Postgres when multiple control-plane instances are required.
 - Canonical events are persisted in `runtime.db` and `events.jsonl`.
 - Run queue state is persisted in `run_jobs`; local worker state is persisted in
   `workers`.
+- Each run receives a resolved workspace before it is queued. Local git sources
+  use a detached worktree under `artifact_root/workspaces/<run_id>`; runs
+  without a source receive an empty isolated directory. Remote repo cloning is
+  intentionally rejected until credentials, checkout policy, and audit metadata
+  are implemented.
 - `diagnostics.json` is maintained per run.
 - `scripts/replay_run.py` can replay events, SSE frames, or rebuilt state from
   artifacts.
@@ -157,14 +162,16 @@ Acceptance:
 - API routes other than `/health` require `Authorization: Bearer ...` when
   `RUN_MANAGER_TOKEN` is set.
 - `POST /runs` returns a `run_id`.
-- SSE emits `run.created`, `run.queued`, `lease.claimed`, `run.started`,
-  `input.accepted`, `message.delta`, `step.completed`, and `run.completed`.
+- SSE emits `run.created`, `workspace.prepared`, `run.queued`, `lease.claimed`,
+  `run.started`, `input.accepted`, `message.delta`, `step.completed`, and
+  `run.completed`.
 - SSE honors `Last-Event-ID`; if the client asks for an event sequence beyond
   what the store has, the server records and streams `event.gap_detected`.
 - `POST /runs/{run_id}/permissions/{permission_id}` records
   `permission.resolved` in the same audit trail.
 - The run directory contains `run_spec.json`, `events.jsonl`,
-  `raw_events.jsonl`, `input_1.json`, `diagnostics.json`, and `final_1.json`.
+  `raw_events.jsonl`, `input_1.json`, `workspace.json`, `diagnostics.json`, and
+  `final_1.json`.
 - The artifact root contains `runtime.db` with `runs`, `run_events`,
   `raw_events`, `run_jobs`, and `workers`.
 
@@ -225,6 +232,8 @@ The current cloud-runnable slice includes:
 - Run Manager bound to `127.0.0.1` with bearer-token auth.
 - Local worker queue with persisted `run_jobs`, worker heartbeat, lease
   reclamation, and per-worker capacity.
+- Per-run workspace allocation with `workspace.prepared` audit event and
+  `workspace.json` artifact.
 - Managed `qwen serve` process for one workspace when `QWEN_SERVE_COMMAND` is
   configured.
 - Persistent artifact directory on disk with `runtime.db` and JSONL artifacts.

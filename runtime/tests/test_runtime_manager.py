@@ -33,10 +33,17 @@ class RunManagerTest(unittest.TestCase):
                 self.assertEqual(current.status, "completed")
                 events = manager.store.events_since(run.run_id)
                 self.assertEqual(events[0].type, "run.created")
+                self.assertEqual(events[1].type, "workspace.prepared")
                 self.assertTrue(any(event.type == "message.delta" for event in events))
                 self.assertTrue((Path(tmp) / run.run_id / "events.jsonl").exists())
                 self.assertTrue((Path(tmp) / run.run_id / "raw_events.jsonl").exists())
                 self.assertTrue((Path(tmp) / run.run_id / "final_1.json").exists())
+                self.assertTrue((Path(tmp) / run.run_id / "workspace.json").exists())
+                self.assertTrue(Path(current.spec.workspace).is_dir())
+                self.assertEqual(
+                    current.spec.metadata["workspace_allocation"]["strategy"],
+                    "empty",
+                )
             finally:
                 manager.shutdown()
 
@@ -209,6 +216,81 @@ class RunManagerTest(unittest.TestCase):
                 self.wait_for_status(manager, run.run_id, "completed")
                 events = [event.type for event in manager.store.events_since(run.run_id)]
                 self.assertIn("input.accepted", events)
+            finally:
+                manager.shutdown()
+
+    def test_git_workspace_uses_isolated_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            subprocess.run(["git", "init"], cwd=source, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.email", "runtime@example.test"],
+                cwd=source,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Runtime Test"],
+                cwd=source,
+                check=True,
+            )
+            (source / "README.md").write_text("hello workspace\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=source, check=True)
+            subprocess.run(
+                ["git", "commit", "--no-verify", "-m", "seed"],
+                cwd=source,
+                check=True,
+                capture_output=True,
+            )
+
+            artifact_root = root / "artifacts"
+            manager = RunManager(artifact_root, worker_capacity=0, worker_id="workspace-worker")
+            try:
+                run = manager.create_run(
+                    RunSpec(
+                        prompt="queued workspace",
+                        adapter="fake",
+                        workspace=str(source),
+                    )
+                )
+                current = manager.get_run(run.run_id)
+                self.assertIsNotNone(current)
+                workspace = Path(current.spec.workspace)
+                self.assertNotEqual(workspace, source)
+                self.assertTrue((workspace / "README.md").exists())
+                self.assertTrue((workspace / ".git").exists())
+                self.assertEqual(
+                    current.spec.metadata["workspace_allocation"]["strategy"],
+                    "git_worktree",
+                )
+
+                manifest = json.loads(
+                    (artifact_root / run.run_id / "workspace.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(manifest["source_path"], str(source.resolve()))
+                self.assertIn(
+                    "workspace.prepared",
+                    [event.type for event in manager.store.events_since(run.run_id)],
+                )
+            finally:
+                manager.shutdown()
+
+    def test_remote_repo_is_rejected_before_empty_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = RunManager(Path(tmp), worker_capacity=0, worker_id="repo-worker")
+            try:
+                with self.assertRaisesRegex(ValueError, "supported local directory"):
+                    manager.create_run(
+                        RunSpec(
+                            prompt="do not run empty",
+                            adapter="fake",
+                            repo="https://example.test/project.git",
+                        )
+                    )
+                self.assertFalse((Path(tmp) / "workspaces").exists())
             finally:
                 manager.shutdown()
 

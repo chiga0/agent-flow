@@ -59,12 +59,14 @@ class RuntimeServerTest(unittest.TestCase):
                 run_dir = Path(tmp) / run["run_id"]
                 self.assertTrue((run_dir / "events.jsonl").exists())
                 self.assertTrue((run_dir / "final_1.json").exists())
+                self.assertTrue((run_dir / "workspace.json").exists())
                 events_json = request_json(f"{base_url}/runs/{run['run_id']}/events.json")
                 self.assertIn("events", events_json)
                 artifacts = request_json(f"{base_url}/runs/{run['run_id']}/artifacts")
                 artifact_names = {artifact["name"] for artifact in artifacts["artifacts"]}
                 self.assertIn("events.jsonl", artifact_names)
                 self.assertIn("diagnostics.json", artifact_names)
+                self.assertIn("workspace.json", artifact_names)
 
     def test_sse_reconnect_and_gap_detection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
