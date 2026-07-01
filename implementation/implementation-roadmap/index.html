@@ -1117,8 +1117,8 @@
 </tr>
 <tr>
 <td>resource limits</td>
-<td><code>not_started</code></td>
-<td>CPU/memory/pids 限制生效</td>
+<td><code>done</code></td>
+<td>Run Manager 解析并审计 resource policy；timeout watchdog 生效；Docker/systemd 对执行单元施加 CPU/memory/pids cgroup 限制</td>
 </tr>
 <tr>
 <td>cleanup policy</td>
@@ -1136,17 +1136,19 @@
 <ul>
 <li><code>POST /runs</code> 先写入 <code>run.queued</code>，由本地 worker 在容量允许时 claim lease。</li>
 <li>每个 run 在入队前写入 <code>workspace.prepared</code>，并保存 <code>workspace.json</code> 和 resolved workspace metadata。</li>
+<li>每个 run 在入队前写入 <code>resources.resolved</code>，并保存 <code>resources.json</code>；<code>timeout_seconds</code> 由 Run Manager watchdog 取消超时 run。</li>
 <li><code>lease.claimed</code>、<code>lease.expired</code>、<code>run.completed</code> / <code>run.failed</code> / <code>run.cancelled</code> 都写入同一 canonical event stream。</li>
 <li><code>GET /queue</code> 返回 job counts、jobs 和 workers；<code>GET /workers</code> 返回 worker heartbeat 视图。</li>
 <li>浏览器控制台增加 Queue 面板，显示 queued/running/capacity/active 和 worker heartbeat。</li>
 <li>单进程 Run Manager 现在可以用 capacity=1 验证排队，用 capacity=2 在单 VPS 上跑 1-2 个 SAEU。</li>
+<li>Docker Compose 和 systemd 部署默认把整个执行单元限制在 1 CPU / 1G memory / 512 tasks/pids。</li>
 </ul>
 <p>P3 剩余风险：</p>
 <ul>
 <li>当前 worker 仍在 Run Manager 进程内，跨 VPS worker 需要把 claim/heartbeat 迁移到远程 worker loop。</li>
 <li>远程 repo clone/credential policy 尚未接入，当前会显式拒绝而不是静默创建空 workspace。</li>
 <li>qwen adapter 仍连接一个 <code>qwen serve</code> endpoint；强隔离 qwen 并发需要 per-workspace daemon registry 或容器 worker。</li>
-<li>当前 resource limit 仍是部署层要求，尚未由 Run Manager 自动下发 cgroup/Docker 限制。</li>
+<li>CPU/memory/pids 当前是执行单元级限制；严格的 per-run cgroup/Docker 限制需要引入容器 worker。</li>
 </ul>
 <h2 id="p4supervisor-profile-saeu">P4：Supervisor + Profile + SAEU 编排<a class="headerlink" href="#p4supervisor-profile-saeu" title="Permanent link">&para;</a></h2>
 <p>状态：<code>not_started</code></p>
