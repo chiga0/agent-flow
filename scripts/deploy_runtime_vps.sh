@@ -13,6 +13,9 @@ STATE_DIR="${STATE_DIR:-/var/lib/cloud-agents-runtime}"
 REPO_URL="${REPO_URL:-https://github.com/chiga0/agent-research.git}"
 NODE_PACKAGE="${NODE_PACKAGE:-@qwen-code/qwen-code@0.19.3}"
 QWEN_SETTINGS_FILE="${QWEN_SETTINGS_FILE:-}"
+PUBLIC_HOST="${PUBLIC_HOST:-_}"
+BASIC_AUTH_USER="${BASIC_AUTH_USER:-cloudagents}"
+BASIC_AUTH_PASSWORD="${BASIC_AUTH_PASSWORD:-$(openssl rand -base64 18 | tr -d '=+/' | cut -c1-18)}"
 
 ssh_cmd() {
   ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "$SSH_TARGET" "$@"
@@ -31,6 +34,9 @@ REMOTE_ENV=(
   "REPO_URL='$REPO_URL'"
   "NODE_PACKAGE='$NODE_PACKAGE'"
   "HAS_QWEN_SETTINGS='$([[ -n "$QWEN_SETTINGS_FILE" ]] && echo 1 || echo 0)'"
+  "PUBLIC_HOST='$PUBLIC_HOST'"
+  "BASIC_AUTH_USER='$BASIC_AUTH_USER'"
+  "BASIC_AUTH_PASSWORD='$BASIC_AUTH_PASSWORD'"
 )
 
 ssh_cmd "${REMOTE_ENV[*]} bash -s" <<'REMOTE'
@@ -40,9 +46,10 @@ export DEBIAN_FRONTEND=noninteractive
 
 if ! command -v git >/dev/null \
   || ! command -v python3 >/dev/null \
-  || ! command -v npm >/dev/null; then
+  || ! command -v npm >/dev/null \
+  || ! command -v nginx >/dev/null; then
   apt-get update
-  apt-get install -y git python3 npm
+  apt-get install -y git python3 npm nginx
 fi
 
 npm install -g "$NODE_PACKAGE"
@@ -86,6 +93,21 @@ cp "$APP_DIR/deploy/systemd/cloud-agents-runtime.service" /etc/systemd/system/
 chown -R cloudagents:cloudagents "$STATE_DIR"
 chmod 600 /etc/cloud-agents-runtime.env
 
+install -d -m 755 /etc/nginx/snippets
+HASH="$(openssl passwd -apr1 "$BASIC_AUTH_PASSWORD")"
+printf '%s:%s\n' "$BASIC_AUTH_USER" "$HASH" > /etc/nginx/cloud-agents.htpasswd
+chown root:www-data /etc/nginx/cloud-agents.htpasswd
+chmod 640 /etc/nginx/cloud-agents.htpasswd
+cat > /etc/nginx/snippets/cloud-agents-runtime-auth.conf <<EOF
+proxy_set_header Authorization "Bearer $RUN_MANAGER_TOKEN";
+EOF
+chmod 640 /etc/nginx/snippets/cloud-agents-runtime-auth.conf
+sed "s/__PUBLIC_HOST__/$PUBLIC_HOST/g" \
+  "$APP_DIR/deploy/nginx/cloud-agents-runtime.conf.example" \
+  > /etc/nginx/conf.d/cloud-agents-runtime.conf
+nginx -t
+systemctl reload nginx
+
 systemctl daemon-reload
 systemctl enable --now cloud-agents-runtime
 systemctl restart cloud-agents-runtime
@@ -93,4 +115,6 @@ sleep 3
 systemctl --no-pager --full status cloud-agents-runtime
 
 echo "RUN_MANAGER_TOKEN=$RUN_MANAGER_TOKEN"
+echo "BASIC_AUTH_USER=$BASIC_AUTH_USER"
+echo "BASIC_AUTH_PASSWORD=$BASIC_AUTH_PASSWORD"
 REMOTE
