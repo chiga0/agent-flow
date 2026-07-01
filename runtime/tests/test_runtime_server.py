@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import threading
 import time
@@ -62,7 +63,13 @@ class RuntimeServerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with running_runtime(artifact_root=Path(tmp)) as base_url:
                 html = request_text(f"{base_url}/")
-                self.assertIn("Cloud Agents Runtime", html)
+                self.assertIn("Cloud Agents Console", html)
+                self.assertIn('id="root"', html)
+                self.assertIn("./assets/", html)
+                asset_match = re.search(r'src="\.(/assets/[^"]+)"', html)
+                self.assertIsNotNone(asset_match)
+                asset_body = request_text(f"{base_url}{asset_match.group(1)}")
+                self.assertIn("Cloud Agents Runtime", asset_body)
                 run = request_json(
                     f"{base_url}/runs",
                     method="POST",
@@ -216,6 +223,51 @@ class RuntimeServerTest(unittest.TestCase):
                 self.assertEqual(plan["workflow"], "MissionWorkflow")
                 run_plan = request_json(f"{base_url}/temporal/workflows/runs/{run_id}/plan")
                 self.assertEqual(run_plan["workflow"], "AgentRunWorkflow")
+                task_events = request_json(f"{base_url}/a2a/tasks/{task_id}/events.json")
+                self.assertIn("events", task_events)
+                task_artifacts = request_json(f"{base_url}/a2a/tasks/{task_id}/artifacts")
+                self.assertIn("artifacts", task_artifacts)
+
+    def test_ops_metrics_backups_drills_and_p5_evaluations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with running_runtime(artifact_root=Path(tmp), worker_capacity=1) as base_url:
+                run = request_json(
+                    f"{base_url}/runs",
+                    method="POST",
+                    payload={"prompt": "ops smoke", "adapter": "fake"},
+                )
+                deadline = time.time() + 5
+                while time.time() < deadline:
+                    current = request_json(f"{base_url}/runs/{run['run_id']}")
+                    if current["status"] == "completed":
+                        break
+                    time.sleep(0.05)
+
+                metrics = request_json(f"{base_url}/metrics.json")
+                self.assertGreaterEqual(metrics["runs"]["total"], 1)
+                self.assertIn("latency_seconds", metrics)
+                status = request_json(f"{base_url}/ops/status")
+                self.assertIn("security", status)
+                self.assertIn("metrics", status)
+                drills = request_json(f"{base_url}/ops/drills")
+                self.assertIn(drills["status"], {"pass", "warn"})
+                p5 = request_json(f"{base_url}/p5/evaluations")
+                component_ids = {component["id"] for component in p5["components"]}
+                self.assertIn("acp-streamable-http", component_ids)
+                self.assertIn("a2a-gateway", component_ids)
+
+                created = request_json(f"{base_url}/ops/backups", method="POST", payload={})
+                backup_name = created["backup"]["name"]
+                backups = request_json(f"{base_url}/ops/backups")
+                self.assertIn(backup_name, {backup["name"] for backup in backups["backups"]})
+                backup_body = request_binary(f"{base_url}/ops/backups/{backup_name}")
+                self.assertGreater(len(backup_body), 0)
+                with self.assertRaises(urllib.error.HTTPError) as bad_backup:
+                    request_binary(f"{base_url}/ops/backups/%2E%2E%2Fbad.tar.gz")
+                self.assertEqual(bad_backup.exception.code, HTTPStatus.BAD_REQUEST)
+                with self.assertRaises(urllib.error.HTTPError) as missing_backup:
+                    request_binary(f"{base_url}/ops/backups/missing.tar.gz")
+                self.assertEqual(missing_backup.exception.code, HTTPStatus.NOT_FOUND)
 
     def test_sse_reconnect_and_gap_detection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -510,6 +562,12 @@ def request_text(url: str, headers: dict[str, str] | None = None) -> str:
     request = urllib.request.Request(url, headers=headers or {})
     with urllib.request.urlopen(request, timeout=5) as response:
         return response.read().decode("utf-8")
+
+
+def request_binary(url: str, headers: dict[str, str] | None = None) -> bytes:
+    request = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return response.read()
 
 
 def read_sse(url: str, headers: dict[str, str] | None = None) -> list[dict[str, Any]]:

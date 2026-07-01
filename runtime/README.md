@@ -25,7 +25,15 @@ Postgres when multiple control-plane instances are required.
 - `GET /health` and `GET /capabilities` expose runtime status.
 - `GET /queue` exposes queued/running job leases and worker status.
 - `GET /workers` exposes worker heartbeat and capacity.
-- `GET /` serves the browser management console.
+- `GET /` serves the React/Tailwind browser management console.
+- `GET /metrics.json` exposes run, mission, queue, permission, failure, and
+  latency metrics.
+- `GET /ops/status` exposes beta readiness status, queue state, runtime DB
+  state, and security posture.
+- `GET /ops/drills` and `POST /ops/drills` run P6 failure-readiness checks.
+- `GET /ops/backups`, `POST /ops/backups`, and
+  `GET /ops/backups/{name}` manage downloadable DB + artifact backups.
+- `GET /p5/evaluations` exposes the P5 component evaluation registry.
 - `GET /runs/{run_id}/events.json` returns canonical events for UI replay.
 - `GET /runs/{run_id}/artifacts` lists artifact files for the run.
 - `GET /runs/{run_id}/artifacts/{name}` downloads a single run artifact.
@@ -46,8 +54,10 @@ Postgres when multiple control-plane instances are required.
   pending tasks cancelled.
 - `POST /missions/{mission_id}/review-gate/override` records a human override
   for a blocked gate and can resume downstream pending work.
-- `GET /.well-known/agent-card.json`, `POST /a2a/tasks`, and
-  `GET /a2a/tasks/{task_id}` expose the P5.2 A2A gateway POC.
+- `GET /.well-known/agent-card.json`, `POST /a2a/tasks`,
+  `GET /a2a/tasks/{task_id}`,
+  `GET /a2a/tasks/{task_id}/events.json`, and
+  `GET /a2a/tasks/{task_id}/artifacts` expose the P5.2 A2A gateway POC.
 - `GET /acp` and `POST /acp` expose the P5.1 ACP JSON-RPC-over-HTTP POC.
 - `GET /temporal/workflows/missions/{mission_id}/plan` and
   `GET /temporal/workflows/runs/{run_id}/plan` expose the P5.3 Temporal
@@ -455,19 +465,25 @@ The current cloud-runnable slice includes:
   mission-level gate events, and automatic blocked mission status.
 - Human review-gate override and merge/deploy gate support.
 - P5 POC endpoints for ACP JSON-RPC-over-HTTP, A2A task gateway, and Temporal
-  workflow-plan export.
+  workflow-plan export, including run/mission event and artifact reads.
+- React/Tailwind/@tanstack browser console with desktop/mobile navigation,
+  run creation, mission creation, permission actions, logs, artifact downloads,
+  profile inspection, P5 evaluation status, failure drills, and backup
+  downloads.
 - Managed `qwen serve` process for one workspace when `QWEN_SERVE_COMMAND` is
   configured.
 - Persistent artifact directory on disk with `runtime.db` and JSONL artifacts.
 - systemd unit and Docker Compose assets with execution-unit CPU/memory/pids
   limits.
-- CI gates for style, compile, 90%+ runtime coverage, and MkDocs strict build.
+- CI gates for Python style, compile, 90%+ runtime coverage, web lint, 90%+
+  web unit/integration coverage, production web build, Playwright desktop/mobile
+  E2E, and MkDocs strict build.
 - Validation script for fake/qwen runs and required artifacts.
 - Optional validation script coverage for P4 mission/profile orchestration via
   `--validate-mission`.
 
-HTTPS/reverse proxy and multi-tenant isolation remain deployment-layer concerns
-for the next hardening phase.
+HTTPS/reverse proxy is implemented through the deploy script and Nginx
+examples. Multi-tenant isolation remains a next hardening phase.
 
 P4 limits in this MVP:
 
@@ -475,8 +491,9 @@ P4 limits in this MVP:
   Project Agent with its own memory model.
 - Reviewer gate is schema-based; it does not infer risk from free-form markdown
   findings. Real qwen reviewer runs must write `review_gate.json`.
-- ACP/A2A/Temporal support is intentionally POC-level and does not claim full
-  protocol compliance yet.
+- ACP/A2A/Temporal support is intentionally POC-level. It now covers run and
+  mission status/events/artifacts over the internal SAEU contract, but it does
+  not claim full official protocol compliance yet.
 - Artifact handoff passes stable artifact references into child run prompts; it
   does not copy sibling workspaces or expose uncontrolled shared memory.
 
@@ -544,4 +561,6 @@ proxy_set_header Authorization "Bearer <RUN_MANAGER_TOKEN>";
 
 The public route is `/cloud-agents/`; API paths are forwarded without that
 prefix, for example `/cloud-agents/health` -> `http://127.0.0.1:8765/health`.
-The same route serves the management console from the runtime root.
+The same route serves the React management console from the runtime root. The
+console uses hash routing so browser refreshes under `/cloud-agents/` do not
+collide with API paths such as `/runs` and `/missions`.

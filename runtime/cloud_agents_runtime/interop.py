@@ -18,7 +18,14 @@ def acp_capabilities(manager: Any) -> dict[str, Any]:
             "run.create",
             "run.input",
             "run.status",
+            "run.events",
+            "run.artifacts",
             "run.cancel",
+            "mission.create",
+            "mission.status",
+            "mission.cancel",
+            "mission.events",
+            "mission.artifacts",
         ],
         "runtime_capabilities": manager.capabilities()["features"],
     }
@@ -53,10 +60,51 @@ def handle_acp_jsonrpc(manager: Any, payload: dict[str, Any]) -> tuple[dict[str,
             if run is None:
                 return jsonrpc_error(request_id, -32004, "run not found"), HTTPStatus.NOT_FOUND
             result = run.to_dict()
+        elif method == "run.events":
+            run_id = require_string(params, "run_id")
+            last_sequence = optional_int(params.get("last_sequence"))
+            result = {
+                "run_id": run_id,
+                "events": [
+                    event.to_dict()
+                    for event in manager.store.events_since(run_id, last_sequence)
+                ],
+            }
+        elif method == "run.artifacts":
+            run_id = require_string(params, "run_id")
+            result = {"run_id": run_id, "artifacts": manager.store.list_artifacts(run_id)}
         elif method == "run.cancel":
             run_id = require_string(params, "run_id")
             manager.cancel(run_id, params.get("reason"))
             result = {"cancelled": True, "run_id": run_id}
+        elif method == "mission.create":
+            mission = manager.create_mission(params)
+            result = mission
+        elif method == "mission.status":
+            mission_id = require_string(params, "mission_id")
+            mission = manager.get_mission(mission_id)
+            if mission is None:
+                return jsonrpc_error(request_id, -32004, "mission not found"), HTTPStatus.NOT_FOUND
+            result = mission
+        elif method == "mission.cancel":
+            mission_id = require_string(params, "mission_id")
+            result = manager.cancel_mission(mission_id, params.get("reason"))
+        elif method == "mission.events":
+            mission_id = require_string(params, "mission_id")
+            last_sequence = optional_int(params.get("last_sequence"))
+            result = {
+                "mission_id": mission_id,
+                "events": [
+                    event.to_dict()
+                    for event in manager.store.mission_events_since(mission_id, last_sequence)
+                ],
+            }
+        elif method == "mission.artifacts":
+            mission_id = require_string(params, "mission_id")
+            result = {
+                "mission_id": mission_id,
+                "artifacts": manager.store.list_mission_artifacts(mission_id),
+            }
         else:
             return jsonrpc_error(request_id, -32601, "method not found"), HTTPStatus.NOT_FOUND
     except ValueError as exc:
@@ -74,7 +122,7 @@ def a2a_agent_card(manager: Any, base_url: str) -> dict[str, Any]:
         "description": "Mission/task gateway over durable SAEU runs.",
         "url": base_url.rstrip("/"),
         "capabilities": {
-            "streaming": False,
+            "streaming": True,
             "pushNotifications": False,
             "stateTransitionHistory": True,
         },
@@ -129,6 +177,7 @@ def a2a_task_from_mission(manager: Any, mission_id: str) -> dict[str, Any]:
         "kind": "mission",
         "status": map_a2a_status(mission["status"]),
         "mission": mission,
+        "events_url": f"/a2a/tasks/{mission_id}/events.json",
         "artifacts": manager.store.list_mission_artifacts(mission_id),
     }
 
@@ -149,6 +198,13 @@ def require_string(payload: dict[str, Any], name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} is required")
     return value.strip()
+
+
+def optional_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def jsonrpc_error(request_id: Any, code: int, message: str) -> dict[str, Any]:

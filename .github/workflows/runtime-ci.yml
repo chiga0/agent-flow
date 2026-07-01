@@ -19,6 +19,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
       - name: Check style
         run: python3 scripts/check_style.py
 
@@ -30,6 +37,30 @@ jobs:
 
       - name: Runtime tests with coverage gate
         run: python3 scripts/check_runtime_coverage.py
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Web lint
+        working-directory: web
+        run: npm run lint
+
+      - name: Web tests with coverage gate
+        working-directory: web
+        run: npm run test
+
+      - name: Build web console
+        working-directory: web
+        run: npm run build
+
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Web E2E
+        working-directory: web
+        run: npm run test:e2e
 
       - name: Build docs
         run: |

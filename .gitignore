@@ -3,3 +3,8 @@ site/
 __pycache__/
 *.py[cod]
 runtime/artifacts/
+web/node_modules/
+web/test-results/
+web/playwright-report/
+web/coverage/
+web/*.tsbuildinfo

@@ -23,17 +23,26 @@ from runtime.cloud_agents_runtime.adapters.qwen import (
     parse_json_or_text,
 )
 from runtime.cloud_agents_runtime.auth import AuthConfig, is_authorized
+from runtime.cloud_agents_runtime.events import RuntimeEvent
 from runtime.cloud_agents_runtime.interop import (
     a2a_task_from_mission,
     create_a2a_task,
     handle_acp_jsonrpc,
     jsonrpc_error,
     map_a2a_status,
+    optional_int,
     require_string,
 )
 from runtime.cloud_agents_runtime.manager import RunManager
 from runtime.cloud_agents_runtime.missions import build_task_definitions, run_status_to_task_status
 from runtime.cloud_agents_runtime.models import MissionSpec, RunSpec, RunState, clean_identifier
+from runtime.cloud_agents_runtime.ops import (
+    env_nonnegative_int,
+    latency_summary,
+    pending_permission_count,
+    permission_id_from_data,
+    terminal_latency_seconds,
+)
 from runtime.cloud_agents_runtime.review_gate import (
     default_reason,
     extract_json_object,
@@ -146,6 +155,64 @@ class RuntimeEdgeTest(unittest.TestCase):
         self.assertIsNone(parse_optional_int(""))
         self.assertIsNone(parse_optional_int("bad"))
         self.assertEqual(parse_optional_int("4"), 4)
+
+    def test_ops_helper_edges(self) -> None:
+        self.assertEqual(permission_id_from_data({"permission_id": "direct"}), "direct")
+        self.assertEqual(
+            permission_id_from_data({"raw": {"data": {"requestId": "nested"}}}),
+            "nested",
+        )
+        self.assertIsNone(permission_id_from_data({"raw": "bad"}))
+        self.assertIsNone(permission_id_from_data({"raw": {"data": "bad"}}))
+        events = [
+            RuntimeEvent("permission.requested", "run_1", 1, {"permission_id": "a"}),
+            RuntimeEvent(
+                "permission.requested",
+                "run_1",
+                2,
+                {"raw": {"data": {"requestId": "b"}}},
+            ),
+            RuntimeEvent("permission.resolved", "run_1", 3, {"permission_id": "a"}),
+        ]
+        self.assertEqual(pending_permission_count(events), 1)
+        self.assertIsNone(terminal_latency_seconds([]))
+        self.assertEqual(
+            terminal_latency_seconds(
+                [
+                    RuntimeEvent(
+                        "run.created",
+                        "run_1",
+                        1,
+                        {},
+                        created_at="2026-07-02T00:00:00+00:00",
+                    ),
+                    RuntimeEvent(
+                        "run.completed",
+                        "run_1",
+                        2,
+                        {},
+                        created_at="2026-07-02T00:00:03+00:00",
+                    ),
+                ]
+            ),
+            3.0,
+        )
+        self.assertIsNone(
+            terminal_latency_seconds(
+                [
+                    RuntimeEvent("run.created", "run_1", 1, {}, created_at="bad"),
+                    RuntimeEvent("run.completed", "run_1", 2, {}, created_at="also-bad"),
+                ]
+            )
+        )
+        self.assertEqual(latency_summary([]), {"count": 0, "avg": None, "p95": None})
+        self.assertEqual(latency_summary([1.0, 3.0])["avg"], 2.0)
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(env_nonnegative_int("MISSING_INT", 7), 7)
+        with patch.dict(os.environ, {"BAD_INT": "nope"}):
+            self.assertEqual(env_nonnegative_int("BAD_INT", 7), 7)
+        with patch.dict(os.environ, {"NEG_INT": "-5"}):
+            self.assertEqual(env_nonnegative_int("NEG_INT", 7), 0)
 
     def test_mission_model_and_dag_validation_edges(self) -> None:
         with self.assertRaisesRegex(ValueError, "goal is required"):
@@ -436,9 +503,95 @@ class RuntimeEdgeTest(unittest.TestCase):
         self.assertEqual(status.value, HTTPErrorCode.NOT_FOUND.value)
         self.assertEqual(response["error"]["message"], "run not found")
 
+        response, status = handle_acp_jsonrpc(
+            manager,
+            {
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "run.events",
+                "params": {"run_id": "run_acp", "last_sequence": "0"},
+            },
+        )
+        self.assertEqual(status.value, 200)
+        self.assertEqual(response["result"]["events"], [])
+
+        response, status = handle_acp_jsonrpc(
+            manager,
+            {
+                "jsonrpc": "2.0",
+                "id": 13,
+                "method": "run.artifacts",
+                "params": {"run_id": "run_acp"},
+            },
+        )
+        self.assertEqual(status.value, 200)
+        self.assertEqual(response["result"]["artifacts"], [])
+
+        response, status = handle_acp_jsonrpc(
+            manager,
+            {
+                "jsonrpc": "2.0",
+                "id": 14,
+                "method": "mission.create",
+                "params": {"goal": "mission via acp", "adapter": "fake"},
+            },
+        )
+        self.assertEqual(status.value, 200)
+        self.assertEqual(response["result"]["mission_id"], "mission_acp")
+
+        response, status = handle_acp_jsonrpc(
+            manager,
+            {
+                "jsonrpc": "2.0",
+                "id": 15,
+                "method": "mission.status",
+                "params": {"mission_id": "mission_acp"},
+            },
+        )
+        self.assertEqual(status.value, 200)
+        self.assertEqual(response["result"]["mission_id"], "mission_acp")
+
+        response, status = handle_acp_jsonrpc(
+            manager,
+            {
+                "jsonrpc": "2.0",
+                "id": 16,
+                "method": "mission.events",
+                "params": {"mission_id": "mission_acp"},
+            },
+        )
+        self.assertEqual(status.value, 200)
+        self.assertEqual(response["result"]["events"], [])
+
+        response, status = handle_acp_jsonrpc(
+            manager,
+            {
+                "jsonrpc": "2.0",
+                "id": 17,
+                "method": "mission.artifacts",
+                "params": {"mission_id": "mission_acp"},
+            },
+        )
+        self.assertEqual(status.value, 200)
+        self.assertEqual(response["result"]["artifacts"], [{"name": "final_report.md"}])
+
+        response, status = handle_acp_jsonrpc(
+            manager,
+            {
+                "jsonrpc": "2.0",
+                "id": 18,
+                "method": "mission.cancel",
+                "params": {"mission_id": "mission_acp", "reason": "operator"},
+            },
+        )
+        self.assertEqual(status.value, 200)
+        self.assertEqual(response["result"]["status"], "cancelled")
+
         self.assertEqual(require_string({"name": " alice "}, "name"), "alice")
         with self.assertRaisesRegex(ValueError, "name is required"):
             require_string({"name": " "}, "name")
+        self.assertEqual(optional_int("7"), 7)
+        self.assertEqual(optional_int("bad"), 0)
         self.assertEqual(jsonrpc_error("x", -1, "boom")["error"]["message"], "boom")
 
         with self.assertRaisesRegex(ValueError, "goal or message is required"):
@@ -681,6 +834,15 @@ class MiniInteropStore:
     def list_mission_artifacts(self, mission_id: str) -> list[dict[str, str]]:
         return [{"name": "final_report.md"}]
 
+    def list_artifacts(self, run_id: str) -> list[dict[str, str]]:
+        return []
+
+    def events_since(self, run_id: str, last_sequence: int = 0) -> list[object]:
+        return []
+
+    def mission_events_since(self, mission_id: str, last_sequence: int = 0) -> list[object]:
+        return []
+
 
 class MiniInteropManager:
     def __init__(self) -> None:
@@ -721,6 +883,13 @@ class MiniInteropManager:
     def get_mission(self, mission_id: str) -> dict[str, object] | None:
         if mission_id != "mission_acp":
             return None
+        return self.mission
+
+    def cancel_mission(self, mission_id: str, reason: str | None = None) -> dict[str, object]:
+        if mission_id != "mission_acp" or self.mission is None:
+            raise KeyError(mission_id)
+        self.mission["status"] = "cancelled"
+        self.mission["cancel_reason"] = reason
         return self.mission
 
 

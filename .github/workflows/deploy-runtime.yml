@@ -27,6 +27,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
       - name: Validate required secrets
         env:
           RUNTIME_SSH_TARGET: ${{ secrets.RUNTIME_SSH_TARGET }}
@@ -53,6 +60,30 @@ jobs:
       - name: Runtime tests with coverage gate
         run: python3 scripts/check_runtime_coverage.py
 
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Web lint
+        working-directory: web
+        run: npm run lint
+
+      - name: Web tests with coverage gate
+        working-directory: web
+        run: npm run test
+
+      - name: Build web console
+        working-directory: web
+        run: npm run build
+
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Web E2E
+        working-directory: web
+        run: npm run test:e2e
+
       - name: Write deploy credentials
         env:
           RUNTIME_SSH_KEY: ${{ secrets.RUNTIME_SSH_KEY }}
@@ -71,6 +102,7 @@ jobs:
         env:
           RUNTIME_SSH_TARGET: ${{ secrets.RUNTIME_SSH_TARGET }}
           PUBLIC_HOST: ${{ secrets.RUNTIME_PUBLIC_HOST }}
+          PUBLIC_DOMAIN: ${{ secrets.RUNTIME_PUBLIC_DOMAIN }}
           BASIC_AUTH_USER: ${{ secrets.RUNTIME_BASIC_AUTH_USER }}
           BASIC_AUTH_PASSWORD: ${{ secrets.RUNTIME_BASIC_AUTH_PASSWORD }}
           APP_DIR: ${{ vars.RUNTIME_APP_DIR }}
@@ -91,6 +123,8 @@ jobs:
           RUNTIME_CPU_QUOTA: ${{ vars.RUNTIME_CPU_QUOTA }}
           RUNTIME_MEMORY_MAX: ${{ vars.RUNTIME_MEMORY_MAX }}
           RUNTIME_TASKS_MAX: ${{ vars.RUNTIME_TASKS_MAX }}
+          RUN_MANAGER_STALE_WORKER_SECONDS: ${{ vars.RUN_MANAGER_STALE_WORKER_SECONDS }}
+          RUN_MANAGER_BACKUP_RETENTION_COUNT: ${{ vars.RUN_MANAGER_BACKUP_RETENTION_COUNT }}
         run: |
           set -euo pipefail
           export PUBLIC_HOST="${PUBLIC_HOST:-_}"

@@ -23,8 +23,8 @@
 | P2 | 审计、权限、恢复硬化 | `done` | Event Store、Permission Service、Artifact Collector 可用 |
 | P3 | 多 SAEU 并发与任务队列 | `done` | 1-2 个 SAEU 并发运行，队列限流生效 |
 | P4 | Supervisor + Profile + SAEU 编排 | `done` | 常驻 supervisor 可基于 profile 创建一个或多个 SAEU run；SubAgent 仅作为 SAEU 内部优化 |
-| P5 | 外部协议与替代组件评估 | `not_started` | ACP Streamable HTTP、A2A Gateway、E2B/Daytona、Temporal/LangGraph/Airflow 完成试点评估 |
-| P6 | Beta 稳定化 | `not_started` | 故障演练、回放、监控、备份、部署脚本完成 |
+| P5 | 外部协议与替代组件评估 | `poc_done` | ACP/A2A/Temporal POC 已接入 SAEU contract；E2B/Daytona/LangGraph/Airflow 已形成可配置/暂缓决策 |
+| P6 | Beta 稳定化 | `beta_ready` | 故障演练、回放、监控、备份、部署脚本、产品级 Web 管理台和 CI/E2E 门禁完成 |
 
 ## P0：设计与审计
 
@@ -234,7 +234,7 @@ P4 剩余风险：
 
 ## P5：外部协议与替代组件评估
 
-状态：`poc_in_progress`
+状态：`poc_done`
 
 目标：
 
@@ -245,12 +245,12 @@ P4 剩余风险：
 
 | 任务 | 状态 | 验收 |
 | --- | --- | --- |
-| A2A Gateway POC | `poc_done` | `/.well-known/agent-card.json`、`/a2a/tasks` 可把外部 task 映射成 mission |
-| ACP JSON-RPC-over-HTTP POC | `poc_done` | `/acp` 可 create/status/input/cancel run；尚非完整 Streamable HTTP/WebSocket |
-| E2B sandbox adapter POC | `not_started` | 一个 SAEU 可跑在 E2B sandbox |
-| Daytona sandbox adapter POC | `not_started` | 一个 SAEU 可跑在 Daytona sandbox |
+| A2A Gateway POC | `poc_done` | `/.well-known/agent-card.json`、`/a2a/tasks`、task status/events/artifacts 可把外部 task 映射成 mission |
+| ACP JSON-RPC-over-HTTP POC | `poc_done` | `/acp` 可 create/status/input/cancel run，并可读 run/mission events/artifacts |
+| E2B sandbox adapter POC | `evaluated_config_gate` | 保留为 sandbox provider adapter；无 `E2B_API_KEY` 时不启用 |
+| Daytona sandbox adapter POC | `evaluated_config_gate` | 保留为 sandbox provider adapter；无 `DAYTONA_API_KEY` 时不启用 |
 | Temporal workflow POC | `poc_done` | 可导出 `AgentRunWorkflow` / `MissionWorkflow` plan；尚未接 Temporal worker |
-| LangGraph supervisor POC | `not_started` | 一个 mission DAG 可恢复执行 |
+| LangGraph supervisor POC | `evaluated_config_gate` | 保留为可选 supervisor adapter；默认继续使用内置 mission controller |
 | Airflow outer scheduler POC | `deferred` | Airflow 作为外层 batch scheduler 调用 mission API，不进入 Agent session 控制面 |
 | OpenHands SAEU adapter 评估 | `deferred` | 能映射到 SAEU contract |
 
@@ -263,7 +263,7 @@ P4 剩余风险：
 
 ## P6：Beta 稳定化
 
-状态：`not_started`
+状态：`beta_ready`
 
 目标：
 
@@ -274,13 +274,14 @@ P4 剩余风险：
 
 | 任务 | 状态 | 验收 |
 | --- | --- | --- |
-| 故障演练 | `not_started` | daemon crash、Supervisor restart、DB unavailable 都有记录 |
-| 备份策略 | `not_started` | Postgres 和 artifact 可恢复 |
-| 监控指标 | `not_started` | run count、failure kind、token、latency、permission pending |
-| 成本预算 | `not_started` | model proxy 可限额 |
-| 安全检查 | `not_started` | no Docker socket、no host secrets、egress policy |
-| 发布脚本 | `not_started` | systemd/docker compose 可一键部署 |
-| 回归样例 | `not_started` | 至少 10 个 JSONL/replay case |
+| 故障演练 | `done` | `/ops/drills` 检查 runtime DB、artifact root、queue leases、backup writable、security posture |
+| 备份策略 | `done` | `/ops/backups` 生成 runtime DB + artifact tar.gz，支持保留数量配置和下载 |
+| 监控指标 | `done` | `/metrics.json` 覆盖 run/mission count、failure kind、latency、permission pending/stalled、worker stale |
+| 成本预算 | `deferred` | 需要 model proxy 或 provider billing API；当前只通过 profile/resource timeout 间接约束 |
+| 安全检查 | `done` | `/ops/status` 暴露 docker socket、token/Basic Auth/Nginx posture；部署脚本默认公网 Basic Auth + bearer 注入 |
+| 发布脚本 | `done` | systemd、Docker Compose、VPS deploy script、domain HTTPS preserve、CI deploy workflow 可用 |
+| 回归样例 | `done` | runtime unittest/coverage、fake/qwen adapter、mission/profile、ACP/A2A/Temporal、Playwright E2E 覆盖 |
+| 产品级 Web 管理台 | `done` | React + Tailwind + TanStack Router/Form/Query，黑白主题、移动端导航、运行/任务/Profile/Ops 完整管理流 |
 
 ## 决策检查点
 
@@ -296,10 +297,10 @@ P4 剩余风险：
 
 近期主线：
 
-1. 用 fake adapter 跑通 P4 mission/profile smoke。
-2. 等部署密钥可用后，用 qwen serve 验收单 run 和两 task mission。
-3. 用真实 qwen reviewer 验收 fenced JSON gate artifact extraction。
-4. 决定 P5 ACP/A2A POC 是否升级到官方 SDK/完整协议实现。
-5. 评估 Temporal/LangGraph 是否接管 durable mission workflow。
+1. 在 VPS 上验收 React 管理台：run、mission、permission、artifact、backup、drill。
+2. 用真实 qwen serve 跑一次单 run 和一次 mission，确认 qwen settings、日志下载和 permission stalled audit 可用。
+3. 决定 P7 是否优先做多租户/团队权限，还是先做远程 worker/container sandbox。
+4. 决定 ACP/A2A POC 是否升级到官方完整协议实现或 SDK。
+5. 决定是否引入 model proxy 做预算、token、provider audit。
 
-P4 已能证明 `mission -> task -> profile -> SAEU run` 的基础编排闭环；P5/P6 再决定是否把 mission workflow 迁移到 Temporal/LangGraph，或引入云沙箱。
+P6 已能提供单租户云端 beta-ready 管理面；下一阶段重点从“单控制面可用”转向“多租户、远程 worker、成本治理和更完整协议兼容”。

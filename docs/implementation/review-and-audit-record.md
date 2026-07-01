@@ -359,6 +359,34 @@ qwen serve 已有：
 - qwen gate extraction 依赖模型按提示输出 fenced JSON；不从任意自然语言推断风险。
 - 人工 override 尚未实现审批超时、多人审批、策略引擎或审计签名。
 
+## 2026-07-02 P5/P6 Beta Ready 与产品化管理台审计
+
+### 已落地能力
+
+- `/metrics.json` 提供 run/mission/queue/permission/failure/latency 指标。
+- `/ops/status`、`/ops/drills`、`/ops/backups` 提供 beta 运维面：状态、演练、DB + artifact 备份和下载。
+- ACP POC 扩展到 run/mission events/artifacts；A2A POC 扩展到 task events/artifacts。
+- React + Tailwind + TanStack Router/Form/Query 管理台替换静态页面，使用 hash routing 适配 `/cloud-agents/` 公网前缀。
+- 管理台覆盖 Overview、Runs、Run Detail、Missions、Profiles、Operations；支持创建 run/mission、取消 run、处理 permission request、查看事件、下载 artifact/audit/backup、触发 drill。
+- 管理台支持黑白主题、桌面侧边导航和移动端抽屉导航。
+- CI 增加 Node 22、web lint、90%+ web coverage、production build、Playwright desktop/mobile E2E。
+- Deploy workflow 增加 web gate，并将 `PUBLIC_DOMAIN`、stale worker、backup retention 配置传入部署脚本。
+
+### 审计结论
+
+- 产品可用性审计：首屏直接进入管理控制台，而不是说明页；功能按运行、任务、Profile、Ops 分区，核心操作均有明确按钮和下载入口。
+- 路由审计：使用 hash routing 避免 `/cloud-agents/runs` 刷新时被后端 API `/runs` 截获。
+- 恢复审计：备份包包含 `runtime.db` 和 artifact 目录，排除 workspace 和 backup 自身，能支撑单节点 beta 恢复。
+- 安全审计：公网仍由 Nginx Basic Auth + bearer 注入保护；Run Manager token 不暴露给浏览器。
+- 测试审计：前端单元/集成覆盖率超过 90%，E2E 覆盖桌面和移动端主流程；后端 runtime coverage gate 继续保持。
+
+### 剩余风险
+
+- 成本预算仍缺 model proxy/provider billing 接入，当前只能通过 timeout、profile limits、resource policy 间接治理。
+- 备份是单节点 tar.gz 形态；多控制面或高并发阶段仍需要 Postgres + 对象存储策略。
+- P5 ACP/A2A 仍是 POC facade，不等同官方完整协议实现。
+- Web 管理台当前是单租户控制台；团队权限、审计签名、多人审批属于后续 P7/P8。
+
 ## Go / No-Go 决策
 
 ### Go

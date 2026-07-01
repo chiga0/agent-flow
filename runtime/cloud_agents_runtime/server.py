@@ -44,6 +44,10 @@ def make_handler(
             if path in {"/", "/ui"}:
                 self.write_html(load_index_html())
                 return
+            static_path = resolve_static_path(path)
+            if static_path is not None:
+                self.write_static_file(static_path)
+                return
             if path == "/health":
                 self.write_json({"ok": True, "version": __version__})
                 return
@@ -68,6 +72,29 @@ def make_handler(
             if path == "/workers":
                 self.write_json({"workers": manager.queue_status()["workers"]})
                 return
+            if path == "/metrics.json":
+                self.write_json(manager.metrics())
+                return
+            if path == "/ops/status":
+                self.write_json(manager.operations_status())
+                return
+            if path == "/ops/drills":
+                self.write_json(manager.run_drills())
+                return
+            if path == "/ops/backups":
+                self.write_json({"backups": manager.list_backups()})
+                return
+            if len(parts) == 3 and parts[0] == "ops" and parts[1] == "backups":
+                try:
+                    self.write_file(manager.backup_path(unquote(parts[2])))
+                except ValueError as exc:
+                    self.write_error(HTTPStatus.BAD_REQUEST, str(exc))
+                except FileNotFoundError:
+                    self.write_error(HTTPStatus.NOT_FOUND, "backup not found")
+                return
+            if path == "/p5/evaluations":
+                self.write_json(manager.p5_evaluations())
+                return
             if len(parts) == 1 and parts[0] == "profiles":
                 self.write_json({"profiles": manager.list_profiles()})
                 return
@@ -89,6 +116,32 @@ def make_handler(
                     self.write_json(a2a_task_from_mission(manager, parts[2]))
                 except KeyError:
                     self.write_error(HTTPStatus.NOT_FOUND, "task not found")
+                return
+            if (
+                len(parts) == 4
+                and parts[0] == "a2a"
+                and parts[1] == "tasks"
+                and parts[3] == "events.json"
+            ):
+                try:
+                    events = manager.store.mission_events_since(parts[2])
+                except KeyError:
+                    self.write_error(HTTPStatus.NOT_FOUND, "task not found")
+                    return
+                self.write_json({"events": [event.to_dict() for event in events]})
+                return
+            if (
+                len(parts) == 4
+                and parts[0] == "a2a"
+                and parts[1] == "tasks"
+                and parts[3] == "artifacts"
+            ):
+                try:
+                    artifacts = manager.store.list_mission_artifacts(parts[2])
+                except KeyError:
+                    self.write_error(HTTPStatus.NOT_FOUND, "task not found")
+                    return
+                self.write_json({"artifacts": artifacts})
                 return
             if len(parts) == 2 and parts[0] == "missions":
                 mission = manager.get_mission(parts[1])
@@ -211,6 +264,12 @@ def make_handler(
                     return
                 if len(parts) == 1 and parts[0] == "cleanup":
                     self.write_json({"cleanup": manager.cleanup_once()})
+                    return
+                if len(parts) == 2 and parts[0] == "ops" and parts[1] == "backups":
+                    self.write_json({"backup": manager.create_backup()}, status=HTTPStatus.CREATED)
+                    return
+                if len(parts) == 2 and parts[0] == "ops" and parts[1] == "drills":
+                    self.write_json(manager.run_drills())
                     return
                 if len(parts) == 1 and parts[0] == "profiles":
                     profile = manager.create_profile(payload)
@@ -387,6 +446,18 @@ def make_handler(
             self.wfile.flush()
             self.close_connection = True
 
+        def write_static_file(self, path: Path) -> None:
+            body = path.read_bytes()
+            content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("content-type", content_type)
+            self.send_header("content-length", str(len(body)))
+            self.send_header("cache-control", "public, max-age=31536000, immutable")
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            self.close_connection = True
+
         def base_url(self) -> str:
             host = self.headers.get("host")
             if host:
@@ -428,6 +499,17 @@ def parse_last_event_id(value: str | None) -> int:
 def load_index_html() -> str:
     path = Path(__file__).with_name("static") / "index.html"
     return path.read_text(encoding="utf-8")
+
+
+def resolve_static_path(path: str) -> Path | None:
+    static_root = Path(__file__).with_name("static").resolve()
+    relative = path.lstrip("/")
+    if not relative or relative.startswith((".", "/")):
+        return None
+    candidate = (static_root / relative).resolve()
+    if static_root not in candidate.parents or not candidate.is_file():
+        return None
+    return candidate
 
 
 def build_server(

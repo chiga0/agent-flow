@@ -422,10 +422,16 @@ class RunStore:
             )
         return [run_id for run_id, _previous_worker, _attempts in recovered]
 
-    def queue_snapshot(self) -> dict[str, Any]:
+    def queue_snapshot(self, stale_after_seconds: int | None = None) -> dict[str, Any]:
         with self._lock:
             jobs = sorted(self._jobs.values(), key=lambda job: (job.queued_at, job.run_id))
-            workers = sorted(self._workers.values(), key=lambda worker: worker.worker_id)
+            workers = sorted(
+                [
+                    worker_with_stale_status(worker, stale_after_seconds)
+                    for worker in self._workers.values()
+                ],
+                key=lambda worker: worker.worker_id,
+            )
             counts: dict[str, int] = {}
             for job in jobs:
                 counts[job.status] = counts.get(job.status, 0) + 1
@@ -1171,6 +1177,32 @@ def iso_before(value: str | None, moment: datetime) -> bool:
         return datetime.fromisoformat(value) <= moment
     except ValueError:
         return False
+
+
+def worker_with_stale_status(
+    worker: WorkerState,
+    stale_after_seconds: int | None,
+) -> WorkerState:
+    if not stale_after_seconds or stale_after_seconds <= 0:
+        return worker
+    try:
+        heartbeat_at = datetime.fromisoformat(worker.heartbeat_at)
+    except ValueError:
+        heartbeat_at = datetime.min.replace(tzinfo=timezone.utc)
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
+    if heartbeat_at > stale_cutoff:
+        return worker
+    copy = WorkerState(
+        worker_id=worker.worker_id,
+        status="stale",
+        capacity=worker.capacity,
+        active_count=worker.active_count,
+        lease_ttl_seconds=worker.lease_ttl_seconds,
+        heartbeat_at=worker.heartbeat_at,
+        created_at=worker.created_at,
+        updated_at=worker.updated_at,
+    )
+    return copy
 
 
 def safe_child_file(parent: Path, name: str) -> Path:

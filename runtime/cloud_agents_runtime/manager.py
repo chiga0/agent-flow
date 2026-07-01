@@ -14,6 +14,7 @@ from .cleanup import CleanupManager, CleanupPolicy
 from .events import RuntimeEvent, TERMINAL_RUN_EVENTS
 from .missions import MissionManager
 from .models import RunSpec, RunState
+from .ops import BetaOpsConfig, OperationsManager
 from .resources import ResourceLimitConfig, ResourcePolicyResolver
 from .store import RunStore
 from .workspace import WorkspaceAllocator
@@ -31,6 +32,7 @@ class RunManager:
         lease_ttl_seconds: int | None = None,
         permission_stall_seconds: int | None = None,
         permission_stall_action: str | None = None,
+        ops_config: BetaOpsConfig | None = None,
         resource_config: ResourceLimitConfig | None = None,
         cleanup_policy: CleanupPolicy | None = None,
         heartbeat_enabled: bool = False,
@@ -39,6 +41,7 @@ class RunManager:
         self.workspace_allocator = WorkspaceAllocator(artifact_root)
         self.resource_resolver = ResourcePolicyResolver(resource_config)
         self.cleanup_manager = CleanupManager(self.store, cleanup_policy)
+        self.ops = OperationsManager(self.store, ops_config)
         self.missions = MissionManager(self)
         self.adapters = adapters or {
             "fake": FakeAdapter(),
@@ -130,9 +133,15 @@ class RunManager:
                 "acp_jsonrpc_poc",
                 "a2a_gateway_poc",
                 "temporal_workflow_plan_poc",
+                "metrics",
+                "backup",
+                "failure_drills",
+                "p5_evaluation_registry",
+                "stale_worker_detection",
             ],
             "resource_limits": self.resource_resolver.config.to_dict(),
             "cleanup_policy": self.cleanup_manager.policy.to_dict(),
+            "ops_policy": self.ops.config.to_dict(),
             "permission_stall_policy": {
                 "seconds": self.permission_stall_seconds,
                 "action": self.permission_stall_action,
@@ -199,6 +208,27 @@ class RunManager:
 
     def cleanup_once(self) -> dict[str, Any]:
         return self.cleanup_manager.run_once().to_dict()
+
+    def metrics(self) -> dict[str, Any]:
+        return self.ops.metrics()
+
+    def operations_status(self) -> dict[str, Any]:
+        return self.ops.status()
+
+    def p5_evaluations(self) -> dict[str, Any]:
+        return self.ops.p5_evaluations()
+
+    def run_drills(self) -> dict[str, Any]:
+        return self.ops.run_drills()
+
+    def create_backup(self) -> dict[str, Any]:
+        return self.ops.create_backup()
+
+    def list_backups(self) -> list[dict[str, Any]]:
+        return self.ops.list_backups()
+
+    def backup_path(self, name: str) -> Path:
+        return self.ops.backup_path(name)
 
     def run_audit_bundle(self, run_id: str) -> dict[str, Any]:
         run = self._require_run(run_id)
