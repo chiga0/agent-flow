@@ -366,7 +366,7 @@ class MissionManager:
             ):
                 return []
             tasks = self.store.list_mission_tasks(mission_id)
-            completed = {task.task_id for task in tasks if task.status == "completed"}
+            completed = {task.task_id for task in tasks if task_allows_dependents(task)}
             ready: list[MissionTask] = []
             for task in tasks:
                 if task.status != "pending":
@@ -413,7 +413,8 @@ class MissionManager:
             return
 
         task.run_id = run.run_id
-        task.status = run_status_to_task_status(run.status) or "queued"
+        mapped_status = run_status_to_task_status(run.status) or "queued"
+        task.status = "running" if mapped_status in TERMINAL_TASK_STATUSES else mapped_status
         task.updated_at = utc_now()
         if task.status == "running":
             task.started_at = task.updated_at
@@ -790,3 +791,12 @@ def review_gate_event_type(gate: ReviewGate) -> str:
 
 def gate_blocks_without_override(gate: Any) -> bool:
     return isinstance(gate, dict) and bool(gate.get("blocks")) and not gate.get("overridden")
+
+
+def task_allows_dependents(task: MissionTask) -> bool:
+    if task.status != "completed":
+        return False
+    if not is_structured_gate_task(task.profile_snapshot):
+        return True
+    gate = task.result.get("review_gate")
+    return isinstance(gate, dict) and not gate_blocks_without_override(gate)
