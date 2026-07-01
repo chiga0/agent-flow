@@ -387,6 +387,29 @@ qwen serve 已有：
 - P5 ACP/A2A 仍是 POC facade，不等同官方完整协议实现。
 - Web 管理台当前是单租户控制台；团队权限、审计签名、多人审批属于后续 P7/P8。
 
+## 2026-07-02 Runner 实时进展与产品可用性补充
+
+### 设计结论
+
+- Run Detail 不应只展示 raw event table；用户需要一个能直接理解“runner 正在做什么”的实时视图。
+- 产品层采用双层结构：`Live Runner Chat` 面向操作员阅读，`Event Stream` 面向审计和排障保留原始 canonical event。
+- 实时视图直接订阅 `GET /runs/{run_id}/events` SSE；浏览器或测试环境不支持 EventSource 时回落到现有 `events.json` 轮询数据。
+- `message.delta` 按 prompt 聚合为连续 Agent 输出；`step.*`、`permission.*`、`stream.warning`、`run.completed/failed/cancelled` 转译为 timeline/chat bubble。
+- 权限请求仍保持独立 `Permission Requests` 操作区，避免审批按钮埋在日志流里。
+
+### 已落地能力
+
+- Run Detail 新增 `Live Runner Chat` 卡片，展示连接状态、run status、last event、sequence。
+- SSE 事件进入前端后按 sequence 去重合并，可承接 Last-Event-ID 重连后的补偿事件。
+- 桌面和移动端 E2E 增加 Live Runner Chat 断言。
+- 前端 coverage gate 保持 90%+。
+
+### 后续优化
+
+- 增加“只看 Agent 输出 / 只看权限 / 只看 warning”的过滤器。
+- 增加 runner 内部工具调用的结构化展示，例如 command、cwd、exit code、stdout/stderr 摘要。
+- 支持从 Live Runner Chat 一键下载当前 run 的可读执行报告。
+
 ## Go / No-Go 决策
 
 ### Go
