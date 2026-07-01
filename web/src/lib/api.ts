@@ -223,6 +223,10 @@ export function auditHref(runId: string) {
   return `${API_BASE}runs/${runId}/audit.json`;
 }
 
+export function runEventStreamHref(runId: string) {
+  return `${API_BASE}runs/${runId}/events`;
+}
+
 export function backupHref(name: string) {
   return `${API_BASE}ops/backups/${encodeURIComponent(name)}`;
 }

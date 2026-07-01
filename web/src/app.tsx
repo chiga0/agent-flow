@@ -17,12 +17,14 @@ import {
 import { useForm } from "@tanstack/react-form";
 import {
   Download,
+  MessageSquare,
   PauseCircle,
   Play,
+  Radio,
   RefreshCw,
   ShieldCheck,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Shell } from "./components/shell";
 import {
@@ -48,6 +50,7 @@ import {
   extractPermissionRequest,
   missionArtifactHref,
   resolvedPermissionIds,
+  runEventStreamHref,
   runtimeApi,
   type ArtifactInfo,
   type DrillCheck,
@@ -394,6 +397,11 @@ function RunDetailPage() {
     queryKey: ["runs", runId, "artifacts"],
     queryFn: () => runtimeApi.runArtifacts(runId),
   });
+  const live = useRunLiveEvents(
+    runId,
+    events.data?.events ?? [],
+    run.data?.status,
+  );
   const cancel = useMutation({
     mutationFn: () => runtimeApi.cancelRun(runId),
     onSuccess: async () => {
@@ -427,8 +435,13 @@ function RunDetailPage() {
               <Metric label="Updated" value={timeAgo(run.data?.updated_at)} />
             </CardBody>
           </Card>
-          <PermissionPanel runId={runId} events={events.data?.events ?? []} />
-          <EventList events={events.data?.events ?? []} />
+          <PermissionPanel runId={runId} events={live.events} />
+          <LiveRunnerPanel
+            connectionStatus={live.status}
+            events={live.events}
+            runStatus={run.data?.status}
+          />
+          <EventList events={live.events} />
         </div>
         <div className="grid content-start gap-4">
           <ArtifactPanel
@@ -457,6 +470,189 @@ function RunDetailPage() {
         </div>
       </div>
     </Page>
+  );
+}
+
+type LiveConnectionStatus =
+  "connecting" | "live" | "reconnecting" | "closed" | "fallback";
+
+const liveEventTypes = [
+  "run.created",
+  "workspace.prepared",
+  "resources.resolved",
+  "run.queued",
+  "lease.claimed",
+  "run.started",
+  "input.accepted",
+  "step.started",
+  "step.submitted",
+  "message.delta",
+  "adapter.event",
+  "stream.warning",
+  "permission.requested",
+  "permission.resolved",
+  "permission.stalled",
+  "step.completed",
+  "run.completed",
+  "run.failed",
+  "run.cancelled",
+  "cancel.warning",
+  "input.rejected",
+  "adapter.not_configured",
+];
+
+function useRunLiveEvents(
+  runId: string,
+  initialEvents: RuntimeEvent[],
+  runStatus?: string,
+) {
+  const [events, setEvents] = useState<RuntimeEvent[]>(initialEvents);
+  const [status, setStatus] = useState<LiveConnectionStatus>("connecting");
+
+  useEffect(() => {
+    setEvents((current) => mergeEvents(current, initialEvents));
+  }, [initialEvents]);
+
+  useEffect(() => {
+    if (typeof EventSource === "undefined") {
+      setStatus("fallback");
+      return;
+    }
+    if (isTerminal(runStatus)) {
+      setStatus("closed");
+      return;
+    }
+
+    setStatus("connecting");
+    const source = new EventSource(runEventStreamHref(runId));
+    const handleEvent = (message: MessageEvent) => {
+      try {
+        const event = JSON.parse(message.data) as RuntimeEvent;
+        setEvents((current) => mergeEvents(current, [event]));
+        if (isTerminalEvent(event.type)) {
+          setStatus("closed");
+          source.close();
+        }
+      } catch {
+        setStatus("reconnecting");
+      }
+    };
+    for (const eventType of liveEventTypes) {
+      source.addEventListener(eventType, handleEvent);
+    }
+    source.onopen = () => setStatus("live");
+    source.onerror = () =>
+      setStatus(
+        source.readyState === EventSource.CLOSED ? "closed" : "reconnecting",
+      );
+
+    return () => {
+      for (const eventType of liveEventTypes) {
+        source.removeEventListener(eventType, handleEvent);
+      }
+      source.close();
+    };
+  }, [runId, runStatus]);
+
+  return { events, status };
+}
+
+function LiveRunnerPanel({
+  connectionStatus,
+  events,
+  runStatus,
+}: {
+  connectionStatus: LiveConnectionStatus;
+  events: RuntimeEvent[];
+  runStatus?: string;
+}) {
+  const transcript = useMemo(() => runnerTranscript(events), [events]);
+  const latest = events.at(-1);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!scrollRef.current) {
+      return;
+    }
+    if (typeof scrollRef.current.scrollTo === "function") {
+      scrollRef.current.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+      return;
+    }
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [transcript.length, latest?.sequence]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex min-w-0 items-center gap-2">
+          <MessageSquare className="h-4 w-4 text-primary" />
+          <CardTitle>Live Runner Chat</CardTitle>
+        </div>
+        <Badge tone={connectionTone(connectionStatus)}>
+          <Radio className="h-4 w-4" />
+          {connectionLabel(connectionStatus)}
+        </Badge>
+      </CardHeader>
+      <CardBody className="grid gap-4">
+        <div className="grid gap-3 md:grid-cols-3">
+          <Metric label="Run status" value={runStatus ?? "loading"} />
+          <Metric label="Last event" value={latest?.type ?? "-"} />
+          <Metric label="Sequence" value={latest?.sequence ?? "-"} />
+        </div>
+        <div
+          ref={scrollRef}
+          className="grid max-h-[520px] gap-3 overflow-auto rounded-md border border-border bg-muted/40 p-3"
+        >
+          {transcript.map((item) => (
+            <RunnerBubble key={item.id} item={item} />
+          ))}
+          {!transcript.length ? (
+            <EmptyState
+              title="Waiting for runner output"
+              detail="The live stream will append steps, messages, permission requests, and terminal state here."
+            />
+          ) : null}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+type RunnerTranscriptItem = {
+  id: string;
+  role: "system" | "agent" | "operator" | "warning" | "success" | "error";
+  title: string;
+  body: string;
+  created_at: string;
+  event_type: string;
+  sequence: number;
+};
+
+function RunnerBubble({ item }: { item: RunnerTranscriptItem }) {
+  return (
+    <div
+      className={`flex ${item.role === "agent" ? "justify-start" : "justify-end"}`}
+    >
+      <div
+        className={`max-w-[860px] rounded-lg border p-3 text-sm ${bubbleClass(item.role)}`}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <span className="font-medium">{item.title}</span>
+          <span className="shrink-0 text-xs opacity-70">
+            {item.sequence} · {timeAgo(item.created_at)}
+          </span>
+        </div>
+        <div className="mt-2 whitespace-pre-wrap break-words leading-6">
+          {item.body}
+        </div>
+        <div className="mt-2 font-mono text-xs opacity-60">
+          {item.event_type}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1095,6 +1291,283 @@ function emptyToNull(value: string) {
   return value.trim() ? value.trim() : null;
 }
 
+function mergeEvents(current: RuntimeEvent[], incoming: RuntimeEvent[]) {
+  if (!incoming.length) {
+    return current;
+  }
+  const bySequence = new Map<number, RuntimeEvent>();
+  for (const event of [...current, ...incoming]) {
+    bySequence.set(event.sequence, event);
+  }
+  const merged = [...bySequence.values()].sort(
+    (left, right) => left.sequence - right.sequence,
+  );
+  if (
+    merged.length === current.length &&
+    merged.every((event, index) => event.id === current[index]?.id)
+  ) {
+    return current;
+  }
+  return merged;
+}
+
+function runnerTranscript(events: RuntimeEvent[]): RunnerTranscriptItem[] {
+  const items: RunnerTranscriptItem[] = [];
+  const agentMessages = new Map<string, RunnerTranscriptItem>();
+
+  for (const event of events) {
+    if (event.type === "message.delta") {
+      const promptNumber = stringValue(event.data.prompt_number) ?? "current";
+      const key = `agent-${promptNumber}`;
+      const text = stringValue(event.data.text) ?? "";
+      const existing = agentMessages.get(key);
+      if (existing) {
+        existing.body = `${existing.body}${text}`;
+        existing.sequence = event.sequence;
+        existing.created_at = event.created_at;
+      } else {
+        const item: RunnerTranscriptItem = {
+          id: key,
+          role: "agent",
+          title:
+            `Agent output ${promptNumber === "current" ? "" : `#${promptNumber}`}`.trim(),
+          body: text,
+          created_at: event.created_at,
+          event_type: event.type,
+          sequence: event.sequence,
+        };
+        agentMessages.set(key, item);
+        items.push(item);
+      }
+      continue;
+    }
+
+    const item = transcriptItemForEvent(event);
+    if (item) {
+      items.push(item);
+    }
+  }
+
+  return items.sort((left, right) => left.sequence - right.sequence);
+}
+
+function transcriptItemForEvent(
+  event: RuntimeEvent,
+): RunnerTranscriptItem | null {
+  const base = {
+    id: event.id,
+    created_at: event.created_at,
+    event_type: event.type,
+    sequence: event.sequence,
+  };
+  switch (event.type) {
+    case "run.created":
+      return {
+        ...base,
+        role: "system",
+        title: "Run accepted",
+        body: "The control plane created the run and stored its request.",
+      };
+    case "workspace.prepared":
+      return {
+        ...base,
+        role: "system",
+        title: "Workspace ready",
+        body: `${stringValue(event.data.strategy) ?? "workspace"} · ${stringValue(event.data.path) ?? "prepared"}`,
+      };
+    case "resources.resolved":
+      return {
+        ...base,
+        role: "system",
+        title: "Resources assigned",
+        body: compactJson(event.data),
+      };
+    case "run.queued":
+      return {
+        ...base,
+        role: "system",
+        title: "Queued",
+        body: "Waiting for an available runner.",
+      };
+    case "lease.claimed":
+      return {
+        ...base,
+        role: "system",
+        title: "Runner claimed",
+        body: `Worker ${stringValue(event.data.worker_id) ?? "unknown"} started the lease.`,
+      };
+    case "run.started":
+      return {
+        ...base,
+        role: "success",
+        title: "Runner started",
+        body:
+          stringValue(event.data.workspace) ??
+          stringValue(event.data.adapter) ??
+          "Session is active.",
+      };
+    case "input.accepted":
+      return {
+        ...base,
+        role: "operator",
+        title: "Prompt submitted",
+        body:
+          stringValue(event.data.prompt_preview) ??
+          `Prompt #${event.data.prompt_number ?? 1}`,
+      };
+    case "step.started":
+      return {
+        ...base,
+        role: "system",
+        title: "Step started",
+        body: stepBody(event),
+      };
+    case "step.submitted":
+      return {
+        ...base,
+        role: "system",
+        title: "Prompt accepted by runner",
+        body: stepBody(event),
+      };
+    case "step.completed":
+      return {
+        ...base,
+        role: "success",
+        title: "Step completed",
+        body: stepBody(event),
+      };
+    case "permission.requested":
+      return {
+        ...base,
+        role: "warning",
+        title: "Permission required",
+        body: permissionBody(event),
+      };
+    case "permission.resolved":
+      return {
+        ...base,
+        role: "success",
+        title: "Permission resolved",
+        body: `Decision: ${stringValue(event.data.decision) ?? "recorded"}`,
+      };
+    case "permission.stalled":
+      return {
+        ...base,
+        role: "warning",
+        title: "Permission stalled",
+        body: compactJson(event.data),
+      };
+    case "stream.warning":
+    case "cancel.warning":
+      return {
+        ...base,
+        role: "warning",
+        title: "Runner warning",
+        body: compactJson(event.data),
+      };
+    case "run.completed":
+      return {
+        ...base,
+        role: "success",
+        title: "Run completed",
+        body:
+          stringValue(event.data.final_artifact) ??
+          "The runner reached a terminal success state.",
+      };
+    case "run.failed":
+      return {
+        ...base,
+        role: "error",
+        title: "Run failed",
+        body: failureBody(event),
+      };
+    case "run.cancelled":
+      return {
+        ...base,
+        role: "warning",
+        title: "Run cancelled",
+        body: compactJson(event.data),
+      };
+    default:
+      if (event.type.endsWith(".failed") || event.type.includes("error")) {
+        return {
+          ...base,
+          role: "error",
+          title: event.type,
+          body: compactJson(event.data),
+        };
+      }
+      return null;
+  }
+}
+
+function stepBody(event: RuntimeEvent) {
+  return `Prompt #${event.data.prompt_number ?? "current"}`;
+}
+
+function permissionBody(event: RuntimeEvent) {
+  const request = extractPermissionRequest(event);
+  return request?.prompt ?? request?.tool ?? compactJson(event.data);
+}
+
+function failureBody(event: RuntimeEvent) {
+  return stringValue(event.data.reason) ?? compactJson(event.data);
+}
+
+function compactJson(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return String(value ?? "");
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+function stringValue(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return String(value);
+  }
+  return undefined;
+}
+
+function connectionTone(status: LiveConnectionStatus) {
+  if (status === "live") {
+    return "ok";
+  }
+  if (status === "reconnecting" || status === "fallback") {
+    return "warn";
+  }
+  return "neutral";
+}
+
+function connectionLabel(status: LiveConnectionStatus) {
+  const labels: Record<LiveConnectionStatus, string> = {
+    closed: "closed",
+    connecting: "connecting",
+    fallback: "polling",
+    live: "live",
+    reconnecting: "reconnecting",
+  };
+  return labels[status];
+}
+
+function bubbleClass(role: RunnerTranscriptItem["role"]) {
+  const classes: Record<RunnerTranscriptItem["role"], string> = {
+    agent: "border-primary/30 bg-background",
+    error: "border-destructive/30 bg-destructive/10 text-destructive",
+    operator: "border-sky-500/30 bg-sky-500/10",
+    success: "border-success/30 bg-success/10",
+    system: "border-border bg-card",
+    warning: "border-warning/30 bg-warning/10",
+  };
+  return classes[role];
+}
+
+function isTerminalEvent(eventType: string) {
+  return ["run.completed", "run.failed", "run.cancelled"].includes(eventType);
+}
+
 function isTerminal(status?: string) {
   return Boolean(
     status && ["completed", "failed", "cancelled"].includes(status),
@@ -1102,8 +1575,14 @@ function isTerminal(status?: string) {
 }
 
 export const __testUtils = {
+  bubbleClass,
+  connectionLabel,
+  connectionTone,
   emptyToNull,
   formatBytes,
+  isTerminalEvent,
+  mergeEvents,
+  runnerTranscript,
   isTerminal,
   statusLine,
   timeAgo,

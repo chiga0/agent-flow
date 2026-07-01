@@ -2,7 +2,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { App, queryClient, router } from "./app";
+import { App, __testUtils, queryClient, router } from "./app";
 
 const run = {
   run_id: "run_1",
@@ -41,9 +41,17 @@ const mission = {
 
 const events = [
   {
-    id: "evt_1",
+    id: "evt_0",
     run_id: "run_1",
     sequence: 1,
+    type: "run.created",
+    created_at: new Date().toISOString(),
+    data: { spec: run.spec },
+  },
+  {
+    id: "evt_1",
+    run_id: "run_1",
+    sequence: 2,
     type: "permission.requested",
     created_at: new Date().toISOString(),
     data: {
@@ -58,10 +66,18 @@ const events = [
   {
     id: "evt_2",
     run_id: "run_1",
-    sequence: 2,
-    type: "run.running",
+    sequence: 3,
+    type: "step.started",
     created_at: new Date().toISOString(),
-    data: { worker_id: "worker_1" },
+    data: { prompt_number: 1 },
+  },
+  {
+    id: "evt_3",
+    run_id: "run_1",
+    sequence: 4,
+    type: "message.delta",
+    created_at: new Date().toISOString(),
+    data: { prompt_number: 1, text: "Inspecting live runner state." },
   },
 ];
 
@@ -218,6 +234,10 @@ describe("Cloud Agents console", () => {
     render(<App />);
 
     expect(await screen.findByText("Permission Requests")).toBeInTheDocument();
+    expect(await screen.findByText("Live Runner Chat")).toBeInTheDocument();
+    expect(
+      screen.getByText("Inspecting live runner state."),
+    ).toBeInTheDocument();
     expect(screen.getByText("final-report.md")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     await user.click(screen.getByRole("button", { name: "Approve" }));
@@ -304,7 +324,95 @@ describe("Cloud Agents console", () => {
     await user.click(screen.getByLabelText("Toggle theme"));
     expect(document.documentElement.classList.contains("dark")).toBe(true);
   });
+
+  it("summarizes runner events for the live chat timeline", () => {
+    const now = new Date().toISOString();
+    const liveEvents = [
+      event("run.created", 1, { spec: run.spec }, now),
+      event(
+        "workspace.prepared",
+        2,
+        {
+          strategy: "qwen_serve_shared",
+          path: "/workspace",
+        },
+        now,
+      ),
+      event("resources.resolved", 3, { cpus: 1 }, now),
+      event("run.queued", 4, {}, now),
+      event("lease.claimed", 5, { worker_id: "worker_1" }, now),
+      event(
+        "run.started",
+        6,
+        { adapter: "qwen", workspace: "/workspace" },
+        now,
+      ),
+      event(
+        "input.accepted",
+        7,
+        { prompt_number: 1, prompt_preview: "Hello" },
+        now,
+      ),
+      event("step.started", 8, { prompt_number: 1 }, now),
+      event("step.submitted", 9, { prompt_number: 1 }, now),
+      event("message.delta", 10, { prompt_number: 1, text: "Hel" }, now),
+      event("message.delta", 11, { prompt_number: 1, text: "lo" }, now),
+      event(
+        "permission.requested",
+        12,
+        { permission_id: "perm_2", prompt: "Approve?" },
+        now,
+      ),
+      event("permission.resolved", 13, { decision: "approve" }, now),
+      event("permission.stalled", 14, { permission_id: "perm_3" }, now),
+      event("stream.warning", 15, { reason: "reconnect" }, now),
+      event("step.completed", 16, { prompt_number: 1 }, now),
+      event("run.completed", 17, { final_artifact: "final_1.json" }, now),
+      event("run.failed", 18, { reason: "boom" }, now),
+      event("run.cancelled", 19, { reason: "user" }, now),
+      event("turn_error", 20, { raw: true }, now),
+    ];
+
+    const transcript = __testUtils.runnerTranscript(liveEvents);
+
+    expect(transcript.map((item) => item.title)).toContain("Agent output #1");
+    expect(
+      transcript.find((item) => item.title === "Agent output #1")?.body,
+    ).toBe("Hello");
+    expect(transcript.map((item) => item.title)).toContain(
+      "Permission required",
+    );
+    expect(transcript.map((item) => item.title)).toContain("Run failed");
+    expect(transcript.map((item) => item.title)).toContain("turn_error");
+    expect(__testUtils.mergeEvents(liveEvents, [])).toBe(liveEvents);
+    expect(__testUtils.mergeEvents(liveEvents, [liveEvents[0]])).toBe(
+      liveEvents,
+    );
+    expect(__testUtils.isTerminalEvent("run.completed")).toBe(true);
+    expect(__testUtils.isTerminalEvent("step.completed")).toBe(false);
+    expect(__testUtils.connectionLabel("fallback")).toBe("polling");
+    expect(__testUtils.connectionTone("live")).toBe("ok");
+    expect(__testUtils.connectionTone("reconnecting")).toBe("warn");
+    expect(__testUtils.connectionTone("closed")).toBe("neutral");
+    expect(__testUtils.bubbleClass("error")).toContain("destructive");
+  });
 });
+
+function event(
+  type: string,
+  sequence: number,
+  data: Record<string, unknown>,
+  createdAt: string,
+) {
+  return {
+    id: `evt_${sequence}`,
+    run_id: "run_1",
+    sequence,
+    type,
+    created_at: createdAt,
+    data,
+  };
+}
 
 async function fetchMock(input: RequestInfo | URL, init?: RequestInit) {
   const url = typeof input === "string" ? input : input.toString();

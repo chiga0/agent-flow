@@ -17,6 +17,13 @@ test("manages runs, permissions, profiles, and operations", async ({
 
   await page.getByText("run_1").click();
   await expect(page.getByText("Permission Requests")).toBeVisible();
+  await expect(page.getByText("Live Runner Chat")).toBeVisible();
+  await expect(page.getByText("Agent output #1")).toBeVisible();
+  await expect(
+    page.getByText("Live runner output from the mocked SSE stream.", {
+      exact: true,
+    }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Approve" }).click();
   await expect(page.getByText("final-report.md")).toBeVisible();
 
@@ -99,15 +106,34 @@ async function mockRuntime(page: Page) {
     "runs/run_1/events.json": {
       events: [
         {
-          id: "evt_1",
+          id: "evt_0",
           run_id: "run_1",
           sequence: 1,
+          type: "run.created",
+          created_at: now,
+          data: { spec: run.spec },
+        },
+        {
+          id: "evt_1",
+          run_id: "run_1",
+          sequence: 2,
           type: "permission.requested",
           created_at: now,
           data: {
             permission_id: "perm_1",
             prompt: "Allow shell command?",
             options: [{ id: "approve", label: "Approve" }],
+          },
+        },
+        {
+          id: "evt_2",
+          run_id: "run_1",
+          sequence: 3,
+          type: "message.delta",
+          created_at: now,
+          data: {
+            prompt_number: 1,
+            text: "Live runner output from the mocked SSE stream.",
           },
         },
       ],

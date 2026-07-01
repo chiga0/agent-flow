@@ -467,9 +467,9 @@ The current cloud-runnable slice includes:
 - P5 POC endpoints for ACP JSON-RPC-over-HTTP, A2A task gateway, and Temporal
   workflow-plan export, including run/mission event and artifact reads.
 - React/Tailwind/@tanstack browser console with desktop/mobile navigation,
-  run creation, mission creation, permission actions, logs, artifact downloads,
-  profile inspection, P5 evaluation status, failure drills, and backup
-  downloads.
+  run creation, mission creation, permission actions, live runner chat over SSE,
+  raw event logs, artifact downloads, profile inspection, P5 evaluation status,
+  failure drills, and backup downloads.
 - Managed `qwen serve` process for one workspace when `QWEN_SERVE_COMMAND` is
   configured.
 - Persistent artifact directory on disk with `runtime.db` and JSONL artifacts.
