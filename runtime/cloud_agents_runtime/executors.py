@@ -429,7 +429,7 @@ def default_container_command(
         command.extend(["-p", f"{host}:{port}:{port}"])
     command.extend(["-v", f"{workspace}:{workspace}:rw", "-w", str(workspace)])
     if config.token:
-        command.extend(["-e", f"QWEN_SERVER_TOKEN={config.token}"])
+        command.extend(["-e", "QWEN_SERVER_TOKEN", "-e", "QWEN_SERVE_TOKEN"])
     if config.container_extra_args:
         command.extend(shlex.split(config.container_extra_args))
     command.extend(

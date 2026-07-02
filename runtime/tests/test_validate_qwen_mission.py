@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import io
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from scripts.validate_qwen_mission import main, validate_single_run
@@ -113,6 +115,27 @@ class ValidateQwenMissionTest(unittest.TestCase):
         self.assertIn(("GET", "/executors", None), client.calls)
         self.assertIn(("GET", "/runs/run-timeout/events.json", None), client.calls)
         self.assertIn(("GET", "/runs/run-timeout/executor", None), client.calls)
+        self.assertIn(("GET", "/runs/run-timeout/artifacts", None), client.calls)
+
+    def test_single_run_failure_prints_redacted_artifact_diagnostics(self) -> None:
+        client = FailedRunWithArtifactsClient()
+        args = argparse.Namespace(timeout=10.0, expect_executor_strategy="container")
+        output = io.StringIO()
+
+        with (
+            patch("scripts.validate_qwen_mission.now", side_effect=[0.0, 0.0]),
+            redirect_stdout(output),
+        ):
+            self.assertFalse(validate_single_run(client, args, deadline=10.0))
+
+        self.assertIn(("GET", "/runs/run-failed/artifacts", None), client.calls)
+        self.assertIn("/runs/run-failed/artifacts/executor.stderr.log", client.text_paths)
+        self.assertIn("/runs/run-failed/artifacts/executor.stdout.log", client.text_paths)
+        text = output.getvalue()
+        self.assertIn("--- executor.stderr.log tail ---", text)
+        self.assertIn("boot failed", text)
+        self.assertIn("QWEN_SERVER_TOKEN=<redacted>", text)
+        self.assertNotIn("super-secret-token", text)
 
 
 class CompletedRunClient:
@@ -239,4 +262,66 @@ class RecordingClient:
             return {"events": [{"type": "run.started"}]}
         if path == "/runs/run-timeout/executor":
             return {"executor": {"strategy": "per_run_process"}}
+        if path == "/runs/run-timeout/artifacts":
+            return {"artifacts": []}
         raise AssertionError(f"unexpected get: {path}")
+
+
+class FailedRunWithArtifactsClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict[str, object] | None]] = []
+        self.text_paths: list[str] = []
+
+    def post(self, path: str, payload: dict[str, object]) -> dict[str, object]:
+        self.calls.append(("POST", path, payload))
+        if path == "/runs":
+            return {"run_id": "run-failed", "status": "queued"}
+        raise AssertionError(f"unexpected post: {path}")
+
+    def get(self, path: str) -> dict[str, object]:
+        self.calls.append(("GET", path, None))
+        if path == "/runs/run-failed":
+            return {"run_id": "run-failed", "status": "failed"}
+        if path == "/queue":
+            return {"counts": {"failed": 1}}
+        if path == "/executors":
+            return {
+                "executors": [
+                    {
+                        "command": ["docker", "run", "-e", "QWEN_SERVER_TOKEN=super-secret-token"],
+                        "token": "configured",
+                    }
+                ]
+            }
+        if path == "/runs/run-failed/events.json":
+            return {"events": [{"type": "executor.failed"}, {"type": "run.failed"}]}
+        if path == "/runs/run-failed/executor":
+            return {
+                "executor": {
+                    "strategy": "container",
+                    "last_error": "executor exited early with code 1",
+                    "token": "configured",
+                }
+            }
+        if path == "/runs/run-failed/artifacts":
+            return {
+                "artifacts": [
+                    {"name": "executor.stderr.log"},
+                    {"name": "executor.stdout.log"},
+                    {"name": "executor.json"},
+                    {"name": "diagnostics.json"},
+                ]
+            }
+        raise AssertionError(f"unexpected get: {path}")
+
+    def get_text(self, path: str) -> str:
+        self.text_paths.append(path)
+        if path.endswith("/executor.stderr.log"):
+            return "boot failed QWEN_SERVER_TOKEN=super-secret-token"
+        if path.endswith("/executor.stdout.log"):
+            return ""
+        if path.endswith("/executor.json"):
+            return '{"command":["docker","run","-e","QWEN_SERVER_TOKEN=super-secret-token"]}'
+        if path.endswith("/diagnostics.json"):
+            return '{"token":"super-secret-token"}'
+        raise AssertionError(f"unexpected get_text: {path}")

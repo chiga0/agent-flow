@@ -872,6 +872,7 @@ class RuntimeEdgeTest(unittest.TestCase):
         )
         env = executor_env(lease)
         self.assertEqual(env["QWEN_SERVER_TOKEN"], "secret")
+        self.assertEqual(env["QWEN_SERVE_TOKEN"], "secret")
         self.assertEqual(env["QWEN_SERVE_CWD"], "/tmp/workspace")
         container_run = RunState.create(
             RunSpec(
@@ -898,7 +899,9 @@ class RuntimeEdgeTest(unittest.TestCase):
         self.assertIn("qwen-code:test", command)
         self.assertIn("--read-only", command)
         self.assertIn("127.0.0.1:4321:4321", command)
-        self.assertIn("QWEN_SERVER_TOKEN=tok", command)
+        self.assertIn("QWEN_SERVER_TOKEN", command)
+        self.assertIn("QWEN_SERVE_TOKEN", command)
+        self.assertFalse(any("tok" in part for part in command))
         self.assertIn("384m", command)
         self.assertEqual(command[command.index("--cpus") + 1], "0.75")
         self.assertEqual(container_metadata(container_config, container_run)["pids"], 64)

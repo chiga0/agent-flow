@@ -470,6 +470,45 @@ qwen serve 已有：
 - `mission_task_count=1` 适合小 VPS 的 smoke；`mission_task_count=2` 可验证 dependency handoff；更高任务数需要单独预算时间、内存和 qwen 配额。
 - 下一项硬风险仍是 `container` executor：需要用 `qwen_container_build=true` 或真实 image 验证 Docker/cgroup/network、credential mount 和 cleanup。
 
+## 2026-07-02 Container Executor 第一轮实机验收与诊断加固
+
+### 验收配置
+
+- GitHub Actions run：`Deploy Runtime` workflow_dispatch `28592133076`。
+- executor strategy：`container`。
+- container image：`qwen_container_build=true`，base image `node:22-bookworm-slim`，local tag `cloud-agents-qwen:local`。
+- resource limit：`cpus=1`、`memory_mb=1024`、`pids=256`。
+- qwen acceptance：`validate_qwen=true`、`qwen_validate_mission=false`、timeout `1200s`。
+
+### 验收结果
+
+- CI、Docker image build、VPS deploy、systemd service reload、runtime health 和 fake smoke 均通过。
+- Fake smoke run `run_1661fea6bff443d0a5f6ff45f243775c` 完成，证明 container strategy 下控制面和队列基础链路可工作。
+- qwen single-run `run_f324bcca642d4898ac5aae60ebc0df25` 在 container executor 启动阶段失败。
+- executor lease 最后状态为 `failed`，`last_error` 为 `[Errno 104] Connection reset by peer`；当时 workflow 没有输出 `executor.stderr.log`，无法定位 qwen 容器内退出原因。
+- Docker 命令曾把 `QWEN_SERVER_TOKEN=<value>` 放入 argv，存在进入 executor artifact / CI debug 输出的风险。
+
+### 已修复
+
+- `default_container_command()` 不再把 token 值写入 Docker argv，改为 `-e QWEN_SERVER_TOKEN -e QWEN_SERVE_TOKEN`，由父进程环境传入容器。
+- `scripts/validate_qwen_mission.py` 在 single-run 失败时会列出 run artifacts，并拉取 `executor.stderr.log`、`executor.stdout.log`、`executor.json`、`diagnostics.json` 的尾部。
+- 验收脚本输出现在会遮罩 `QWEN_*_TOKEN`、`Authorization: Bearer ...` 和 JSON/text token 字段，避免把运行时密钥带进 CI 日志。
+
+### 本地验证
+
+- `python3 scripts/check_style.py`
+- `python3 -m compileall -q runtime scripts`
+- `PYTHONPATH=runtime/tests python3 -m unittest discover -s runtime/tests`：71 tests passed。
+- `/tmp/agent-research-coverage-venv/bin/python scripts/check_runtime_coverage.py`：71 tests passed，runtime coverage `91.35%`。
+- `git diff --check`
+
+### 审计结论
+
+- Container executor 的控制面基础已可部署，但 qwen 容器内启动仍未验收通过，不能标记为 production-ready。
+- 第一轮失败不是架构否定：部署、build、systemd、fake run 和 resource metadata 已通过，剩余风险集中在 qwen container runtime 环境。
+- 下一轮必须基于新增 artifact 诊断重跑 container workflow，并按 stderr 决定是否调整容器用户、`HOME`/`.qwen` 挂载、settings 可写性、`QWEN_*` env 或 image 依赖。
+- 在 container qwen acceptance 通过前，默认 push 部署继续保持 shared/per-run 稳定路径，不把 container strategy 作为公网默认运行形态。
+
 ## Go / No-Go 决策
 
 ### Go

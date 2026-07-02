@@ -4,13 +4,27 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
+from urllib.parse import quote
 import urllib.request
 from typing import Any
 
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 TERMINAL_MISSION_STATUSES = {"completed", "failed", "cancelled", "blocked"}
+DIAGNOSTIC_ARTIFACTS = [
+    "executor.stderr.log",
+    "executor.stdout.log",
+    "executor.json",
+    "diagnostics.json",
+]
+SECRET_PATTERNS = [
+    re.compile(r"(QWEN_(?:SERVER|SERVE|EXECUTOR)_TOKEN=)[^\s\"',]+"),
+    re.compile(r"((?:\"|')?token(?:\"|')?\s*[:=]\s*(?:\"|')?)[^\s\"',}]+", re.IGNORECASE),
+    re.compile(r"(authorization[\"']?\s*[:=]\s*[\"']?Bearer\s+)[^\s\"',]+", re.IGNORECASE),
+    re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/\-=]{12,}"),
+]
 LIGHTWEIGHT_MISSION_TASKS: list[dict[str, Any]] = [
     {
         "id": "inspect",
@@ -311,6 +325,7 @@ def print_debug_snapshot(
     if run_id:
         print_event_tail(client, "single run", f"/runs/{run_id}/events.json")
         print_payload_summary(client, "single run executor", f"/runs/{run_id}/executor")
+        print_run_artifact_diagnostics(client, run_id)
     if mission_id:
         print_event_tail(client, "mission", f"/missions/{mission_id}/events.json")
 
@@ -318,9 +333,45 @@ def print_debug_snapshot(
 def print_payload_summary(client: "Client", label: str, path: str) -> None:
     try:
         payload = client.get(path)
-        print(f"{label}: {json.dumps(payload, sort_keys=True)[:2000]}")
+        print(f"{label}: {json.dumps(redact(payload), sort_keys=True)[:2000]}")
     except Exception as exc:  # pragma: no cover - best-effort diagnostics path
         print(f"{label} unavailable: {exc}", file=sys.stderr)
+
+
+def print_run_artifact_diagnostics(client: "Client", run_id: str) -> None:
+    try:
+        artifacts = client.get(f"/runs/{run_id}/artifacts").get("artifacts", [])
+        artifact_names = {artifact.get("name") for artifact in artifacts}
+        print(f"single run diagnostic artifacts: {sorted(artifact_names)}")
+    except Exception as exc:  # pragma: no cover - best-effort diagnostics path
+        print(f"single run diagnostic artifacts unavailable: {exc}", file=sys.stderr)
+        return
+    for name in DIAGNOSTIC_ARTIFACTS:
+        if name not in artifact_names:
+            continue
+        print_artifact_tail(client, run_id, name)
+
+
+def print_artifact_tail(
+    client: "Client",
+    run_id: str,
+    name: str,
+    *,
+    max_chars: int = 4000,
+) -> None:
+    try:
+        path = f"/runs/{run_id}/artifacts/{quote(name, safe='')}"
+        content = client.get_text(path)
+        content = redact_text(content).strip()
+        if len(content) > max_chars:
+            content = f"... truncated to last {max_chars} chars ...\n{content[-max_chars:]}"
+        if not content:
+            content = "<empty>"
+        print(f"--- {name} tail ---")
+        print(content)
+        print(f"--- end {name} tail ---")
+    except Exception as exc:  # pragma: no cover - best-effort diagnostics path
+        print(f"{name} unavailable: {exc}", file=sys.stderr)
 
 
 def print_event_tail(client: "Client", label: str, path: str) -> None:
@@ -347,6 +398,29 @@ def summary(payload: dict[str, Any]) -> str:
     return ",".join(sorted(payload)[:5])
 
 
+def redact(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            if "token" in key.lower() or key.lower() == "authorization":
+                redacted[key] = "<redacted>" if item else item
+            else:
+                redacted[key] = redact(item)
+        return redacted
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    if isinstance(value, str):
+        return redact_text(value)
+    return value
+
+
+def redact_text(text: str) -> str:
+    redacted = text
+    for pattern in SECRET_PATTERNS:
+        redacted = pattern.sub(r"\1<redacted>", redacted)
+    return redacted
+
+
 class Client:
     def __init__(self, base_url: str, token: str | None):
         self.base_url = base_url.rstrip("/")
@@ -358,26 +432,39 @@ class Client:
     def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self.request("POST", path, payload)
 
+    def get_text(self, path: str) -> str:
+        request = self.build_request("GET", path)
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return response.read().decode("utf-8", errors="replace")
+
     def request(
         self,
         method: str,
         path: str,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        request = self.build_request(method, path, payload)
+        with urllib.request.urlopen(request, timeout=20) as response:
+            parsed = json.loads(response.read().decode("utf-8"))
+            assert isinstance(parsed, dict)
+            return parsed
+
+    def build_request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+    ) -> urllib.request.Request:
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
         headers = {"content-type": "application/json"} if payload is not None else {}
         if self.token:
             headers["authorization"] = f"Bearer {self.token}"
-        request = urllib.request.Request(
+        return urllib.request.Request(
             f"{self.base_url}{path}",
             data=body,
             headers=headers,
             method=method,
         )
-        with urllib.request.urlopen(request, timeout=20) as response:
-            parsed = json.loads(response.read().decode("utf-8"))
-            assert isinstance(parsed, dict)
-            return parsed
 
 
 if __name__ == "__main__":
