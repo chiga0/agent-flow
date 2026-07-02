@@ -319,7 +319,10 @@ systemctl daemon-reload
 systemctl enable --now cloud-agents-runtime
 systemctl restart cloud-agents-runtime
 sleep 3
-systemctl --no-pager --full status cloud-agents-runtime
+if ! systemctl --no-pager --full status cloud-agents-runtime; then
+  journalctl -u cloud-agents-runtime -n 120 --no-pager || true
+  exit 3
+fi
 
 if [[ "$DEPLOY_RUNTIME_PRINT_SECRETS" == "1" ]]; then
   echo "RUN_MANAGER_TOKEN=$RUN_MANAGER_TOKEN"
