@@ -1,0 +1,68 @@
+name: Runtime Monitor
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      deep_run:
+        description: "Create a fake run and verify SSE completion"
+        required: false
+        default: "false"
+        type: boolean
+  workflow_run:
+    workflows:
+      - Deploy Runtime
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate monitor secrets
+        env:
+          RUNTIME_PUBLIC_HOST: ${{ secrets.RUNTIME_PUBLIC_HOST }}
+          RUNTIME_PUBLIC_URL: ${{ secrets.RUNTIME_PUBLIC_URL }}
+          RUNTIME_BASIC_AUTH_PASSWORD: ${{ secrets.RUNTIME_BASIC_AUTH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RUNTIME_PUBLIC_HOST" && -z "$RUNTIME_PUBLIC_URL" ]]; then
+            echo "missing RUNTIME_PUBLIC_HOST or RUNTIME_PUBLIC_URL"
+            exit 1
+          fi
+          test -n "$RUNTIME_BASIC_AUTH_PASSWORD" || {
+            echo "missing RUNTIME_BASIC_AUTH_PASSWORD";
+            exit 1;
+          }
+
+      - name: Monitor public runtime
+        env:
+          RUNTIME_PUBLIC_HOST: ${{ secrets.RUNTIME_PUBLIC_HOST }}
+          RUNTIME_PUBLIC_URL: ${{ secrets.RUNTIME_PUBLIC_URL }}
+          RUNTIME_BASIC_AUTH_USER: ${{ secrets.RUNTIME_BASIC_AUTH_USER }}
+          RUNTIME_BASIC_AUTH_PASSWORD: ${{ secrets.RUNTIME_BASIC_AUTH_PASSWORD }}
+          DEEP_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.deep_run || false }}
+        run: |
+          set -euo pipefail
+          args=(--json)
+          if [[ "$DEEP_RUN" == "true" ]]; then
+            args+=(--deep-run)
+          fi
+          python3 scripts/monitor_runtime.py "${args[@]}"

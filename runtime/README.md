@@ -564,3 +564,29 @@ prefix, for example `/cloud-agents/health` -> `http://127.0.0.1:8765/health`.
 The same route serves the React management console from the runtime root. The
 console uses hash routing so browser refreshes under `/cloud-agents/` do not
 collide with API paths such as `/runs` and `/missions`.
+
+### Public availability monitoring
+
+Use the public monitor after deployment and as a scheduled uptime check:
+
+```bash
+RUNTIME_PUBLIC_URL=https://doubaofans.site/cloud-agents \
+RUNTIME_BASIC_AUTH_USER=cloudagents \
+RUNTIME_BASIC_AUTH_PASSWORD=<password> \
+python3 scripts/monitor_runtime.py --json
+```
+
+The default monitor checks:
+
+- Public `/cloud-agents/` is protected by Basic Auth.
+- Authenticated console HTML returns 200 and referenced static assets load.
+- `/health`, `/capabilities`, `/queue`, and `/access/policy` return valid JSON.
+- At least one runtime worker is registered.
+
+For manual post-deploy confidence, add `--deep-run` to create a fake run and
+verify SSE reaches `run.completed`. Do not run deep checks too frequently; they
+intentionally create persisted audit records.
+
+`.github/workflows/runtime-monitor.yml` runs this monitor every 15 minutes and
+again after a successful `Deploy Runtime` workflow. A failed monitor marks the
+workflow red and emits a GitHub annotation with the failing check.
