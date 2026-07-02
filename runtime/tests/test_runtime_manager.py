@@ -388,6 +388,12 @@ class RunManagerTest(unittest.TestCase):
                         "released",
                         timeout=6,
                     )
+                    self.wait_for_event(
+                        manager,
+                        run.run_id,
+                        "executor.released",
+                        timeout=6,
+                    )
 
                     current = manager.get_run(run.run_id)
                     self.assertIsNotNone(current)
@@ -1398,6 +1404,21 @@ class RunManagerTest(unittest.TestCase):
         self.fail(
             f"executor for run {run_id} did not reach {status}; last status={last_status}"
         )
+
+    def wait_for_event(
+        self,
+        manager: RunManager,
+        run_id: str,
+        event_type: str,
+        timeout: float = 2,
+    ) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if event_type in [event.type for event in manager.store.events_since(run_id)]:
+                return
+            time.sleep(0.02)
+        events = [event.type for event in manager.store.events_since(run_id)]
+        self.fail(f"run {run_id} did not emit {event_type}; events={events}")
 
     def wait_for_mission_status(
         self,
