@@ -410,6 +410,30 @@ qwen serve 已有：
 - 增加 runner 内部工具调用的结构化展示，例如 command、cwd、exit code、stdout/stderr 摘要。
 - 支持从 Live Runner Chat 一键下载当前 run 的可读执行报告。
 
+## 2026-07-02 P7 产品化控制台补充
+
+### 设计结论
+
+- Mission 必须有独立详情页；否则多 Agent 编排只停留在列表和报告下载，无法解释“任务是如何拆分、依赖和推进的”。
+- Profile 是版本化执行模板，不是 Agent instance；系统内置 profile 应可复制，用户 profile 应可编辑并形成新版本。
+- Runner Chat 面向操作员，Raw Event Stream 面向审计；两者都保留，且 Chat 需要过滤、stalled signal 和可下载可读报告。
+- Access/RBAC 在当前 beta 先做 foundation：明确当前 principal、role matrix、scope 和审计边界，后续可替换为企业 IAM。
+- 多 SAEU 隔离不应再绑定单一 qwen endpoint；后续升级为 Executor Registry，支持 shared daemon、per-run daemon、container worker 和 remote worker。
+
+### 已落地能力
+
+- Mission Detail：状态、Task DAG、依赖、子 run 跳转、mission events、mission artifacts、review gate override。
+- Runner Chat v2：Agent/permission/warning/error 过滤、一键下载执行报告、stalled signal、adapter/tool event 摘要。
+- Profile Editor：复制系统 profile、新增/编辑用户 profile JSON policy、保存为版本化 profile。
+- Access 页面与 `/access/policy`：展示单租户到企业 RBAC 的迁移基线。
+- qwen mission 验收脚本：`scripts/validate_qwen_mission.py`。
+
+### 剩余风险
+
+- Access/RBAC foundation 还不是完整用户系统；没有 org/project、role assignment、session login 和多人审批。
+- Executor isolation 仍处于设计 ready；当前部署继续使用共享 qwen serve，适合 beta，但不是强隔离并发的最终形态。
+- Mission DAG 当前是产品可视化，不是图数据库或专业 workflow engine；复杂 DAG 后续仍可接 Temporal/LangGraph/Airflow 外层调度。
+
 ## Go / No-Go 决策
 
 ### Go

@@ -25,6 +25,7 @@
 | P4 | Supervisor + Profile + SAEU 编排 | `done` | 常驻 supervisor 可基于 profile 创建一个或多个 SAEU run；SubAgent 仅作为 SAEU 内部优化 |
 | P5 | 外部协议与替代组件评估 | `poc_done` | ACP/A2A/Temporal POC 已接入 SAEU contract；E2B/Daytona/LangGraph/Airflow 已形成可配置/暂缓决策 |
 | P6 | Beta 稳定化 | `beta_ready` | 故障演练、回放、监控、备份、部署脚本、产品级 Web 管理台和 CI/E2E 门禁完成 |
+| P7 | 产品化控制台与企业基础 | `in_progress` | Mission Detail/DAG、Runner Chat v2、Profile Editor、Access/RBAC foundation、真实 qwen mission 验收脚本和 executor isolation 路线可用 |
 
 ## P0：设计与审计
 
@@ -304,3 +305,35 @@ P4 剩余风险：
 5. 决定是否引入 model proxy 做预算、token、provider audit。
 
 P6 已能提供单租户云端 beta-ready 管理面；下一阶段重点从“单控制面可用”转向“多租户、远程 worker、成本治理和更完整协议兼容”。
+
+## P7：产品化控制台与企业基础
+
+状态：`in_progress`
+
+目标：
+
+- 把管理台从 demo 控制面升级为可交付产品体验。
+- 让“复杂需求 -> Mission DAG -> 多 SAEU run -> 实时进展 -> artifact/report”可视化闭环。
+- 为企业多用户、团队权限、审计和多 executor 隔离预留稳定接口。
+
+任务：
+
+| 任务 | 状态 | 验收 |
+| --- | --- | --- |
+| Mission Detail + DAG | `done` | 可查看 mission 状态、任务 DAG、依赖、子 run、mission events、mission artifacts 和 review gate override |
+| Runner Chat v2 | `done` | 支持 Agent/permission/warning/error 过滤、stalled signal、一键下载可读执行报告、工具事件摘要 |
+| Profile Editor | `done` | 系统 profile 可复制；用户可新建/编辑 profile JSON policy；保存后形成新版本 |
+| qwen mission 验收脚本 | `done` | `scripts/validate_qwen_mission.py` 可创建 qwen-backed mission 并校验 events/artifacts/final report |
+| Access/RBAC foundation | `done` | `/access/policy` 和 Access 页面展示当前 principal、role matrix、scope、审计边界 |
+| 多 SAEU executor isolation | `design_ready` | 下一步实现 per-run qwen serve/container worker registry，替换当前单 qwen endpoint 共享模式 |
+| 团队/项目/IAM | `not_started` | 接入真实用户登录、org/project、role assignment、审批人身份和 API token 管理 |
+
+Executor isolation 决策：
+
+- 当前单 VPS qwen deployment 使用共享 `qwen serve`，适合最小成本 beta。
+- 产品级并发需要从 “一个 adapter endpoint” 升级为 “Executor Registry”：
+  - `executor_profile`: qwen/codex/claude/opencode/fake。
+  - `workspace_strategy`: per-run worktree、persistent workspace、ephemeral container。
+  - `process_strategy`: shared daemon、per-run daemon、container worker、remote worker。
+  - `resource_policy`: CPU/memory/pids/timeout/concurrency。
+- MVP 后续优先实现 per-run qwen serve 或 container worker，而不是先引入复杂外部调度器。
