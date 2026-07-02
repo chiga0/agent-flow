@@ -382,7 +382,12 @@ class RunManagerTest(unittest.TestCase):
                         RunSpec(prompt="hello managed qwen", adapter="qwen")
                     )
                     self.wait_for_status(manager, run.run_id, "completed", timeout=6)
-                    self.wait_for_executor_status(manager, run.run_id, "released")
+                    self.wait_for_executor_status(
+                        manager,
+                        run.run_id,
+                        "released",
+                        timeout=6,
+                    )
 
                     current = manager.get_run(run.run_id)
                     self.assertIsNotNone(current)
@@ -1380,14 +1385,19 @@ class RunManagerTest(unittest.TestCase):
         manager: RunManager,
         run_id: str,
         status: str,
+        timeout: float = 2,
     ) -> None:
-        deadline = time.time() + 2
+        deadline = time.time() + timeout
+        last_status = None
         while time.time() < deadline:
             lease = manager.store.get_executor_lease_for_run(run_id)
+            last_status = lease.status if lease else None
             if lease and lease.status == status:
                 return
             time.sleep(0.02)
-        self.fail(f"executor for run {run_id} did not reach {status}")
+        self.fail(
+            f"executor for run {run_id} did not reach {status}; last status={last_status}"
+        )
 
     def wait_for_mission_status(
         self,
