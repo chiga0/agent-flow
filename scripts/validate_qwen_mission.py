@@ -11,6 +11,57 @@ from typing import Any
 
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 TERMINAL_MISSION_STATUSES = {"completed", "failed", "cancelled", "blocked"}
+LIGHTWEIGHT_MISSION_TASKS: list[dict[str, Any]] = [
+    {
+        "id": "inspect",
+        "title": "Inspect runtime acceptance state",
+        "profile": "planner",
+        "prompt": (
+            "Inspect the qwen-backed runtime acceptance context and produce a concise "
+            "plan-quality summary. Do not modify files."
+        ),
+    },
+    {
+        "id": "report",
+        "title": "Write acceptance report",
+        "profile": "doc-writer",
+        "depends_on": ["inspect"],
+        "prompt": (
+            "Summarize the acceptance result, child run evidence, artifacts, risks, "
+            "and the next validation step."
+        ),
+    },
+    {
+        "id": "verify",
+        "title": "Verify acceptance evidence",
+        "profile": "tester",
+        "depends_on": ["report"],
+        "prompt": (
+            "Review the mission evidence from dependency artifacts and produce a "
+            "concise verification note without running long commands."
+        ),
+    },
+    {
+        "id": "audit",
+        "title": "Audit acceptance risks",
+        "profile": "planner",
+        "depends_on": ["verify"],
+        "prompt": (
+            "Audit the lightweight qwen mission for reliability, timeout, artifact, "
+            "and recovery risks. Keep the output concise."
+        ),
+    },
+    {
+        "id": "final",
+        "title": "Finalize acceptance record",
+        "profile": "doc-writer",
+        "depends_on": ["audit"],
+        "prompt": (
+            "Write the final acceptance record and include any follow-up actions for "
+            "executor isolation or container validation."
+        ),
+    },
+]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,7 +81,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--validate-mission",
         action="store_true",
-        help="create a qwen-backed multi-task mission after the single-run checks",
+        help="create a qwen-backed mission after the single-run checks",
+    )
+    parser.add_argument(
+        "--mission-task-count",
+        type=int,
+        default=1,
+        help=(
+            "number of lightweight qwen mission tasks to run when "
+            "--validate-mission is set; valid range is 1-5"
+        ),
     )
     parser.add_argument(
         "--goal",
@@ -40,6 +100,12 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
+    if args.mission_task_count < 1 or args.mission_task_count > len(LIGHTWEIGHT_MISSION_TASKS):
+        print(
+            f"mission-task-count must be between 1 and {len(LIGHTWEIGHT_MISSION_TASKS)}",
+            file=sys.stderr,
+        )
+        return 1
 
     client = Client(args.base_url, args.token)
     deadline = now() + args.timeout
@@ -83,12 +149,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     mission = client.post(
         "/missions",
-        {
-            "goal": args.goal,
-            "adapter": "qwen",
-            "strategy": "sequential",
-            "timeout_seconds": mission_timeout,
-        },
+        qwen_mission_payload(args, mission_timeout),
     )
     mission_id = mission["mission_id"]
     print(f"mission: {mission_id}")
@@ -177,6 +238,35 @@ def validate_single_run(
             print("single run executor strategy mismatch", file=sys.stderr)
             return False
     return True
+
+
+def qwen_mission_payload(args: argparse.Namespace, timeout_seconds: int) -> dict[str, Any]:
+    tasks = limited_mission_tasks(args.mission_task_count)
+    return {
+        "goal": args.goal,
+        "adapter": "qwen",
+        "strategy": "custom",
+        "timeout_seconds": timeout_seconds,
+        "tasks": tasks,
+        "metadata": {
+            "acceptance": "qwen",
+            "mission_profile": "lightweight",
+            "mission_task_count": len(tasks),
+        },
+    }
+
+
+def limited_mission_tasks(task_count: int) -> list[dict[str, Any]]:
+    tasks = [dict(task) for task in LIGHTWEIGHT_MISSION_TASKS[:task_count]]
+    included = {task["id"] for task in tasks}
+    for task in tasks:
+        dependencies = task.get("depends_on") or []
+        task["depends_on"] = [
+            dependency
+            for dependency in dependencies
+            if dependency in included
+        ]
+    return tasks
 
 
 def remaining_timeout_seconds(deadline: float) -> int:

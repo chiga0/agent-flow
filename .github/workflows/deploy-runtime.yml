@@ -53,10 +53,15 @@ on:
         default: false
         type: boolean
       qwen_validate_mission:
-        description: "Also run qwen-backed multi-task mission acceptance"
+        description: "Also run qwen-backed mission acceptance"
         required: false
         default: false
         type: boolean
+      qwen_mission_task_count:
+        description: "Number of lightweight qwen mission tasks when mission acceptance is enabled"
+        required: false
+        default: "1"
+        type: string
       expect_executor_strategy:
         description: "Expected executor strategy for qwen acceptance; defaults to executor_strategy"
         required: false
@@ -284,6 +289,7 @@ jobs:
           QWEN_EXPECT_EXECUTOR_STRATEGY: ${{ inputs.expect_executor_strategy }}
           QWEN_DEPLOY_EXECUTOR_STRATEGY: ${{ inputs.executor_strategy }}
           QWEN_VALIDATE_MISSION: ${{ inputs.qwen_validate_mission }}
+          QWEN_MISSION_TASK_COUNT: ${{ inputs.qwen_mission_task_count }}
         run: |
           set -euo pipefail
           APP_DIR="${APP_DIR:-/opt/agent-research}"
@@ -293,6 +299,7 @@ jobs:
             "QWEN_EXPECT_EXECUTOR_STRATEGY='$QWEN_EXPECT_EXECUTOR_STRATEGY'"
             "QWEN_DEPLOY_EXECUTOR_STRATEGY='$QWEN_DEPLOY_EXECUTOR_STRATEGY'"
             "QWEN_VALIDATE_MISSION='$QWEN_VALIDATE_MISSION'"
+            "QWEN_MISSION_TASK_COUNT='$QWEN_MISSION_TASK_COUNT'"
           )
           ssh -i "$RUNNER_TEMP/runtime-deploy/ssh_key" \
             -o StrictHostKeyChecking=accept-new \
@@ -313,6 +320,10 @@ jobs:
             echo "invalid qwen acceptance timeout: $QWEN_ACCEPTANCE_TIMEOUT"
             exit 1
           fi
+          if ! [[ "$QWEN_MISSION_TASK_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "invalid qwen mission task count: $QWEN_MISSION_TASK_COUNT"
+            exit 1
+          fi
           hard_timeout="$((QWEN_ACCEPTANCE_TIMEOUT + 120))"
           args=(
             --base-url http://127.0.0.1:8765
@@ -325,7 +336,7 @@ jobs:
           fi
           case "${QWEN_VALIDATE_MISSION,,}" in
             true|1|yes)
-              args+=(--validate-mission)
+              args+=(--validate-mission --mission-task-count "$QWEN_MISSION_TASK_COUNT")
               ;;
           esac
           echo "starting qwen deep acceptance with timeout=${QWEN_ACCEPTANCE_TIMEOUT}s"

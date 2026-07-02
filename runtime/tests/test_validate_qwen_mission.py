@@ -31,6 +31,63 @@ class ValidateQwenMissionTest(unittest.TestCase):
         self.assertIn(("POST", "/runs", client.run_payload), client.calls)
         self.assertNotIn("POST /missions", client.method_paths())
 
+    def test_main_can_create_lightweight_custom_mission(self) -> None:
+        client = CompletedMissionClient()
+        with patch("scripts.validate_qwen_mission.Client", return_value=client):
+            self.assertEqual(
+                main(
+                    [
+                        "--base-url",
+                        "http://runtime.test",
+                        "--token",
+                        "token",
+                        "--timeout",
+                        "60",
+                        "--validate-mission",
+                        "--mission-task-count",
+                        "2",
+                    ]
+                ),
+                0,
+            )
+
+        mission_payload = client.mission_payload
+        self.assertIsNotNone(mission_payload)
+        assert mission_payload is not None
+        self.assertEqual(mission_payload["strategy"], "custom")
+        self.assertEqual(mission_payload["adapter"], "qwen")
+        tasks = mission_payload["tasks"]
+        self.assertEqual([task["id"] for task in tasks], ["inspect", "report"])
+        self.assertEqual(tasks[0]["depends_on"], [])
+        self.assertEqual(tasks[1]["depends_on"], ["inspect"])
+        self.assertEqual(
+            mission_payload["metadata"],
+            {
+                "acceptance": "qwen",
+                "mission_profile": "lightweight",
+                "mission_task_count": 2,
+            },
+        )
+
+    def test_main_rejects_invalid_mission_task_count(self) -> None:
+        with patch("scripts.validate_qwen_mission.Client") as client_class:
+            self.assertEqual(
+                main(
+                    [
+                        "--base-url",
+                        "http://runtime.test",
+                        "--token",
+                        "token",
+                        "--validate-mission",
+                        "--mission-task-count",
+                        "0",
+                    ]
+                ),
+                1,
+            )
+
+        client_class.assert_not_called()
+
     def test_single_run_timeout_cancels_run_and_prints_diagnostics(self) -> None:
         client = RecordingClient()
         args = argparse.Namespace(timeout=10.0, expect_executor_strategy=None)
@@ -105,6 +162,56 @@ class CompletedRunClient:
             }
         if path == "/runs/run-ok/executor":
             return {"executor": {"strategy": "per_run_process"}}
+        raise AssertionError(f"unexpected get: {path}")
+
+
+class CompletedMissionClient:
+    def __init__(self) -> None:
+        self.mission_payload: dict[str, object] | None = None
+        self.calls: list[tuple[str, str, dict[str, object] | None]] = []
+        self._mission_poll_count = 0
+
+    def post(self, path: str, payload: dict[str, object]) -> dict[str, object]:
+        self.calls.append(("POST", path, payload))
+        if path == "/missions":
+            self.mission_payload = payload
+            return {
+                "mission_id": "mission-ok",
+                "status": "running",
+                "task_count": 2,
+                "completed_task_count": 0,
+            }
+        raise AssertionError(f"unexpected post: {path}")
+
+    def get(self, path: str) -> dict[str, object]:
+        self.calls.append(("GET", path, None))
+        if path == "/health":
+            return {"ok": True}
+        if path == "/capabilities":
+            return {
+                "adapters": {"qwen": {}, "fake": {}},
+                "executor_registry": {"config": {"strategy": "per_run_process"}},
+            }
+        if path == "/queue":
+            return {"counts": {"completed": 1}}
+        if path == "/executors":
+            return {"executor_registry": {"config": {"strategy": "per_run_process"}}}
+        if path == "/access/policy":
+            return {"mode": "single-tenant-rbac-foundation"}
+        if path == "/cost/status":
+            return {"status": "unconfigured"}
+        if path == "/missions/mission-ok":
+            self._mission_poll_count += 1
+            return {
+                "mission_id": "mission-ok",
+                "status": "completed",
+                "task_count": 2,
+                "completed_task_count": 2,
+            }
+        if path == "/missions/mission-ok/events.json":
+            return {"events": [{"type": "mission.completed"}]}
+        if path == "/missions/mission-ok/artifacts":
+            return {"artifacts": [{"name": "final_report.md"}]}
         raise AssertionError(f"unexpected get: {path}")
 
 

@@ -471,8 +471,23 @@ python3 scripts/validate_runtime.py \
 ```
 
 Use `--adapter qwen` after starting `qwen serve`. Leave off
-`--validate-mission` for quick qwen smoke tests, because it creates multiple
-child runs.
+`--validate-mission` for the fastest qwen smoke tests. For qwen-backed mission
+acceptance, use a lightweight custom task count on small VPS hosts:
+
+```bash
+python3 scripts/validate_qwen_mission.py \
+  --base-url http://127.0.0.1:8765 \
+  --token "$RUN_MANAGER_TOKEN" \
+  --timeout 900 \
+  --validate-single-run \
+  --validate-mission \
+  --mission-task-count 1 \
+  --expect-executor-strategy per_run_process
+```
+
+`--mission-task-count` accepts `1` through `5`. Use `1` for cheap supervisor
+smoke tests, `2` for a real dependency handoff, and larger counts only when the
+VPS has enough memory, qwen quota, and time budget.
 
 ## Minimal cloud deployment target
 
@@ -511,7 +526,7 @@ The current cloud-runnable slice includes:
   E2E, and MkDocs strict build.
 - Validation script for fake/qwen runs and required artifacts.
 - Optional validation script coverage for P4 mission/profile orchestration via
-  `--validate-mission`.
+  `--validate-mission` and bounded `--mission-task-count`.
 
 HTTPS/reverse proxy is implemented through the deploy script and Nginx
 examples. Multi-tenant isolation remains a next hardening phase.
