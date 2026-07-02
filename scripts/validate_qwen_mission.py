@@ -28,6 +28,11 @@ def main(argv: list[str] | None = None) -> int:
         help="create a qwen run before the mission and validate events/artifacts/executor",
     )
     parser.add_argument(
+        "--validate-mission",
+        action="store_true",
+        help="create a qwen-backed multi-task mission after the single-run checks",
+    )
+    parser.add_argument(
         "--goal",
         default=(
             "Run a concise cloud-agents product smoke review. Inspect runtime health, "
@@ -69,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.validate_single_run and not validate_single_run(client, args, deadline):
         return 1
+    if not args.validate_mission:
+        return 0
 
     mission_timeout = remaining_timeout_seconds(deadline)
     if mission_timeout <= 0:

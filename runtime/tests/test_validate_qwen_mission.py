@@ -4,10 +4,33 @@ import argparse
 import unittest
 from unittest.mock import patch
 
-from scripts.validate_qwen_mission import validate_single_run
+from scripts.validate_qwen_mission import main, validate_single_run
 
 
 class ValidateQwenMissionTest(unittest.TestCase):
+    def test_main_single_run_acceptance_does_not_create_mission_by_default(self) -> None:
+        client = CompletedRunClient()
+        with patch("scripts.validate_qwen_mission.Client", return_value=client):
+            self.assertEqual(
+                main(
+                    [
+                        "--base-url",
+                        "http://runtime.test",
+                        "--token",
+                        "token",
+                        "--timeout",
+                        "60",
+                        "--validate-single-run",
+                        "--expect-executor-strategy",
+                        "per_run_process",
+                    ]
+                ),
+                0,
+            )
+
+        self.assertIn(("POST", "/runs", client.run_payload), client.calls)
+        self.assertNotIn("POST /missions", client.method_paths())
+
     def test_single_run_timeout_cancels_run_and_prints_diagnostics(self) -> None:
         client = RecordingClient()
         args = argparse.Namespace(timeout=10.0, expect_executor_strategy=None)
@@ -33,6 +56,56 @@ class ValidateQwenMissionTest(unittest.TestCase):
         self.assertIn(("GET", "/executors", None), client.calls)
         self.assertIn(("GET", "/runs/run-timeout/events.json", None), client.calls)
         self.assertIn(("GET", "/runs/run-timeout/executor", None), client.calls)
+
+
+class CompletedRunClient:
+    def __init__(self) -> None:
+        self.run_payload: dict[str, object] | None = None
+        self.calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def method_paths(self) -> list[str]:
+        return [f"{method} {path}" for method, path, _payload in self.calls]
+
+    def post(self, path: str, payload: dict[str, object]) -> dict[str, object]:
+        self.calls.append(("POST", path, payload))
+        if path == "/runs":
+            self.run_payload = payload
+            return {"run_id": "run-ok", "status": "queued"}
+        raise AssertionError(f"unexpected post: {path}")
+
+    def get(self, path: str) -> dict[str, object]:
+        self.calls.append(("GET", path, None))
+        if path == "/health":
+            return {"ok": True}
+        if path == "/capabilities":
+            return {
+                "adapters": {"qwen": {}, "fake": {}},
+                "executor_registry": {"config": {"strategy": "per_run_process"}},
+            }
+        if path == "/queue":
+            return {"counts": {"completed": 1}}
+        if path == "/executors":
+            return {"executor_registry": {"config": {"strategy": "per_run_process"}}}
+        if path == "/access/policy":
+            return {"mode": "single-tenant-rbac-foundation"}
+        if path == "/cost/status":
+            return {"status": "unconfigured"}
+        if path == "/runs/run-ok":
+            return {"run_id": "run-ok", "status": "completed"}
+        if path == "/runs/run-ok/events.json":
+            return {"events": [{"type": "run.completed"}]}
+        if path == "/runs/run-ok/artifacts":
+            return {
+                "artifacts": [
+                    {"name": "events.jsonl"},
+                    {"name": "raw_events.jsonl"},
+                    {"name": "diagnostics.json"},
+                    {"name": "cost.json"},
+                ]
+            }
+        if path == "/runs/run-ok/executor":
+            return {"executor": {"strategy": "per_run_process"}}
+        raise AssertionError(f"unexpected get: {path}")
 
 
 class RecordingClient:

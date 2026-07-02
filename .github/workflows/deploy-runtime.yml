@@ -48,7 +48,12 @@ on:
         default: "256"
         type: string
       validate_qwen:
-        description: "Run real qwen single-run and mission acceptance on the VPS"
+        description: "Run real qwen single-run acceptance on the VPS"
+        required: false
+        default: false
+        type: boolean
+      qwen_validate_mission:
+        description: "Also run qwen-backed multi-task mission acceptance"
         required: false
         default: false
         type: boolean
@@ -278,6 +283,7 @@ jobs:
           QWEN_ACCEPTANCE_TIMEOUT: ${{ inputs.qwen_validation_timeout }}
           QWEN_EXPECT_EXECUTOR_STRATEGY: ${{ inputs.expect_executor_strategy }}
           QWEN_DEPLOY_EXECUTOR_STRATEGY: ${{ inputs.executor_strategy }}
+          QWEN_VALIDATE_MISSION: ${{ inputs.qwen_validate_mission }}
         run: |
           set -euo pipefail
           APP_DIR="${APP_DIR:-/opt/agent-research}"
@@ -286,6 +292,7 @@ jobs:
             "QWEN_ACCEPTANCE_TIMEOUT='$QWEN_ACCEPTANCE_TIMEOUT'"
             "QWEN_EXPECT_EXECUTOR_STRATEGY='$QWEN_EXPECT_EXECUTOR_STRATEGY'"
             "QWEN_DEPLOY_EXECUTOR_STRATEGY='$QWEN_DEPLOY_EXECUTOR_STRATEGY'"
+            "QWEN_VALIDATE_MISSION='$QWEN_VALIDATE_MISSION'"
           )
           ssh -i "$RUNNER_TEMP/runtime-deploy/ssh_key" \
             -o StrictHostKeyChecking=accept-new \
@@ -316,6 +323,11 @@ jobs:
           if [[ -n "$EXPECT" ]]; then
             args+=(--expect-executor-strategy "$EXPECT")
           fi
+          case "${QWEN_VALIDATE_MISSION,,}" in
+            true|1|yes)
+              args+=(--validate-mission)
+              ;;
+          esac
           echo "starting qwen deep acceptance with timeout=${QWEN_ACCEPTANCE_TIMEOUT}s"
           timeout --kill-after=30s "${hard_timeout}s" \
             python3 scripts/validate_qwen_mission.py "${args[@]}" &
