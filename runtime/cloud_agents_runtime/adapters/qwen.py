@@ -5,9 +5,11 @@ import os
 import threading
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from typing import Any
 
 from .base import RuntimeAdapter
+from ..executors import ExecutorRegistry
 from ..models import RunState
 from ..review_gate import (
     gate_artifact_name,
@@ -16,6 +18,13 @@ from ..review_gate import (
     parse_review_gate_from_text,
 )
 from ..store import RunStore
+
+
+@dataclass(frozen=True)
+class QwenTarget:
+    base_url: str
+    token: str | None = None
+    executor_id: str | None = None
 
 
 class QwenServeAdapter(RuntimeAdapter):
@@ -34,42 +43,67 @@ class QwenServeAdapter(RuntimeAdapter):
 
     name = "qwen"
 
-    def __init__(self, base_url: str | None = None, token: str | None = None):
+    def __init__(
+        self,
+        base_url: str | None = None,
+        token: str | None = None,
+        executor_registry: ExecutorRegistry | None = None,
+    ):
         self.base_url = (base_url or os.environ.get("QWEN_SERVE_URL") or "").rstrip("/")
         self.token = token or os.environ.get("QWEN_SERVE_TOKEN")
+        self.executor_registry = executor_registry
         self._sessions: dict[str, str] = {}
         self._active_prompts: dict[str, int] = {}
         self._prompt_ids: dict[str, dict[str, int]] = {}
         self._message_text: dict[str, list[str]] = {}
         self._run_metadata: dict[str, dict[str, Any]] = {}
+        self._run_targets: dict[str, QwenTarget] = {}
         self._cancelled: set[str] = set()
         self._lock = threading.Lock()
 
     def capabilities(self) -> dict[str, Any]:
+        registry_enabled = bool(self.executor_registry and self.executor_registry.enabled)
         return {
             "name": self.name,
             "mode": "qwen_serve_rest_sse",
-            "configured": bool(self.base_url),
+            "configured": bool(self.base_url or registry_enabled),
             "base_url": self.base_url or None,
+            "executor_registry": (
+                self.executor_registry.capabilities() if self.executor_registry else None
+            ),
             "features": ["start", "input", "events", "cancel"],
-            "status": "ready" if self.base_url else "missing_QWEN_SERVE_URL",
+            "status": (
+                "ready"
+                if self.base_url or registry_enabled
+                else "missing_QWEN_SERVE_URL_or_executor_registry"
+            ),
         }
 
     def start(self, run: RunState, store: RunStore) -> None:
-        if not self.base_url:
-            store.append_event(
-                run.run_id,
-                "adapter.not_configured",
-                {"adapter": self.name, "expected": "set QWEN_SERVE_URL"},
-            )
-            store.append_event(run.run_id, "run.failed", {"reason": "qwen adapter not configured"})
-            return
-
         try:
+            target = self._prepare_target(run)
+            if target is None:
+                store.append_event(
+                    run.run_id,
+                    "adapter.not_configured",
+                    {
+                        "adapter": self.name,
+                        "expected": (
+                            "set QWEN_SERVE_URL or "
+                            "QWEN_EXECUTOR_STRATEGY=per_run_process"
+                        ),
+                    },
+                )
+                store.append_event(
+                    run.run_id,
+                    "run.failed",
+                    {"reason": "qwen adapter not configured"},
+                )
+                return
             body: dict[str, Any] = {}
             if run.spec.workspace:
                 body["cwd"] = run.spec.workspace
-            response = self._request("POST", "/session", body)
+            response = self._request(run.run_id, "POST", "/session", body)
             session_id = response["sessionId"]
             if not isinstance(session_id, str):
                 raise ValueError("qwen /session response missing sessionId")
@@ -86,6 +120,8 @@ class QwenServeAdapter(RuntimeAdapter):
                     "qwen_session_id": session_id,
                     "attached": response.get("attached", False),
                     "workspace": response.get("workspaceCwd"),
+                    "executor_id": target.executor_id,
+                    "executor_base_url": target.base_url,
                 },
             )
             threading.Thread(
@@ -99,6 +135,7 @@ class QwenServeAdapter(RuntimeAdapter):
                 "run.failed",
                 {"adapter": self.name, "reason": str(exc)},
             )
+            self._forget_run(run.run_id, store, "start failed")
 
     def send_input(self, run: RunState, prompt: str, store: RunStore) -> None:
         session_id = self._sessions.get(run.run_id)
@@ -134,6 +171,7 @@ class QwenServeAdapter(RuntimeAdapter):
         if session_id:
             try:
                 self._request(
+                    run.run_id,
                     "POST",
                     f"/session/{session_id}/cancel",
                     {"reason": reason or "cancelled"},
@@ -149,7 +187,7 @@ class QwenServeAdapter(RuntimeAdapter):
             "run.cancelled",
             {"adapter": self.name, "qwen_session_id": session_id, "reason": reason or "cancelled"},
         )
-        self._forget_run(run.run_id)
+        self._forget_run(run.run_id, store, reason or "cancelled")
 
     def resolve_permission(
         self,
@@ -160,7 +198,12 @@ class QwenServeAdapter(RuntimeAdapter):
     ) -> None:
         decision_payload = self._permission_payload(payload)
         try:
-            response = self._request("POST", f"/permission/{permission_id}", decision_payload)
+            response = self._request(
+                run.run_id,
+                "POST",
+                f"/permission/{permission_id}",
+                decision_payload,
+            )
         except Exception as exc:  # noqa: BLE001 - surface qwen mediation failure
             store.append_event(
                 run.run_id,
@@ -213,6 +256,7 @@ class QwenServeAdapter(RuntimeAdapter):
             self._active_prompts[run_id] = prompt_number
         try:
             response = self._request(
+                run_id,
                 "POST",
                 f"/session/{session_id}/prompt",
                 {"prompt": [{"type": "text", "text": prompt}]},
@@ -251,7 +295,7 @@ class QwenServeAdapter(RuntimeAdapter):
                         "reason": str(exc),
                     },
                 )
-                self._forget_run(run_id)
+                self._forget_run(run_id, store, "prompt failed")
 
     def _pump_events(self, run_id: str, session_id: str, store: RunStore) -> None:
         last_sse_id: str | None = None
@@ -299,7 +343,7 @@ class QwenServeAdapter(RuntimeAdapter):
                             "last_sse_id": last_sse_id,
                         },
                     )
-                    self._forget_run(run_id)
+                    self._forget_run(run_id, store, "event stream disconnected")
                 return
 
     def _read_event_stream(
@@ -312,7 +356,12 @@ class QwenServeAdapter(RuntimeAdapter):
         headers = {"accept": "text/event-stream"}
         if last_sse_id:
             headers["Last-Event-ID"] = last_sse_id
-        request = self._build_request("GET", f"/session/{session_id}/events", headers=headers)
+        request = self._build_request(
+            run_id,
+            "GET",
+            f"/session/{session_id}/events",
+            headers=headers,
+        )
         events_seen = 0
         event_name: str | None = None
         event_id: str | None = None
@@ -373,14 +422,14 @@ class QwenServeAdapter(RuntimeAdapter):
             return
         if qwen_type in {"session_died", "client_evicted"}:
             store.append_event(run_id, "run.failed", {"raw": payload})
-            self._forget_run(run_id)
+            self._forget_run(run_id, store, "session died")
             return
         if qwen_type == "turn_complete":
             self._complete_turn(run_id, payload, store)
             return
         if qwen_type == "turn_error":
             store.append_event(run_id, "run.failed", {"raw": payload})
-            self._forget_run(run_id)
+            self._forget_run(run_id, store, "turn error")
             return
         store.append_event(run_id, "adapter.event", {"adapter": self.name, "raw": payload})
 
@@ -405,7 +454,7 @@ class QwenServeAdapter(RuntimeAdapter):
                 "raw": payload,
             },
         )
-        self._forget_run(run_id)
+        self._forget_run(run_id, store, "run completed")
 
     def _write_gate_from_text_if_needed(self, run_id: str, store: RunStore) -> None:
         with self._lock:
@@ -449,19 +498,32 @@ class QwenServeAdapter(RuntimeAdapter):
                     return prompt_number
             return self._active_prompts.get(run_id)
 
-    def _forget_run(self, run_id: str) -> None:
+    def _forget_run(
+        self,
+        run_id: str,
+        store: RunStore | None = None,
+        reason: str = "released",
+    ) -> None:
+        target: QwenTarget | None = None
         with self._lock:
+            target = self._run_targets.pop(run_id, None)
             self._sessions.pop(run_id, None)
             self._active_prompts.pop(run_id, None)
             self._prompt_ids.pop(run_id, None)
             self._message_text.pop(run_id, None)
             self._run_metadata.pop(run_id, None)
             self._cancelled.discard(run_id)
+        if store and target and target.executor_id and self.executor_registry:
+            self.executor_registry.release_run(run_id, reason)
 
     def _request(
-        self, method: str, path: str, payload: dict[str, Any] | None = None
+        self,
+        run_id: str,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        request = self._build_request(method, path, payload)
+        request = self._build_request(run_id, method, path, payload)
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
                 body = response.read()
@@ -477,25 +539,52 @@ class QwenServeAdapter(RuntimeAdapter):
 
     def _build_request(
         self,
+        run_id: str,
         method: str,
         path: str,
         payload: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
     ) -> urllib.request.Request:
+        target = self._target_for_run(run_id)
         body = None
         request_headers = {"accept": "application/json"}
         request_headers.update(headers or {})
         if payload is not None:
             body = json.dumps(payload).encode("utf-8")
             request_headers["content-type"] = "application/json"
-        if self.token:
-            request_headers["authorization"] = f"Bearer {self.token}"
+        if target.token:
+            request_headers["authorization"] = f"Bearer {target.token}"
         return urllib.request.Request(
-            f"{self.base_url}{path}",
+            f"{target.base_url}{path}",
             data=body,
             headers=request_headers,
             method=method,
         )
+
+    def _prepare_target(self, run: RunState) -> QwenTarget | None:
+        if self.executor_registry and self.executor_registry.enabled:
+            lease = self.executor_registry.acquire_qwen(run)
+            target = QwenTarget(
+                base_url=lease.base_url or "",
+                token=lease.token or self.token,
+                executor_id=lease.executor_id,
+            )
+        elif self.base_url:
+            target = QwenTarget(base_url=self.base_url, token=self.token)
+        else:
+            return None
+        with self._lock:
+            self._run_targets[run.run_id] = target
+        return target
+
+    def _target_for_run(self, run_id: str) -> QwenTarget:
+        with self._lock:
+            target = self._run_targets.get(run_id)
+        if target:
+            return target
+        if self.base_url:
+            return QwenTarget(base_url=self.base_url, token=self.token)
+        raise RuntimeError(f"qwen target missing for run: {run_id}")
 
     def _is_cancelled(self, run_id: str) -> bool:
         with self._lock:

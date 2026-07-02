@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -347,6 +348,71 @@ class RunManagerTest(unittest.TestCase):
                     self.assertEqual(allocation["strategy"], "qwen_serve_shared")
                     self.assertFalse(allocation["isolated"])
                     self.assertFalse((root / "artifacts" / "workspaces").exists())
+                finally:
+                    manager.shutdown()
+
+    def test_per_run_qwen_executor_starts_and_releases_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "fake_qwen_server.py"
+            script.write_text(FAKE_QWEN_SERVER, encoding="utf-8")
+            command = (
+                f"{shlex.quote(sys.executable)} -u {shlex.quote(str(script))} "
+                "--host {host} --port {port}"
+            )
+            env = {
+                "QWEN_EXECUTOR_STRATEGY": "per_run_process",
+                "QWEN_EXECUTOR_COMMAND": command,
+                "QWEN_EXECUTOR_PORT_START": "0",
+                "QWEN_EXECUTOR_STARTUP_TIMEOUT": "5",
+            }
+            with patch.dict("os.environ", env, clear=False):
+                manager = RunManager(root / "artifacts", worker_capacity=1)
+                try:
+                    capabilities = manager.capabilities()
+                    self.assertTrue(
+                        capabilities["executor_registry"]["config"]["enabled"]
+                    )
+                    self.assertEqual(
+                        capabilities["adapters"]["qwen"]["status"],
+                        "ready",
+                    )
+                    run = manager.create_run(
+                        RunSpec(prompt="hello managed qwen", adapter="qwen")
+                    )
+                    self.wait_for_status(manager, run.run_id, "completed", timeout=6)
+                    self.wait_for_executor_status(manager, run.run_id, "released")
+
+                    current = manager.get_run(run.run_id)
+                    self.assertIsNotNone(current)
+                    self.assertEqual(
+                        current.spec.metadata["workspace_allocation"]["strategy"],
+                        "empty",
+                    )
+                    events = [event.type for event in manager.store.events_since(run.run_id)]
+                    self.assertIn("executor.starting", events)
+                    self.assertIn("executor.acquired", events)
+                    self.assertIn("executor.released", events)
+
+                    lease = manager.store.get_executor_lease_for_run(run.run_id)
+                    self.assertIsNotNone(lease)
+                    self.assertEqual(lease.strategy, "per_run_process")
+                    self.assertEqual(lease.status, "released")
+                    self.assertIsNotNone(lease.pid)
+                    self.assertIsNotNone(lease.port)
+                    self.assertTrue((root / "artifacts" / run.run_id / "executor.json").exists())
+                    self.assertTrue(
+                        (root / "artifacts" / run.run_id / "executor.stdout.log").exists()
+                    )
+                    diagnostics = json.loads(
+                        (root / "artifacts" / run.run_id / "diagnostics.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    self.assertEqual(
+                        diagnostics["executor"]["strategy"],
+                        "per_run_process",
+                    )
                 finally:
                     manager.shutdown()
 
@@ -1216,14 +1282,34 @@ class RunManagerTest(unittest.TestCase):
         self.assertEqual(positive_int(None, "bad", default=2), 2)
         self.assertEqual(positive_int(-1, None, default=2), 0)
 
-    def wait_for_status(self, manager: RunManager, run_id: str, status: str) -> None:
-        deadline = time.time() + 2
+    def wait_for_status(
+        self,
+        manager: RunManager,
+        run_id: str,
+        status: str,
+        timeout: float = 2,
+    ) -> None:
+        deadline = time.time() + timeout
         while time.time() < deadline:
             current = manager.get_run(run_id)
             if current and current.status == status:
                 return
             time.sleep(0.02)
         self.fail(f"run {run_id} did not reach {status}")
+
+    def wait_for_executor_status(
+        self,
+        manager: RunManager,
+        run_id: str,
+        status: str,
+    ) -> None:
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            lease = manager.store.get_executor_lease_for_run(run_id)
+            if lease and lease.status == status:
+                return
+            time.sleep(0.02)
+        self.fail(f"executor for run {run_id} did not reach {status}")
 
     def wait_for_mission_status(
         self,
@@ -1300,6 +1386,90 @@ def review_gate_mission_payload(adapter: str) -> dict[str, object]:
             },
         ],
     }
+
+
+FAKE_QWEN_SERVER = r'''
+from __future__ import annotations
+
+import argparse
+import json
+import threading
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+prompt_ready = threading.Event()
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self) -> None:
+        if self.path == "/health":
+            self.write_json({"ok": True})
+            return
+        if self.path == "/session/session_1/events":
+            prompt_ready.wait(5)
+            payload = {
+                "type": "turn_complete",
+                "data": {"promptId": "prompt_1"},
+            }
+            frame = (
+                "id: 1\n"
+                "event: turn_complete\n"
+                f"data: {json.dumps(payload)}\n\n"
+            )
+            body = frame.encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            self.close_connection = True
+            return
+        self.write_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("content-length", "0") or "0")
+        if length:
+            self.rfile.read(length)
+        if self.path == "/session":
+            self.write_json({"sessionId": "session_1", "workspaceCwd": "."})
+            return
+        if self.path == "/session/session_1/prompt":
+            prompt_ready.set()
+            self.write_json({"promptId": "prompt_1"})
+            return
+        if self.path == "/session/session_1/cancel":
+            self.write_json({"cancelled": True})
+            return
+        self.write_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def write_json(
+        self,
+        payload: dict[str, object],
+        status: HTTPStatus = HTTPStatus.OK,
+    ) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+        self.close_connection = True
+
+    def log_message(self, fmt: str, *args: object) -> None:
+        return
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--host", default="127.0.0.1")
+parser.add_argument("--port", type=int, required=True)
+args = parser.parse_args()
+ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
+'''
 
 
 class GateAdapter(RuntimeAdapter):

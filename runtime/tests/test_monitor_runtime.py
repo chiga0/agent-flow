@@ -35,6 +35,7 @@ class MonitorRuntimeTest(unittest.TestCase):
                 "health",
                 "capabilities",
                 "queue",
+                "executors",
                 "access-policy",
                 "fake-run",
             ],
@@ -75,6 +76,16 @@ class MonitorHandler(BaseHTTPRequestHandler):
             )
         elif self.path == "/cloud-agents/queue":
             self.send_json({"workers": [{"id": "worker-1"}], "counts": {"completed": 1}})
+        elif self.path == "/cloud-agents/executors":
+            self.send_json(
+                {
+                    "executor_registry": {
+                        "config": {"strategy": "shared"},
+                        "counts": {},
+                    },
+                    "executors": [],
+                }
+            )
         elif self.path == "/cloud-agents/access/policy":
             self.send_json(
                 {

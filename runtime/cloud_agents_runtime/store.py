@@ -15,6 +15,7 @@ from .models import (
     MissionSpec,
     MissionState,
     MissionTask,
+    ExecutorLease,
     RunJob,
     RunSpec,
     RunState,
@@ -38,6 +39,7 @@ class RunStore:
         self._mission_tasks: dict[str, list[MissionTask]] = {}
         self._mission_events: dict[str, list[MissionEvent]] = {}
         self._task_runs: dict[str, tuple[str, str]] = {}
+        self._executor_leases: dict[str, ExecutorLease] = {}
         self._events: dict[str, list[RuntimeEvent]] = {}
         self._conditions: dict[str, threading.Condition] = {}
         self._event_listeners: list[Callable[[RuntimeEvent], None]] = []
@@ -463,6 +465,35 @@ class RunStore:
                 "workers": [worker.to_dict() for worker in workers],
             }
 
+    def upsert_executor_lease(self, lease: ExecutorLease) -> ExecutorLease:
+        with self._lock:
+            self._executor_leases[lease.executor_id] = lease
+            self._persist_executor_lease(lease)
+            return lease
+
+    def get_executor_lease(self, executor_id: str) -> ExecutorLease | None:
+        with self._lock:
+            return self._executor_leases.get(executor_id)
+
+    def get_executor_lease_for_run(self, run_id: str) -> ExecutorLease | None:
+        with self._lock:
+            leases = [
+                lease
+                for lease in self._executor_leases.values()
+                if lease.run_id == run_id
+            ]
+            if not leases:
+                return None
+            return max(leases, key=lambda lease: lease.started_at)
+
+    def list_executor_leases(self) -> list[ExecutorLease]:
+        with self._lock:
+            return sorted(
+                self._executor_leases.values(),
+                key=lambda lease: (lease.started_at, lease.executor_id),
+                reverse=True,
+            )
+
     def update_status(self, run_id: str, status: str) -> None:
         with self._lock:
             run = self._require_run(run_id)
@@ -742,6 +773,25 @@ class RunStore:
               created_at text not null,
               updated_at text not null
             );
+            create table if not exists executor_leases (
+              executor_id text primary key,
+              run_id text not null,
+              adapter text not null,
+              strategy text not null,
+              status text not null,
+              base_url text,
+              workspace text,
+              port integer,
+              pid integer,
+              command_json text not null,
+              started_at text not null,
+              heartbeat_at text,
+              released_at text,
+              exit_code integer,
+              last_error text,
+              metadata_json text not null,
+              updated_at text not null
+            );
             create table if not exists agent_profiles (
               profile_id text not null,
               version integer not null,
@@ -854,6 +904,26 @@ class RunStore:
                     lease_ttl_seconds=row["lease_ttl_seconds"],
                     heartbeat_at=row["heartbeat_at"],
                     created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                )
+            for row in self._db.execute("select * from executor_leases order by started_at"):
+                self._executor_leases[row["executor_id"]] = ExecutorLease(
+                    executor_id=row["executor_id"],
+                    run_id=row["run_id"],
+                    adapter=row["adapter"],
+                    strategy=row["strategy"],
+                    status=row["status"],
+                    base_url=row["base_url"],
+                    workspace=row["workspace"],
+                    port=row["port"],
+                    pid=row["pid"],
+                    command=json.loads(row["command_json"]),
+                    started_at=row["started_at"],
+                    heartbeat_at=row["heartbeat_at"],
+                    released_at=row["released_at"],
+                    exit_code=row["exit_code"],
+                    last_error=row["last_error"],
+                    metadata=json.loads(row["metadata_json"]),
                     updated_at=row["updated_at"],
                 )
             for row in self._db.execute("select * from missions order by created_at"):
@@ -994,6 +1064,50 @@ class RunStore:
                 worker.heartbeat_at,
                 worker.created_at,
                 worker.updated_at,
+            ),
+        )
+        self._db.commit()
+
+    def _persist_executor_lease(self, lease: ExecutorLease) -> None:
+        self._db.execute(
+            """
+            insert into executor_leases(
+              executor_id, run_id, adapter, strategy, status, base_url, workspace,
+              port, pid, command_json, started_at, heartbeat_at, released_at,
+              exit_code, last_error, metadata_json, updated_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(executor_id) do update set
+              status=excluded.status,
+              base_url=excluded.base_url,
+              workspace=excluded.workspace,
+              port=excluded.port,
+              pid=excluded.pid,
+              command_json=excluded.command_json,
+              heartbeat_at=excluded.heartbeat_at,
+              released_at=excluded.released_at,
+              exit_code=excluded.exit_code,
+              last_error=excluded.last_error,
+              metadata_json=excluded.metadata_json,
+              updated_at=excluded.updated_at
+            """,
+            (
+                lease.executor_id,
+                lease.run_id,
+                lease.adapter,
+                lease.strategy,
+                lease.status,
+                lease.base_url,
+                lease.workspace,
+                lease.port,
+                lease.pid,
+                json.dumps(lease.command, ensure_ascii=False, sort_keys=True),
+                lease.started_at,
+                lease.heartbeat_at,
+                lease.released_at,
+                lease.exit_code,
+                lease.last_error,
+                json.dumps(lease.metadata, ensure_ascii=False, sort_keys=True),
+                lease.updated_at,
             ),
         )
         self._db.commit()
@@ -1179,6 +1293,9 @@ class RunStore:
         job = self._jobs.get(run_id)
         if job:
             diagnostics["job"] = job.to_dict()
+        executor = self.get_executor_lease_for_run(run_id)
+        if executor:
+            diagnostics["executor"] = executor.to_dict()
         self.write_json(run_id, "diagnostics.json", diagnostics)
 
 

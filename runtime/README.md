@@ -25,6 +25,9 @@ Postgres when multiple control-plane instances are required.
 - `GET /health` and `GET /capabilities` expose runtime status.
 - `GET /queue` exposes queued/running job leases and worker status.
 - `GET /workers` exposes worker heartbeat and capacity.
+- `GET /executors` exposes qwen executor leases, process status, and release
+  diagnostics.
+- `GET /runs/{run_id}/executor` returns the executor lease for one run.
 - `GET /` serves the React/Tailwind browser management console.
 - `GET /metrics.json` exposes run, mission, queue, permission, failure, and
   latency metrics.
@@ -105,6 +108,14 @@ Postgres when multiple control-plane instances are required.
 The default adapter is `fake`, which lets the full API run without a model or
 qwen daemon. The `qwen` adapter can connect to an existing `qwen serve`
 REST/SSE daemon through `QWEN_SERVE_URL` and `QWEN_SERVE_TOKEN`.
+
+For P7 executor isolation, set `QWEN_EXECUTOR_STRATEGY=per_run_process` to make
+each qwen-backed run start an isolated `qwen serve` process bound to that run's
+workspace. The registry records the executor lease in `runtime.db`, writes
+`executor.json`, `executor.stdout.log`, and `executor.stderr.log` into the run
+artifact directory, and emits `executor.starting`, `executor.acquired`,
+`executor.released`, or `executor.failed` audit events. `container` is also
+available as a command-template strategy through `QWEN_CONTAINER_COMMAND`.
 
 The service is intended to bind to `127.0.0.1` and sit behind an authenticated
 reverse proxy. Do not expose the Run Manager directly to the public internet.
@@ -429,6 +440,25 @@ Acceptance:
   its final text, the adapter extracts it into `review_gate.json` or
   `release_gate.json` before `run.completed`.
 
+To validate per-run qwen executor isolation instead of a shared daemon:
+
+```bash
+export QWEN_EXECUTOR_STRATEGY=per_run_process
+export QWEN_EXECUTOR_HOST=127.0.0.1
+export QWEN_EXECUTOR_PORT_START=4210
+export QWEN_EXECUTOR_PORT_END=4310
+export QWEN_EXECUTOR_COMMAND='qwen serve --hostname {host} --port {port}'
+python3 -m runtime.cloud_agents_runtime \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --token "$RUN_MANAGER_TOKEN"
+```
+
+In this mode the runtime does not require `QWEN_SERVE_URL`; the qwen adapter
+uses the per-run executor URL allocated by the registry. Inspect `/executors` or
+`/runs/<run_id>/executor` when debugging process startup, port assignment, or
+release behavior.
+
 ## Validate a running service
 
 ```bash
@@ -471,7 +501,8 @@ The current cloud-runnable slice includes:
   raw event logs, artifact downloads, profile inspection, P5 evaluation status,
   failure drills, and backup downloads.
 - Managed `qwen serve` process for one workspace when `QWEN_SERVE_COMMAND` is
-  configured.
+  configured, plus P7 per-run qwen executor registry when
+  `QWEN_EXECUTOR_STRATEGY=per_run_process`.
 - Persistent artifact directory on disk with `runtime.db` and JSONL artifacts.
 - systemd unit and Docker Compose assets with execution-unit CPU/memory/pids
   limits.

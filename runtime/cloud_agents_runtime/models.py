@@ -238,6 +238,34 @@ class WorkerState:
         return asdict(self)
 
 
+@dataclass
+class ExecutorLease:
+    executor_id: str
+    run_id: str
+    adapter: str
+    strategy: str
+    status: str = "starting"
+    base_url: str | None = None
+    token: str | None = None
+    workspace: str | None = None
+    port: int | None = None
+    pid: int | None = None
+    command: list[str] = field(default_factory=list)
+    started_at: str = field(default_factory=utc_now)
+    heartbeat_at: str | None = None
+    released_at: str | None = None
+    exit_code: int | None = None
+    last_error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    updated_at: str = field(default_factory=utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        if data.get("token"):
+            data["token"] = "configured"
+        return data
+
+
 def clean_identifier(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label} is required")

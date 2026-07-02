@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import socket
 import sys
 import tempfile
@@ -24,6 +25,18 @@ from runtime.cloud_agents_runtime.adapters.qwen import (
 )
 from runtime.cloud_agents_runtime.auth import AuthConfig, is_authorized
 from runtime.cloud_agents_runtime.events import RuntimeEvent
+from runtime.cloud_agents_runtime.executors import (
+    ExecutorConfig,
+    ExecutorRegistry,
+    ManagedProcess,
+    executor_env,
+    normalize_strategy,
+    parse_float as executor_parse_float,
+    parse_int as executor_parse_int,
+    port_available,
+    render_command,
+    reserve_ephemeral_port,
+)
 from runtime.cloud_agents_runtime.interop import (
     a2a_task_from_mission,
     create_a2a_task,
@@ -35,7 +48,13 @@ from runtime.cloud_agents_runtime.interop import (
 )
 from runtime.cloud_agents_runtime.manager import RunManager
 from runtime.cloud_agents_runtime.missions import build_task_definitions, run_status_to_task_status
-from runtime.cloud_agents_runtime.models import MissionSpec, RunSpec, RunState, clean_identifier
+from runtime.cloud_agents_runtime.models import (
+    ExecutorLease,
+    MissionSpec,
+    RunSpec,
+    RunState,
+    clean_identifier,
+)
 from runtime.cloud_agents_runtime.ops import (
     env_nonnegative_int,
     latency_summary,
@@ -682,7 +701,7 @@ class RuntimeEdgeTest(unittest.TestCase):
         self.assertEqual(FakeAdapter._chunks("   "), ["   "])
 
         adapter = QwenServeAdapter(base_url="http://example.test", token="tok")
-        request = adapter._build_request("GET", "/x")
+        request = adapter._build_request("run_test", "GET", "/x")
         self.assertEqual(request.headers["Authorization"], "Bearer tok")
         self.assertEqual(
             adapter._permission_payload({"decision": "approve"}),
@@ -708,6 +727,108 @@ class RuntimeEdgeTest(unittest.TestCase):
                 self.assertEqual(store.wait_for_events(run.run_id, 999, timeout=0.01), [])
             finally:
                 store.close()
+
+    def test_executor_registry_edges(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = RunStore(Path(tmp))
+            try:
+                run = store.create_run(RunSpec(adapter="qwen"))
+                disabled = ExecutorRegistry(store, ExecutorConfig(strategy="shared"))
+                with self.assertRaisesRegex(RuntimeError, "not enabled"):
+                    disabled.acquire_qwen(run)
+                disabled.release_run(run.run_id, "no lease")
+
+                container = ExecutorRegistry(store, ExecutorConfig(strategy="container"))
+                with self.assertRaisesRegex(RuntimeError, "QWEN_CONTAINER_COMMAND"):
+                    container.acquire_qwen(run)
+
+                failing = ExecutorRegistry(
+                    store,
+                    ExecutorConfig(
+                        strategy="per_run_process",
+                        port_start=0,
+                        command_template=(
+                            f"{sys.executable} -c 'import sys; sys.exit(3)'"
+                        ),
+                        startup_timeout_seconds=1,
+                    ),
+                )
+                with self.assertRaisesRegex(RuntimeError, "exited early"):
+                    failing.acquire_qwen(run)
+                failed_lease = store.get_executor_lease_for_run(run.run_id)
+                self.assertIsNotNone(failed_lease)
+                self.assertEqual(failed_lease.status, "failed")
+                self.assertIn(
+                    "executor.failed",
+                    [event.type for event in store.events_since(run.run_id)],
+                )
+
+                registry = ExecutorRegistry(store, ExecutorConfig(strategy="per_run_process"))
+                live_run = store.create_run(RunSpec(adapter="qwen"))
+                process = subprocess.Popen([sys.executable, "-c", ""])
+                process.wait(timeout=2)
+                lease = ExecutorLease(
+                    executor_id="exec_done",
+                    run_id=live_run.run_id,
+                    adapter="qwen",
+                    strategy="per_run_process",
+                    status="running",
+                    base_url="http://127.0.0.1:1",
+                    port=1,
+                    pid=process.pid,
+                )
+                store.upsert_executor_lease(lease)
+                registry._processes[lease.executor_id] = ManagedProcess(
+                    process=process,
+                    stdout=open(os.devnull, "w", encoding="utf-8"),
+                    stderr=open(os.devnull, "w", encoding="utf-8"),
+                )
+                reaped = registry.reap_exited()
+                self.assertEqual(reaped[0]["status"], "failed")
+                self.assertIn(
+                    "executor.exited",
+                    [event.type for event in store.events_since(live_run.run_id)],
+                )
+
+                orphan_run = store.create_run(RunSpec(adapter="qwen"))
+                orphan = ExecutorLease(
+                    executor_id="exec_orphan",
+                    run_id=orphan_run.run_id,
+                    adapter="qwen",
+                    strategy="per_run_process",
+                    status="running",
+                )
+                store.upsert_executor_lease(orphan)
+                ExecutorRegistry(store, ExecutorConfig(strategy="per_run_process"))
+                self.assertEqual(store.get_executor_lease("exec_orphan").status, "orphaned")
+            finally:
+                store.close()
+
+    def test_executor_config_and_helpers(self) -> None:
+        self.assertEqual(normalize_strategy("per-run"), "per_run_process")
+        self.assertEqual(normalize_strategy("docker"), "container")
+        self.assertEqual(normalize_strategy("surprise"), "shared")
+        self.assertEqual(executor_parse_int("7", 1), 7)
+        self.assertEqual(executor_parse_int("bad", 2), 2)
+        self.assertEqual(executor_parse_float("1.5", 1.0), 1.5)
+        self.assertEqual(executor_parse_float("bad", 2.0), 2.0)
+        self.assertEqual(render_command("echo {run_id}", {"run_id": "run_1"}), ["echo", "run_1"])
+        with self.assertRaisesRegex(RuntimeError, "empty"):
+            render_command("", {})
+        port = reserve_ephemeral_port("127.0.0.1")
+        self.assertTrue(port_available("127.0.0.1", port))
+        lease = ExecutorLease(
+            executor_id="exec_env",
+            run_id="run_env",
+            adapter="qwen",
+            strategy="per_run_process",
+            base_url="http://127.0.0.1:1234",
+            token="secret",
+            workspace="/tmp/workspace",
+        )
+        env = executor_env(lease)
+        self.assertEqual(env["QWEN_SERVER_TOKEN"], "secret")
+        self.assertEqual(env["QWEN_SERVE_CWD"], "/tmp/workspace")
 
     def test_qwen_cancel_and_http_error_paths(self) -> None:
         with running_fake_qwen() as qwen_url:

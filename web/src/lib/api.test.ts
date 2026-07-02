@@ -66,6 +66,7 @@ describe("api helpers", () => {
     );
 
     await runtimeApi.queue();
+    await runtimeApi.executors();
     await runtimeApi.runAudit("run_1");
     await runtimeApi.cancelRun("run_1");
     await runtimeApi.mission("mission_1");
@@ -83,6 +84,7 @@ describe("api helpers", () => {
 
     expect(calls.map(([path]) => path)).toEqual([
       "/queue",
+      "/executors",
       "/runs/run_1/audit.json",
       "/runs/run_1/cancel",
       "/missions/mission_1",
@@ -95,11 +97,11 @@ describe("api helpers", () => {
       "/access/policy",
       "/missions",
     ]);
-    expect(calls[2][1]?.method).toBe("POST");
-    expect(calls[6][1]?.method).toBe("POST");
+    expect(calls[3][1]?.method).toBe("POST");
     expect(calls[7][1]?.method).toBe("POST");
-    expect(calls[9][1]?.method).toBe("POST");
-    expect(calls[11][1]?.method).toBe("POST");
+    expect(calls[8][1]?.method).toBe("POST");
+    expect(calls[10][1]?.method).toBe("POST");
+    expect(calls[12][1]?.method).toBe("POST");
   });
 
   it("builds hrefs from the current app base", async () => {

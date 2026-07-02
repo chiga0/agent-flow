@@ -14,6 +14,7 @@ from urllib.parse import unquote, urlparse
 
 from . import __version__
 from .auth import AuthConfig, is_authorized
+from .executors import ExecutorConfig
 from .interop import (
     a2a_agent_card,
     a2a_task_from_mission,
@@ -71,6 +72,9 @@ def make_handler(
                 return
             if path == "/workers":
                 self.write_json({"workers": manager.queue_status()["workers"]})
+                return
+            if path == "/executors":
+                self.write_json(manager.executors())
                 return
             if path == "/metrics.json":
                 self.write_json(manager.metrics())
@@ -203,6 +207,13 @@ def make_handler(
                     self.write_error(HTTPStatus.NOT_FOUND, "run not found")
                     return
                 self.write_json(run.to_dict())
+                return
+            if len(parts) == 3 and parts[0] == "runs" and parts[2] == "executor":
+                if manager.get_run(parts[1]) is None:
+                    self.write_error(HTTPStatus.NOT_FOUND, "run not found")
+                    return
+                lease = manager.store.get_executor_lease_for_run(parts[1])
+                self.write_json({"executor": lease.to_dict() if lease else None})
                 return
             if (
                 len(parts) == 5
@@ -675,7 +686,8 @@ def main(argv: list[str] | None = None) -> int:
         help="seconds before an unrefreshed run lease can be reclaimed",
     )
     args = parser.parse_args(argv)
-    supervisor = qwen_supervisor_from_env()
+    executor_config = ExecutorConfig.from_env()
+    supervisor = None if executor_config.enabled else qwen_supervisor_from_env()
     if supervisor:
         supervisor.start()
     server = build_server(
@@ -695,6 +707,7 @@ def main(argv: list[str] | None = None) -> int:
         print("run manager auth: enabled")
     if args.qwen_url:
         print(f"qwen serve: {args.qwen_url}")
+    print(f"executor registry: {server.manager.executor_registry.config.to_dict()}")
     print(f"worker capacity: {server.manager.worker_capacity}")
     print(f"resource limits: {server.manager.resource_resolver.config.to_dict()}")
     print(f"cleanup policy: {server.manager.cleanup_manager.policy.to_dict()}")

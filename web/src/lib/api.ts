@@ -63,6 +63,24 @@ export interface QueueStatus {
   workers: WorkerInfo[];
 }
 
+export interface ExecutorLease {
+  executor_id: string;
+  run_id: string;
+  adapter: string;
+  strategy: string;
+  status: string;
+  base_url?: string | null;
+  workspace?: string | null;
+  port?: number | null;
+  pid?: number | null;
+  started_at: string;
+  heartbeat_at?: string | null;
+  released_at?: string | null;
+  exit_code?: number | null;
+  last_error?: string | null;
+  metadata: Record<string, unknown>;
+}
+
 export interface DrillCheck {
   id: string;
   status: "pass" | "warn" | "fail" | string;
@@ -78,6 +96,7 @@ export interface Capabilities {
     { name: string; status?: string; features?: string[] }
   >;
   queue: QueueStatus;
+  executor_registry?: Record<string, unknown>;
   profiles: AgentProfile[];
   permission_stall_policy?: { seconds: number; action: string };
   cleanup_policy?: Record<string, unknown>;
@@ -196,6 +215,11 @@ export const runtimeApi = {
   capabilities: () => api<Capabilities>("capabilities"),
   metrics: () => api<Metrics>("metrics.json"),
   queue: () => api<QueueStatus>("queue"),
+  executors: () =>
+    api<{
+      executor_registry: Record<string, unknown>;
+      executors: ExecutorLease[];
+    }>("executors"),
   runs: () => api<{ runs: RunState[] }>("runs"),
   run: (runId: string) => api<RunState>(`runs/${runId}`),
   runEvents: (runId: string) =>

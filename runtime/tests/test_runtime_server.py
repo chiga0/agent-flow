@@ -47,6 +47,11 @@ class RuntimeServerTest(unittest.TestCase):
                 headers={"authorization": "Bearer secret"},
             )
             self.assertGreaterEqual(workers["workers"][0]["capacity"], 1)
+            executors = request_json(
+                f"{base_url}/executors",
+                headers={"authorization": "Bearer secret"},
+            )
+            self.assertIn("executor_registry", executors)
             access = request_json(
                 f"{base_url}/access/policy",
                 headers={"authorization": "Bearer secret", "x-remote-user": "alice"},

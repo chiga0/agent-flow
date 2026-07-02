@@ -117,6 +117,7 @@ class PublicRuntimeMonitor:
             self.check("health", self.health),
             self.check("capabilities", self.capabilities),
             self.check("queue", self.queue),
+            self.check("executors", self.executors),
             self.check("access-policy", self.access_policy),
         ]
         if deep_run:
@@ -181,6 +182,15 @@ class PublicRuntimeMonitor:
         if not workers:
             raise RuntimeError("no workers registered")
         return f"workers={len(workers)} counts={payload.get('counts') or {}}"
+
+    def executors(self) -> str:
+        payload = self.json_get("/executors")
+        registry = payload.get("executor_registry") or {}
+        executors = payload.get("executors") or []
+        if "config" not in registry:
+            raise RuntimeError("executor registry config missing")
+        strategy = (registry.get("config") or {}).get("strategy", "-")
+        return f"strategy={strategy} executors={len(executors)}"
 
     def access_policy(self) -> str:
         payload = self.json_get("/access/policy")

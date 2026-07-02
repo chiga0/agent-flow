@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import RunSpec
+from .executors import normalize_strategy
 
 
 @dataclass(frozen=True)
@@ -33,11 +34,13 @@ class WorkspaceAllocator:
         requested_workspace = spec.workspace
         requested_repo = spec.repo
         qwen_bound_workspace = os.environ.get("QWEN_SERVE_CWD")
+        qwen_executor_strategy = normalize_strategy(os.environ.get("QWEN_EXECUTOR_STRATEGY"))
         if (
             spec.adapter == "qwen"
             and not requested_workspace
             and not requested_repo
             and qwen_bound_workspace
+            and qwen_executor_strategy == "shared"
         ):
             allocation = WorkspaceAllocation(
                 run_id=run_id,

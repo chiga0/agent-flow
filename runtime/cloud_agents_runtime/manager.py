@@ -12,6 +12,7 @@ from uuid import uuid4
 from .adapters import FakeAdapter, QwenServeAdapter, RuntimeAdapter
 from .cleanup import CleanupManager, CleanupPolicy
 from .events import RuntimeEvent, TERMINAL_RUN_EVENTS
+from .executors import ExecutorConfig, ExecutorRegistry
 from .missions import MissionManager
 from .models import RunSpec, RunState
 from .ops import BetaOpsConfig, OperationsManager
@@ -38,6 +39,7 @@ class RunManager:
         heartbeat_enabled: bool = False,
     ):
         self.store = RunStore(artifact_root)
+        self.executor_registry = ExecutorRegistry(self.store, ExecutorConfig.from_env())
         self.workspace_allocator = WorkspaceAllocator(artifact_root)
         self.resource_resolver = ResourcePolicyResolver(resource_config)
         self.cleanup_manager = CleanupManager(self.store, cleanup_policy)
@@ -45,7 +47,11 @@ class RunManager:
         self.missions = MissionManager(self)
         self.adapters = adapters or {
             "fake": FakeAdapter(),
-            "qwen": QwenServeAdapter(base_url=qwen_base_url, token=qwen_token),
+            "qwen": QwenServeAdapter(
+                base_url=qwen_base_url,
+                token=qwen_token,
+                executor_registry=self.executor_registry,
+            ),
         }
         self.worker_id = worker_id or os.environ.get("RUN_MANAGER_WORKER_ID")
         if not self.worker_id:
@@ -139,10 +145,13 @@ class RunManager:
                 "failure_drills",
                 "p5_evaluation_registry",
                 "stale_worker_detection",
+                "executor_registry",
+                "per_run_qwen_executor",
             ],
             "resource_limits": self.resource_resolver.config.to_dict(),
             "cleanup_policy": self.cleanup_manager.policy.to_dict(),
             "ops_policy": self.ops.config.to_dict(),
+            "executor_registry": self.executor_registry.capabilities(),
             "permission_stall_policy": {
                 "seconds": self.permission_stall_seconds,
                 "action": self.permission_stall_action,
@@ -206,6 +215,9 @@ class RunManager:
 
     def queue_status(self) -> dict[str, Any]:
         return self.store.queue_snapshot()
+
+    def executors(self) -> dict[str, Any]:
+        return self.executor_registry.snapshot()
 
     def cleanup_once(self) -> dict[str, Any]:
         return self.cleanup_manager.run_once().to_dict()
@@ -289,6 +301,7 @@ class RunManager:
             run_threads = list(self._run_threads)
         for thread in run_threads:
             thread.join(timeout=2)
+        self.executor_registry.shutdown()
         self.store.close()
 
     def _require_run(self, run_id: str) -> RunState:
