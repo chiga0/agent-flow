@@ -1432,7 +1432,7 @@
 <ol>
 <li><code>done</code>：在 VPS 上验收 React 管理台、部署后公网 Monitor、fake smoke。</li>
 <li><code>done</code>：用真实 qwen + <code>per_run_process</code> 跑通单 run 和 <code>mission_task_count=1</code> 轻量 mission。</li>
-<li><code>in_progress</code>：在 VPS 上用 <code>container</code> strategy + <code>qwen_container_build=true</code> 做 Docker/cgroup/network 实机验收；第一轮 run <code>28592133076</code> 暴露诊断不足和 Docker argv token 风险，第二轮 run <code>28593133445</code> 证明 qwen 容器已启动监听但 readiness probe 被瞬时 reset 误杀；已补 health auth、reset retry 和单测，下一步第三轮重跑 container workflow。</li>
+<li><code>in_progress</code>：在 VPS 上用 <code>container</code> strategy + <code>qwen_container_build=true</code> 做 Docker/cgroup/network 实机验收；第一轮 run <code>28592133076</code> 暴露诊断不足和 Docker argv token 风险，第二轮 run <code>28593133445</code> 证明 qwen 容器已启动监听但 readiness probe 被瞬时 reset 误杀；第三轮 run <code>28593787794</code> 未进入 qwen acceptance，阻塞在长时间远端 deploy 的 SSH broken pipe；已补 health auth、reset retry、deploy SSH keepalive 和单测，下一步恢复 stable deploy 后重跑 container workflow。</li>
 <li>决定 ACP/A2A POC 是否升级到官方完整协议实现或 SDK。</li>
 <li>决定是否引入 model proxy 做预算、token、provider audit。</li>
 </ol>
@@ -1531,7 +1531,7 @@
 <li><code>QWEN_CONTAINER_COMMAND</code> 自定义命令模板。</li>
 <li><code>QWEN_CONTAINER_IMAGE</code> 默认 Docker foreground worker，自动注入 <code>--cpus</code>、<code>--memory</code>、<code>--pids-limit</code>、端口映射、workspace mount、qwen token env 名称，并在 VPS deploy 时把宿主 <code>.qwen/settings.json</code> 凭据只读挂进容器。</li>
 <li><code>Deploy Runtime</code> workflow_dispatch 已支持选择 executor strategy、container image/local build、container resource limit，并可打开真实 qwen single-run + bounded mission acceptance。</li>
-<li>Container 第一轮实机验收 run <code>28592133076</code> 已证明部署脚本、Docker build、service reload 和 fake smoke 可用，并暴露诊断不足和 token argv 风险；第二轮实机验收 run <code>28593133445</code> 通过新增 artifact 证明容器内 <code>qwen serve</code> 已启动监听，失败点收敛为 runtime readiness probe 对瞬时 TCP reset 的误判；当前已补 health auth、reset retry 和回归测试，下一步第三轮重跑真实 Docker image 验收。</li>
+<li>Container 第一轮实机验收 run <code>28592133076</code> 已证明部署脚本、Docker build、service reload 和 fake smoke 可用，并暴露诊断不足和 token argv 风险；第二轮实机验收 run <code>28593133445</code> 通过新增 artifact 证明容器内 <code>qwen serve</code> 已启动监听，失败点收敛为 runtime readiness probe 对瞬时 TCP reset 的误判；第三轮 run <code>28593787794</code> 阻塞在远端 deploy SSH broken pipe，尚未进入 qwen acceptance；当前已补 health auth、reset retry、deploy SSH keepalive 和回归测试，下一步恢复 stable deploy 后重跑真实 Docker image 验收。</li>
 <li>下一步仍必须在 VPS 上用真实镜像或 <code>qwen_container_build=true</code> 做到 Docker/cgroup/network qwen acceptance 验收通过；当前自动 push 部署仍保持 shared strategy 以降低生产风险。</li>
 </ul>
 <p>P7 当前判断：</p>
@@ -1548,7 +1548,7 @@
 </li>
 <li>
 <ol>
-<li>Container worker：默认 Docker 命令生成、可选本地镜像构建、VPS Docker 安装/启动、<code>cloudagents</code> docker group、<code>.qwen/settings.json</code> 只读挂载和审计 metadata 已落地；第二轮实机 container qwen acceptance 证明 qwen 容器已启动监听，当前修复 readiness auth/reset retry 后需要第三轮验收确认 qwen single-run 可完成。</li>
+<li>Container worker：默认 Docker 命令生成、可选本地镜像构建、VPS Docker 安装/启动、<code>cloudagents</code> docker group、<code>.qwen/settings.json</code> 只读挂载和审计 metadata 已落地；第二轮实机 container qwen acceptance 证明 qwen 容器已启动监听，第三轮暴露 deploy SSH keepalive 缺口；当前需要先确认 stable deploy 恢复，再重跑 container 验收确认 qwen single-run 可完成。</li>
 </ol>
 </li>
 <li>

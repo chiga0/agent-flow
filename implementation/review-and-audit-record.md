@@ -546,6 +546,35 @@ qwen serve 已有：
 - Container executor 仍需第三轮 workflow_dispatch 实机验收，验收标准是 qwen single-run 完成且 executor lease 进入 released。
 - 在第三轮通过前，container strategy 仍保持手动验收路径，不作为默认公网部署策略。
 
+## 2026-07-02 Container Executor 第三轮验收阻塞：SSH keepalive
+
+### 验收配置
+
+- GitHub Actions run：`Deploy Runtime` workflow_dispatch `28593787794`。
+- executor strategy：`container`。
+- container image：`qwen_container_build=true`，base image `node:22-bookworm-slim`。
+- resource limit：`cpus=1`、`memory_mb=1024`、`pids=512`。
+- qwen acceptance：`validate_qwen=true`、`qwen_validate_mission=false`、timeout `1200s`。
+
+### 验收结果
+
+- 本地 CI gates、web E2E 和 deploy credential 写入均通过。
+- 失败发生在 `Deploy runtime to VPS`，尚未进入 deployed runtime smoke 或 qwen deep acceptance。
+- 日志显示 SSH 在远端 deploy 静默约 5 分 30 秒后断开：`client_loop: send disconnect: Broken pipe`。
+- 该失败不能作为 qwen container acceptance 的负面结论；它暴露的是长时间远端 Docker build / deploy 命令缺少 SSH keepalive。
+
+### 已修复
+
+- `scripts/deploy_runtime_vps.sh` 增加统一 `SSH_OPTIONS`，用于 deploy SSH 和 qwen settings scp。
+- 默认启用 `ServerAliveInterval=30`、`ServerAliveCountMax=60`、`TCPKeepAlive=yes`，允许慢 VPS 上的静默构建保持连接。
+- keepalive 参数可通过 `DEPLOY_SSH_SERVER_ALIVE_INTERVAL` 和 `DEPLOY_SSH_SERVER_ALIVE_COUNT_MAX` 覆盖。
+
+### 审计结论
+
+- 第三轮没有触达 qwen runtime 层，当前下一步应先重跑默认 stable deploy 确认 VPS 状态恢复，再重跑 container workflow。
+- Container executor 的 qwen single-run 验收状态仍为 `pending`，不是 failed by qwen。
+- 后续若 Docker build 仍超过 SSH keepalive 窗口，应改为远端 `systemd-run`/后台 build job + poll 日志，或预构建/发布 executor image，减少小 VPS 在线构建压力。
+
 ## Go / No-Go 决策
 
 ### Go

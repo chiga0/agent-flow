@@ -1289,6 +1289,34 @@ qwen 第一实现: qwen serve HTTP/SSE + ACP bridge，后续优先 `/acp` Stream
 <li>Container executor 仍需第三轮 workflow_dispatch 实机验收，验收标准是 qwen single-run 完成且 executor lease 进入 released。</li>
 <li>在第三轮通过前，container strategy 仍保持手动验收路径，不作为默认公网部署策略。</li>
 </ul>
+<h2 id="2026-07-02-container-executor-ssh-keepalive">2026-07-02 Container Executor 第三轮验收阻塞：SSH keepalive<a class="headerlink" href="#2026-07-02-container-executor-ssh-keepalive" title="Permanent link">&para;</a></h2>
+<h3 id="_56">验收配置<a class="headerlink" href="#_56" title="Permanent link">&para;</a></h3>
+<ul>
+<li>GitHub Actions run：<code>Deploy Runtime</code> workflow_dispatch <code>28593787794</code>。</li>
+<li>executor strategy：<code>container</code>。</li>
+<li>container image：<code>qwen_container_build=true</code>，base image <code>node:22-bookworm-slim</code>。</li>
+<li>resource limit：<code>cpus=1</code>、<code>memory_mb=1024</code>、<code>pids=512</code>。</li>
+<li>qwen acceptance：<code>validate_qwen=true</code>、<code>qwen_validate_mission=false</code>、timeout <code>1200s</code>。</li>
+</ul>
+<h3 id="_57">验收结果<a class="headerlink" href="#_57" title="Permanent link">&para;</a></h3>
+<ul>
+<li>本地 CI gates、web E2E 和 deploy credential 写入均通过。</li>
+<li>失败发生在 <code>Deploy runtime to VPS</code>，尚未进入 deployed runtime smoke 或 qwen deep acceptance。</li>
+<li>日志显示 SSH 在远端 deploy 静默约 5 分 30 秒后断开：<code>client_loop: send disconnect: Broken pipe</code>。</li>
+<li>该失败不能作为 qwen container acceptance 的负面结论；它暴露的是长时间远端 Docker build / deploy 命令缺少 SSH keepalive。</li>
+</ul>
+<h3 id="_58">已修复<a class="headerlink" href="#_58" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>scripts/deploy_runtime_vps.sh</code> 增加统一 <code>SSH_OPTIONS</code>，用于 deploy SSH 和 qwen settings scp。</li>
+<li>默认启用 <code>ServerAliveInterval=30</code>、<code>ServerAliveCountMax=60</code>、<code>TCPKeepAlive=yes</code>，允许慢 VPS 上的静默构建保持连接。</li>
+<li>keepalive 参数可通过 <code>DEPLOY_SSH_SERVER_ALIVE_INTERVAL</code> 和 <code>DEPLOY_SSH_SERVER_ALIVE_COUNT_MAX</code> 覆盖。</li>
+</ul>
+<h3 id="_59">审计结论<a class="headerlink" href="#_59" title="Permanent link">&para;</a></h3>
+<ul>
+<li>第三轮没有触达 qwen runtime 层，当前下一步应先重跑默认 stable deploy 确认 VPS 状态恢复，再重跑 container workflow。</li>
+<li>Container executor 的 qwen single-run 验收状态仍为 <code>pending</code>，不是 failed by qwen。</li>
+<li>后续若 Docker build 仍超过 SSH keepalive 窗口，应改为远端 <code>systemd-run</code>/后台 build job + poll 日志，或预构建/发布 executor image，减少小 VPS 在线构建压力。</li>
+</ul>
 <h2 id="go-no-go">Go / No-Go 决策<a class="headerlink" href="#go-no-go" title="Permanent link">&para;</a></h2>
 <h3 id="go">Go<a class="headerlink" href="#go" title="Permanent link">&para;</a></h3>
 <ul>
@@ -1310,7 +1338,7 @@ qwen 第一实现: qwen serve HTTP/SSE + ACP bridge，后续优先 `/acp` Stream
 <li>把所有 SubAgent 都强制拆成独立 daemon。</li>
 <li>从头实现 coding agent core。</li>
 </ul>
-<h2 id="_56">最终可实施判断<a class="headerlink" href="#_56" title="Permanent link">&para;</a></h2>
+<h2 id="_60">最终可实施判断<a class="headerlink" href="#_60" title="Permanent link">&para;</a></h2>
 <p>方案可行，且适合 1-2 台 VPS 起步。推荐第一阶段只实现一个 qwen serve SAEU adapter，把审计、权限、事件、artifact 和恢复做扎实；第二阶段再抽象 ACP-compatible runtime adapter；第三阶段再做常驻 Supervisor + SubAgent + SAEU 的多 Agent 编排。</p>
 <p>只要不跳过单 Agent 单元稳定性，多 Agent 编排不会建立在松散 CLI 进程上，而是建立在可管理、可恢复、可审计的执行单元上。</p>
   </div>
@@ -2059,6 +2087,40 @@ qwen 第一实现: qwen serve HTTP/SSE + ACP bridge，后续优先 `/acp` Stream
         
 
         
+        <a href="#2026-07-02-container-executor-ssh-keepalive"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#2026-07-02-container-executor-ssh-keepalive');">
+            2026-07-02 Container Executor 第三轮验收阻塞：SSH keepalive
+        </a>
+        
+        
+        <a href="#_56"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#_56');">
+            验收配置
+        </a>
+        
+        <a href="#_57"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#_57');">
+            验收结果
+        </a>
+        
+        <a href="#_58"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#_58');">
+            已修复
+        </a>
+        
+        <a href="#_59"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#_59');">
+            审计结论
+        </a>
+        
+        
+
+        
         <a href="#go-no-go"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#go-no-go');">
@@ -2081,9 +2143,9 @@ qwen 第一实现: qwen serve HTTP/SSE + ACP bridge，后续优先 `/acp` Stream
         
 
         
-        <a href="#_56"
+        <a href="#_60"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#_56');">
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#_60');">
             最终可实施判断
         </a>
         
