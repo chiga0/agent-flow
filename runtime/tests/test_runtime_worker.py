@@ -78,6 +78,8 @@ class RemoteWorkerDaemonTest(unittest.TestCase):
                 self.assertIn("final_1.json", artifact_names)
                 self.assertIn("raw_events.jsonl", artifact_names)
                 self.assertTrue((worker_root / run["run_id"] / "final_1.json").exists())
+                raw_events = worker_root / run["run_id"] / "raw_events.jsonl"
+                self.assertIn('"index": 1', raw_events.read_text(encoding="utf-8"))
                 worker_path = urllib.parse.quote("vps/a", safe="")
                 worker_state = request_json(f"{base_url}/workers/{worker_path}", headers=headers)
                 self.assertEqual(worker_state["worker"]["metadata"]["region"], "test-region")

@@ -25,6 +25,10 @@ Postgres when multiple control-plane instances are required.
 - `GET /health` and `GET /capabilities` expose runtime status.
 - `GET /queue` exposes queued/running job leases and worker status.
 - `GET /workers` exposes worker heartbeat and capacity.
+- `POST /workers/{worker_id}/heartbeat`, `POST /workers/{worker_id}/claim`,
+  `POST /workers/{worker_id}/runs/{run_id}/events`, and
+  `POST /workers/{worker_id}/runs/{run_id}/artifacts` expose the remote worker
+  control-plane API.
 - `GET /executors` exposes qwen executor leases, process status, and release
   diagnostics.
 - `GET /runs/{run_id}/executor` returns the executor lease for one run.
@@ -207,6 +211,75 @@ curl -s http://127.0.0.1:8765/queue \
 curl -s http://127.0.0.1:8765/workers \
   -H "authorization: Bearer $RUN_MANAGER_TOKEN"
 ```
+
+## Remote worker mode
+
+Run the control plane without an in-process worker:
+
+```bash
+RUN_MANAGER_TOKEN=dev-token python3 -m runtime.cloud_agents_runtime \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --token "$RUN_MANAGER_TOKEN" \
+  --worker-capacity 0
+```
+
+Start one remote worker on the same host or another VPS:
+
+```bash
+RUN_MANAGER_TOKEN=dev-token python3 -m runtime.cloud_agents_runtime.worker \
+  --control-url http://127.0.0.1:8765 \
+  --token "$RUN_MANAGER_TOKEN" \
+  --worker-id vps-a \
+  --metadata-json '{
+    "region": "hk",
+    "labels": {"tier": "sandbox"},
+    "resources": {"memory_mb": 2048},
+    "executor": {"strategy": "shared"},
+    "sandbox": {"type": "process"}
+  }'
+```
+
+The worker heartbeat advertises adapters and built-in features automatically.
+Additional metadata can declare labels, resources, executor, and sandbox
+capabilities. A run can restrict placement through
+`spec.metadata.worker_requirements`:
+
+```bash
+curl -s http://127.0.0.1:8765/runs \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{
+    "prompt": "run on a Hong Kong fake worker",
+    "adapter": "fake",
+    "metadata": {
+      "worker_requirements": {
+        "adapters": ["fake"],
+        "features": ["artifacts"],
+        "labels": {"region": "hk"},
+        "resources": {"memory_mb": 512}
+      }
+    }
+  }'
+```
+
+Claim only returns queued jobs that match the worker's advertised adapter,
+feature, label, resource, executor, and sandbox metadata. If a worker advertises
+adapters, the run adapter is required even when `worker_requirements.adapters`
+is omitted.
+
+Remote text artifacts support chunk append. Workers use this for
+`raw_events.jsonl`; executor stdout/stderr can use the same protocol:
+
+```bash
+curl -s http://127.0.0.1:8765/workers/vps-a/runs/<run_id>/artifacts \
+  -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"name":"stdout.log","content":"first chunk\n","mode":"append","chunk_index":1}'
+```
+
+JSON artifacts are write-only, while text uploads accept `mode: "write"` or
+`mode: "append"`, optional `chunk_index`, and optional `final`.
 
 Trigger one cleanup pass:
 

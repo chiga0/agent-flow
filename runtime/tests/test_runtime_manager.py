@@ -254,7 +254,7 @@ class RunManagerTest(unittest.TestCase):
                         "lease_ttl_seconds": 30,
                         "endpoint": "https://worker-a.example",
                         "labels": {"region": "us-west"},
-                        "capabilities": {"adapters": ["qwen"], "container": True},
+                        "capabilities": {"adapters": ["fake"], "container": True},
                         "resources": {"memory_mb": 1024},
                     },
                 )
@@ -291,6 +291,33 @@ class RunManagerTest(unittest.TestCase):
                 )
                 self.assertEqual(uploaded["artifact"]["name"], "remote_result.json")
                 self.assertTrue((Path(tmp) / run.run_id / "remote_result.json").exists())
+                manager.write_remote_worker_artifact(
+                    "vps-a",
+                    run.run_id,
+                    {"name": "stream.log", "content": "part-1\n", "mode": "append"},
+                )
+                streamed = manager.write_remote_worker_artifact(
+                    "vps-a",
+                    run.run_id,
+                    {
+                        "name": "stream.log",
+                        "content": "part-2\n",
+                        "mode": "append",
+                        "chunk_index": 2,
+                        "final": True,
+                    },
+                )
+                self.assertTrue(streamed["event"]["data"]["final"])
+                self.assertEqual(
+                    (Path(tmp) / run.run_id / "stream.log").read_text(),
+                    "part-1\npart-2\n",
+                )
+                with self.assertRaisesRegex(ValueError, "cannot use append"):
+                    manager.write_remote_worker_artifact(
+                        "vps-a",
+                        run.run_id,
+                        {"name": "bad.json", "json": {"ok": True}, "mode": "append"},
+                    )
                 with self.assertRaisesRegex(ValueError, "not leased"):
                     manager.append_remote_worker_event(
                         "vps-b",
@@ -315,6 +342,61 @@ class RunManagerTest(unittest.TestCase):
                     if item["worker_id"] == "vps-a"
                 )
                 self.assertEqual(worker["active_count"], 0)
+            finally:
+                manager.shutdown()
+
+    def test_remote_worker_claim_respects_requirements(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = RunManager(Path(tmp), worker_capacity=0, worker_id="control-plane")
+            try:
+                run = manager.create_run(
+                    RunSpec(
+                        prompt="remote task",
+                        adapter="fake",
+                        metadata={
+                            "worker_requirements": {
+                                "labels": {"region": "us-west"},
+                                "features": ["artifacts"],
+                                "resources": {"memory_mb": 512},
+                            }
+                        },
+                    )
+                )
+                manager.remote_worker_heartbeat(
+                    "qwen-only",
+                    {
+                        "capacity": 1,
+                        "capabilities": {"adapters": ["qwen"], "features": ["artifacts"]},
+                        "labels": {"region": "us-west"},
+                        "resources": {"memory_mb": 4096},
+                    },
+                )
+                self.assertIsNone(
+                    manager.claim_remote_run("qwen-only", {"capacity": 1})["run"]
+                )
+                manager.remote_worker_heartbeat(
+                    "wrong-region",
+                    {
+                        "capacity": 1,
+                        "capabilities": {"adapters": ["fake"], "features": ["artifacts"]},
+                        "labels": {"region": "eu-central"},
+                        "resources": {"memory_mb": 4096},
+                    },
+                )
+                self.assertIsNone(
+                    manager.claim_remote_run("wrong-region", {"capacity": 1})["run"]
+                )
+                claim = manager.claim_remote_run(
+                    "fake-west",
+                    {
+                        "capacity": 1,
+                        "capabilities": {"adapters": ["fake"], "features": ["artifacts"]},
+                        "labels": {"region": "us-west"},
+                        "resources": {"memory_mb": 1024},
+                    },
+                )
+                self.assertEqual(claim["run"]["run_id"], run.run_id)
+                self.assertEqual(claim["job"]["worker_id"], "fake-west")
             finally:
                 manager.shutdown()
 

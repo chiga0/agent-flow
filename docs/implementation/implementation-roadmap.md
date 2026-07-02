@@ -365,7 +365,7 @@ P7 当前判断：
 
 ## P8：远程 Worker 与多 VPS 调度
 
-状态：`planned`
+状态：`in_progress`
 
 目标：
 
@@ -379,7 +379,18 @@ P7 当前判断：
 | --- | --- | --- |
 | Worker Registry API | `foundation_done` | 远程 worker 可 heartbeat、claim run、回传 run events、上传轻量 artifact；worker metadata 可在 `/workers` 查询 |
 | Worker Daemon CLI | `foundation_done` | `python -m cloud_agents_runtime.worker --control-url ... --token ...` 可长期 poll claim，并已覆盖 HTTP control-plane 下 fake run 完整执行/回传测试；qwen 依赖 worker 本地 `QWEN_SERVE_URL` |
-| 能力匹配调度 | `next` | run metadata 可指定 required adapters/labels/resources；claim 只返回匹配 worker 的任务 |
-| Artifact streaming | `next` | worker 端 executor stdout/stderr/events 可分片上传，中心 artifacts 完整可审计 |
+| 能力匹配调度 | `foundation_done` | run metadata 可指定 required adapters/features/labels/resources/executor/sandbox；claim 只返回匹配 worker 的任务 |
+| Artifact streaming | `foundation_done` | worker 端 text artifact 支持 append/chunk metadata；raw_events.jsonl 已按分片追加上传，中心 artifacts 完整可审计 |
 | 多 VPS deploy | `next` | 新增 `deploy_worker_vps.sh` 或 workflow_dispatch，第二台 VPS 可注册到主控制面 |
 | 安全边界 | `next` | worker token scope、per-worker revoke、mTLS/Basic Auth/Nginx allowlist 策略明确 |
+
+当前实现：
+
+- 远程 worker claim 会按 run `metadata.worker_requirements` 或 `metadata.required_worker` 过滤：
+  - `adapters` / `features` 匹配 worker `capabilities`。
+  - `labels` 匹配 worker `labels`，并兼容 top-level `region`、`zone`。
+  - `resources` 中数值型要求按 `worker >= required` 判断。
+  - `executor` / `sandbox` 按 key-value 精确匹配。
+- 当 worker 显式声明 `capabilities.adapters` 时，即使 run 未声明 `worker_requirements.adapters`，也必须包含 run adapter。
+- 远程 artifact 上传支持 text `mode=append`、`chunk_index`、`final`，并限制单次上传大小；JSON artifact 保持 write-only，避免半截 JSON 进入审计包。
+- Worker daemon 的 `raw_events.jsonl` 使用 append chunk 上传，worker 本地 artifact mirror 也写入同名 JSONL。

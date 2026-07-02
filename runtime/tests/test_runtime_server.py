@@ -149,7 +149,7 @@ class RuntimeServerTest(unittest.TestCase):
                         "capacity": 1,
                         "lease_ttl_seconds": 30,
                         "endpoint": "https://worker-a.example",
-                        "capabilities": {"adapters": ["qwen"], "container": True},
+                        "capabilities": {"adapters": ["fake"], "container": True},
                     },
                     headers=headers,
                 )
@@ -184,6 +184,29 @@ class RuntimeServerTest(unittest.TestCase):
                     headers=headers,
                 )
                 request_json(
+                    f"{base_url}/workers/vps-a/runs/{run['run_id']}/artifacts",
+                    method="POST",
+                    payload={
+                        "name": "remote.log",
+                        "content": "hello ",
+                        "mode": "append",
+                        "chunk_index": 1,
+                    },
+                    headers=headers,
+                )
+                request_json(
+                    f"{base_url}/workers/vps-a/runs/{run['run_id']}/artifacts",
+                    method="POST",
+                    payload={
+                        "name": "remote.log",
+                        "content": "worker",
+                        "mode": "append",
+                        "chunk_index": 2,
+                        "final": True,
+                    },
+                    headers=headers,
+                )
+                request_json(
                     f"{base_url}/workers/vps-a/runs/{run['run_id']}/events",
                     method="POST",
                     payload={"type": "run.completed", "data": {"summary": "done"}},
@@ -198,6 +221,14 @@ class RuntimeServerTest(unittest.TestCase):
                 self.assertIn(
                     "remote_result.json",
                     {artifact["name"] for artifact in artifacts["artifacts"]},
+                )
+                self.assertIn(
+                    "remote.log",
+                    {artifact["name"] for artifact in artifacts["artifacts"]},
+                )
+                self.assertEqual(
+                    (Path(tmp) / run["run_id"] / "remote.log").read_text(),
+                    "hello worker",
                 )
 
     def test_fake_run_streams_sse_and_writes_artifacts(self) -> None:

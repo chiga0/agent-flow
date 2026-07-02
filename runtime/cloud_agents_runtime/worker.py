@@ -82,8 +82,17 @@ class ControlPlaneClient:
         *,
         content: str | None = None,
         json_value: Any | None = None,
+        mode: str = "write",
+        chunk_index: int | None = None,
+        final: bool | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"name": name}
+        if mode != "write":
+            payload["mode"] = mode
+        if chunk_index is not None:
+            payload["chunk_index"] = chunk_index
+        if final is not None:
+            payload["final"] = final
         if json_value is not None:
             payload["json"] = json_value
         elif content is not None:
@@ -174,17 +183,27 @@ class RemoteWorkerRunStore:
 
     def append_raw_event(self, run_id: str, adapter: str, payload: dict[str, Any]) -> None:
         self._require_run(run_id)
-        raw_event = {"adapter": adapter, "payload": payload, "index": len(self._raw_events) + 1}
         with self._lock:
+            raw_event = {
+                "adapter": adapter,
+                "payload": payload,
+                "index": len(self._raw_events) + 1,
+            }
             self._raw_events.append(raw_event)
-            content = "\n".join(json.dumps(item, ensure_ascii=False) for item in self._raw_events)
-            if content:
-                content += "\n"
+            content = json.dumps(raw_event, ensure_ascii=False) + "\n"
+            chunk_index = raw_event["index"]
+            if self.artifact_root:
+                path = safe_child_file(self.artifact_root / run_id, "raw_events.jsonl")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as file:
+                    file.write(content)
         self.client.upload_artifact(
             self.worker_id,
             run_id,
             "raw_events.jsonl",
             content=content,
+            mode="append",
+            chunk_index=chunk_index,
         )
 
     def append_event(

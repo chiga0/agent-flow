@@ -24,6 +24,9 @@ from .store import RunStore
 from .workspace import WorkspaceAllocator
 
 
+MAX_REMOTE_ARTIFACT_BYTES = 2 * 1024 * 1024
+
+
 class RunManager:
     def __init__(
         self,
@@ -274,7 +277,11 @@ class RunManager:
         self.store.recover_expired_leases()
         if self.store.active_job_count(worker_id) >= capacity:
             return {"worker": worker.to_dict(), "job": None, "run": None}
-        job = self.store.claim_next_job(worker_id, lease_ttl_seconds)
+        job = self.store.claim_next_job(
+            worker_id,
+            lease_ttl_seconds,
+            predicate=lambda run: worker_matches_run(worker.metadata, run),
+        )
         run = self.store.get_run(job.run_id) if job else None
         return {
             "worker": self.store.heartbeat_worker(
@@ -319,13 +326,24 @@ class RunManager:
         name = payload.get("name")
         if not isinstance(name, str) or not name.strip():
             raise ValueError("artifact name is required")
+        mode = str(payload.get("mode") or "write").strip().lower()
+        if mode not in {"write", "append"}:
+            raise ValueError("artifact mode must be write or append")
         if "json" in payload:
+            if mode == "append":
+                raise ValueError("json artifacts cannot use append mode")
             content = json.dumps(payload["json"], ensure_ascii=False, indent=2)
         else:
             content = payload.get("content")
             if not isinstance(content, str):
                 raise ValueError("artifact content or json is required")
-        path = self.store.write_text(run_id, name.strip(), content)
+        if len(content.encode("utf-8")) > MAX_REMOTE_ARTIFACT_BYTES:
+            raise ValueError("artifact content exceeds remote upload limit")
+        path = (
+            self.store.append_text(run_id, name.strip(), content)
+            if mode == "append"
+            else self.store.write_text(run_id, name.strip(), content)
+        )
         event = self.store.append_event(
             run_id,
             "artifact.uploaded",
@@ -333,6 +351,9 @@ class RunManager:
                 "worker_id": worker_id,
                 "name": path.name,
                 "size_bytes": path.stat().st_size,
+                "mode": mode,
+                "chunk_index": payload.get("chunk_index"),
+                "final": bool(payload.get("final")),
             },
         )
         return {"artifact": {"name": path.name}, "event": event.to_dict()}
@@ -702,6 +723,80 @@ def worker_metadata(payload: dict[str, Any], *, default_kind: str) -> dict[str, 
         if isinstance(value, (dict, list)):
             metadata[key] = value
     return metadata
+
+
+def worker_matches_run(worker: dict[str, Any], run: RunState) -> bool:
+    requirements = worker_requirements(run)
+    capabilities = dict_value(worker.get("capabilities"))
+    adapters = string_set(capabilities.get("adapters"))
+    required_adapters = string_set(requirements.get("adapters")) or {run.spec.adapter}
+    if adapters and required_adapters and adapters.isdisjoint(required_adapters):
+        return False
+    if not contains_all(
+        string_set(capabilities.get("features")),
+        string_set(requirements.get("features")),
+    ):
+        return False
+    if not mapping_contains(worker_labels(worker), dict_value(requirements.get("labels"))):
+        return False
+    if not resources_satisfy(
+        dict_value(worker.get("resources")),
+        dict_value(requirements.get("resources")),
+    ):
+        return False
+    for key in ("executor", "sandbox"):
+        if not mapping_contains(dict_value(worker.get(key)), dict_value(requirements.get(key))):
+            return False
+    return True
+
+
+def worker_requirements(run: RunState) -> dict[str, Any]:
+    metadata = run.spec.metadata if isinstance(run.spec.metadata, dict) else {}
+    raw = metadata.get("worker_requirements") or metadata.get("required_worker")
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def worker_labels(worker: dict[str, Any]) -> dict[str, Any]:
+    labels = dict_value(worker.get("labels"))
+    for key in ("region", "zone"):
+        if key in worker and key not in labels:
+            labels[key] = worker[key]
+    return labels
+
+
+def dict_value(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def string_set(value: Any) -> set[str]:
+    if isinstance(value, str):
+        return {value}
+    if isinstance(value, list):
+        return {item for item in value if isinstance(item, str) and item}
+    return set()
+
+
+def contains_all(actual: set[str], required: set[str]) -> bool:
+    return not required or required.issubset(actual)
+
+
+def mapping_contains(actual: dict[str, Any], required: dict[str, Any]) -> bool:
+    for key, value in required.items():
+        if actual.get(key) != value:
+            return False
+    return True
+
+
+def resources_satisfy(actual: dict[str, Any], required: dict[str, Any]) -> bool:
+    for key, required_value in required.items():
+        actual_value = actual.get(key)
+        if isinstance(required_value, (int, float)) and isinstance(actual_value, (int, float)):
+            if actual_value < required_value:
+                return False
+            continue
+        if actual_value != required_value:
+            return False
+    return True
 
 
 def normalize_permission_stall_action(value: str | None) -> str:

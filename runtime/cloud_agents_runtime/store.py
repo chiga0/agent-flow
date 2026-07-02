@@ -368,15 +368,23 @@ class RunStore:
         self,
         worker_id: str,
         lease_ttl_seconds: int,
+        predicate: Callable[[RunState], bool] | None = None,
     ) -> RunJob | None:
         with self._lock:
             queued = sorted(
                 (job for job in self._jobs.values() if job.status == "queued"),
                 key=lambda job: (job.queued_at, job.run_id),
             )
-            if not queued:
+            job = next(
+                (
+                    candidate
+                    for candidate in queued
+                    if predicate is None or predicate(self._runs[candidate.run_id])
+                ),
+                None,
+            )
+            if job is None:
                 return None
-            job = queued[0]
             now = utc_now()
             job.status = "running"
             job.worker_id = worker_id
@@ -739,6 +747,15 @@ class RunStore:
             path = safe_child_file(self.run_dir(run_id), name)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
+            return path
+
+    def append_text(self, run_id: str, name: str, content: str) -> Path:
+        with self._lock:
+            self._require_run(run_id)
+            path = safe_child_file(self.run_dir(run_id), name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(content)
             return path
 
     def events_since(self, run_id: str, last_sequence: int = 0) -> list[RuntimeEvent]:

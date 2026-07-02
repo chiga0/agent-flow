@@ -315,6 +315,9 @@ class ExecutorRegistry:
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 last_error = exc
             time.sleep(0.2)
+        exit_code = process.poll()
+        if exit_code is not None:
+            raise RuntimeError(f"executor exited early with code {exit_code}")
         raise RuntimeError(f"executor did not become healthy: {last_error}")
 
     def _allocate_port(self) -> int:
