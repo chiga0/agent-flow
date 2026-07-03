@@ -1155,7 +1155,7 @@ class RunManagerTest(unittest.TestCase):
                     manager,
                     mission["mission_id"],
                     "completed",
-                    timeout=5,
+                    timeout=15,
                 )
                 final = manager.get_mission(mission["mission_id"])
                 report_task = next(

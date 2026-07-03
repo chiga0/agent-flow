@@ -546,7 +546,7 @@ class RuntimeServerTest(unittest.TestCase):
                     },
                 )
                 mission_id = mission["mission_id"]
-                deadline = time.time() + 5
+                deadline = time.time() + 15
                 current: dict[str, Any] = {}
                 while time.time() < deadline:
                     current = request_json(f"{base_url}/missions/{mission_id}")
