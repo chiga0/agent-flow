@@ -718,14 +718,15 @@ Use the public monitor after deployment and as a scheduled uptime check:
 
 ```bash
 RUNTIME_PUBLIC_URL=https://doubaofans.site/cloud-agents \
-RUNTIME_BASIC_AUTH_USER=cloudagents \
-RUNTIME_BASIC_AUTH_PASSWORD=<password> \
+RUNTIME_AUTH_EMAIL=<owner@example.com> \
+RUNTIME_AUTH_PASSWORD=<password> \
 python3 scripts/monitor_runtime.py --json
 ```
 
 If `RUNTIME_PUBLIC_URL` is not set, the script prefers
-`RUNTIME_PUBLIC_DOMAIN` as `https://<domain>/cloud-agents`; if only
-`RUNTIME_PUBLIC_HOST` is set, it falls back to `http://<host>/cloud-agents`.
+`RUNTIME_PUBLIC_DOMAIN`; if only `RUNTIME_PUBLIC_HOST` is set, it falls back to
+the host URL. For path-prefix deployments, set `RUNTIME_PUBLIC_URL` explicitly
+so the monitor checks the same public route that users open.
 
 The default monitor checks:
 

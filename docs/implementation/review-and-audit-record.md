@@ -344,8 +344,8 @@ qwen serve 已有：
 ```bash
 python3 scripts/monitor_runtime.py \
   --base-url https://doubaofans.site/cloud-agents \
-  --basic-user cloudagents \
-  --basic-password "$RUN_MANAGER_LOGIN_PASSWORD" \
+  --auth-email "$RUN_MANAGER_BOOTSTRAP_EMAIL" \
+  --auth-password "$RUN_MANAGER_BOOTSTRAP_PASSWORD" \
   --deep-run \
   --json
 ```
