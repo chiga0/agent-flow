@@ -129,17 +129,22 @@ class PublicRuntimeMonitor:
         self.opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(self.cookie_jar)
         )
+        self.authenticated = False
 
     def run(self, deep_run: bool = False) -> list[CheckResult]:
-        results = [
-            self.check("edge-auth", self.edge_auth),
-            self.check("console-html", self.console_html),
-            self.check("health", self.health),
-            self.check("capabilities", self.capabilities),
-            self.check("queue", self.queue),
-            self.check("executors", self.executors),
-            self.check("access-policy", self.access_policy),
-        ]
+        results = [self.check("edge-auth", self.edge_auth)]
+        if not self.authenticated:
+            results.append(self.check("session-login", self.login))
+        results.extend(
+            [
+                self.check("console-html", self.console_html),
+                self.check("health", self.health),
+                self.check("capabilities", self.capabilities),
+                self.check("queue", self.queue),
+                self.check("executors", self.executors),
+                self.check("access-policy", self.access_policy),
+            ]
+        )
         if deep_run:
             results.append(self.check("fake-run", self.fake_run))
         return results
@@ -162,6 +167,12 @@ class PublicRuntimeMonitor:
         unauth_api = self.request("GET", "/capabilities", auth=False, allow_error=True)
         if unauth_api.status != 401:
             raise RuntimeError(f"expected unauthenticated API 401, got {unauth_api.status}")
+        session = self.login()
+        if session.get("authenticated") is not True:
+            raise RuntimeError(f"session not authenticated: {session}")
+        return "login page is public and APIs require a session"
+
+    def login(self) -> dict[str, Any]:
         login = self.request(
             "POST",
             "/auth/login",
@@ -174,9 +185,8 @@ class PublicRuntimeMonitor:
         if login.status != 200:
             raise RuntimeError(f"login returned {login.status}")
         session = self.json_get("/auth/session")
-        if session.get("authenticated") is not True:
-            raise RuntimeError(f"session not authenticated: {session}")
-        return "login page is public and APIs require a session"
+        self.authenticated = session.get("authenticated") is True
+        return session
 
     def console_html(self) -> str:
         response = self.request("GET", "/", auth=True)
@@ -299,17 +309,23 @@ class PublicRuntimeMonitor:
         payload: dict[str, Any] | None = None,
         allow_error: bool = False,
     ) -> "Response":
-        try:
-            with self.open_request(method, path, auth, payload) as response:
-                return Response(
-                    status=response.status,
-                    headers=dict(response.headers.items()),
-                    body=response.read(),
-                )
-        except urllib.error.HTTPError as exc:
-            if not allow_error:
-                raise
-            return Response(exc.code, dict(exc.headers.items()), exc.read())
+        for attempt in range(2):
+            try:
+                with self.open_request(method, path, auth, payload) as response:
+                    return Response(
+                        status=response.status,
+                        headers=dict(response.headers.items()),
+                        body=response.read(),
+                    )
+            except urllib.error.HTTPError as exc:
+                if not allow_error:
+                    raise
+                return Response(exc.code, dict(exc.headers.items()), exc.read())
+            except (OSError, urllib.error.URLError):
+                if attempt == 1:
+                    raise
+                time.sleep(0.5)
+        raise RuntimeError(f"request retry exhausted for {method} {path}")
 
     def open_request(
         self,
