@@ -56,6 +56,8 @@ test("manages runs, permissions, profiles, and operations", async ({
   await page.getByRole("button", { name: "Retry notification" }).click();
   await page.getByRole("button", { name: "Approve" }).first().click();
   await expect(page.getByText("final-report.md")).toBeVisible();
+  await page.getByRole("button", { name: "Preview" }).first().click();
+  await expect(page.getByText("mock final report")).toBeVisible();
 
   await navigate(page, /Missions/);
   await page.getByRole("link", { name: /Open detail/ }).click();
@@ -83,6 +85,7 @@ test("manages runs, permissions, profiles, and operations", async ({
   await expect(
     page.getByRole("heading", { name: "Execution Units" }),
   ).toBeVisible();
+  await expect(page.getByText("How Units Work")).toBeVisible();
   await expect(
     page.getByText(
       "2 GB memory is already running work. Keep this worker at capacity=1.",
@@ -96,6 +99,7 @@ test("manages runs, permissions, profiles, and operations", async ({
   await expect(
     page.getByRole("heading", { name: "Deployment Command" }),
   ).toBeVisible();
+  await expect(page.getByText("No local source required")).toBeVisible();
   await page.getByRole("button", { name: "Copy" }).click();
   await page.getByRole("button", { name: "Refresh" }).click();
   await page.getByRole("button", { name: "Drain" }).first().click();
@@ -439,10 +443,20 @@ async function mockRuntime(
       await route.fulfill({
         json: {
           worker_id: "hk-2c2g-b",
-          token_id: "token_worker",
-          token: "secret-token",
           capacity: 1,
           control_url: "https://doubaofans.site/cloud-agents-worker",
+          token: {
+            token_id: "token_worker",
+            name: "worker-hk-2c2g-b",
+            principal_id: "operator",
+            scopes: ["workers:*"],
+            status: "active",
+            token_prefix: "cat_worker",
+            token: "secret-token",
+            created_at: now,
+            updated_at: now,
+            metadata: {},
+          },
           deploy_command:
             "RUN_WORKER_ID=hk-2c2g-b bash scripts/deploy_worker_vps.sh root@host /path/key.pem",
           metadata: { resources: { cpus: 2, memory_gb: 2 } },
@@ -505,6 +519,13 @@ async function mockRuntime(
     }
     if (path in fixtures) {
       await route.fulfill({ json: fixtures[path] });
+      return;
+    }
+    if (path === "runs/run_1/artifacts/final-report.md") {
+      await route.fulfill({
+        body: "# mock final report",
+        headers: { "content-type": "text/markdown" },
+      });
       return;
     }
     await route.continue();

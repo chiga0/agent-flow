@@ -258,5 +258,94 @@ flowchart LR
 2. 如果 Run 等待权限，首屏必须出现审批卡，按钮点击后有提交中、失败或等待应用反馈。
 3. Qwen 权限按钮不再 400；审计请求体同时包含标准 decision 和原始 optionId。
 4. 模型流式输出以连续文本出现；空 delta 不产生空白卡片。
+
+## 第五轮循环审计：新用户路径、术语一致性与可操作性
+
+> 日期：2026-07-04
+> 方法：参考前四轮审计结论，按“文档 -> 方案设计 -> 源码实现 -> 产品设计 -> 产品易用性 -> 新用户视角 -> 产品体验视角”逐项复审，并把可立即落地的问题转成修复。
+
+### 审计结论
+
+本轮复审发现，上一轮已经把 Run Detail 从事件面板推进到 Chat-first 工作台，并补齐产物预览、权限提交状态、排队解释、执行单元和执行器术语说明。但新用户的第一步仍不够稳定：产品内没有明确“先 fake run、再 qwen、长任务再 worker”的入口路径，Runs 创建页还倾向于默认选择 `qwen`，容易让第一次部署验证直接进入最脆弱的高资源路径。
+
+当前产品稳定性判断：
+
+1. Run Detail 的核心任务工作台已经可用，能展示模型输出、工具调用、权限请求、artifact 和审计材料。
+2. 产物预览和审计下载已经把“看结果”和“拿审计包”拆开，降低了下载文件才能确认结果的摩擦。
+3. Units/Executors 的概念解释已进入页面和文档，但首次使用路径还需要在 Overview 和 Runs 创建页显性化。
+4. 新用户最容易失败的路径仍是“直接 qwen run”，因此默认行为必须偏保守。
+
+### 本轮发现与修复
+
+| 视角 | 发现 | 风险 | 本轮处理 |
+| --- | --- | --- | --- |
+| 新用户视角 | 首页缺少首跑路径，新用户不知道应该先做 fake run 还是 qwen run | 把 qwen 失败误判为平台失败 | Overview 新增“首次使用路径”，引导先 fake、再 qwen、长任务再 worker |
+| 产品易用性 | Runs 创建页在 qwen 可用时默认选择 qwen | 2C2G 或未配置 qwen 时首跑容易失败 | 默认 adapter 改为优先 `fake`，并增加 adapter 风险提示 |
+| 产品体验 | 顶部没有文档入口，遇到 Run/Worker/Executor 概念时需要离开产品自行找文档 | 新用户概念断裂 | Header 新增文档入口，直达架构与术语文档 |
+| 源码实现 | E2E 未覆盖产物预览链路和真实 worker registration 响应结构 | UI 回归时可能只测到下载，不测预览/部署命令 | E2E 增加 artifact preview、Units 概念卡和无源码部署命令断言；修正 registration mock 为嵌套 token |
+| 可访问性 | Adapter 风险提示被包在 label 内，导致字段可访问名称被污染 | 自动化测试和辅助技术都可能无法稳定定位字段 | 将提示移出 label，字段名保持为稳定的 `Adapter` |
+| 文档 | 架构与术语文档已补，但审计台账没有记录这轮修复 | loop 无法追踪为何修复 | 本节记录问题、处理和剩余风险 |
+
+### 本轮已完成修复
+
+1. Overview 新增“首次使用路径”：
+   - 先创建 fake run。
+   - 再尝试 qwen run。
+   - 长任务或低配 VPS 场景再注册 worker。
+   - 提供架构与术语文档入口。
+
+2. Header 新增文档入口：
+   - 默认跳转到公开文档的 `AgentFlow 架构与术语`。
+   - 移动端保留图标入口，桌面端显示“Docs/文档”。
+
+3. Runs 创建页默认 adapter 收敛：
+   - `fake` 可用时优先默认 `fake`。
+   - `qwen` 只在用户主动选择后使用。
+   - adapter 下方显示当前选择的用途和资源风险。
+
+4. E2E 与单测补强：
+   - 单测覆盖 Overview 首次路径、文档入口、Runs 默认 fake、qwen 风险提示。
+   - E2E 覆盖 run artifact 预览、Units 概念解释、无源码部署命令。
+   - E2E mock worker registration 使用真实嵌套 token 结构，避免测试绕过 UI 运行时依赖。
+
+5. 表单可访问性修复：
+   - Adapter 的说明文案移出 `<label>`。
+   - `Adapter` 字段保持稳定可检索的 accessible name。
+   - 避免“提示文本变成字段名”的辅助技术噪音。
+
+### 本轮验证结果
+
+本轮修复后已在本地完成以下验证：
+
+1. Web 单测：25 passed。
+2. Web 覆盖率：Statements 95.99%，Branches 90.06%，Functions 91.30%，Lines 95.99%。
+3. Web lint：通过，0 warning。
+4. Web build：通过，已重新生成 runtime 静态资源。
+5. Playwright E2E：chromium/mobile 共 4 passed，2 skipped；覆盖登录、Runs、权限、Profiles、Operations、artifact 预览、Units 说明和移动端导航。
+6. Runtime style：通过。
+7. Runtime 覆盖率：87 tests passed，coverage 90.37%。
+
+### 本轮再次审计结论
+
+按文档、方案设计、源码实现、产品设计、产品易用性、新用户视角、产品体验视角复审后，当前轮次没有发现需要阻塞部署的 P0/P1 缺陷。剩余问题主要集中在动态 readiness、复杂 artifact 预览、Mission supervisor summary 和权限 applied 闭环，适合进入下一轮 roadmap feature，而不是阻断当前控制台可用性。
+
+### 本轮剩余风险
+
+| 优先级 | 风险 | 后续建议 |
+| --- | --- | --- |
+| P1 | 首次使用路径仍是静态 checklist，没有根据部署健康状态动态打勾 | 接入 metrics/capabilities/run history，做真正的 onboarding checklist |
+| P1 | qwen readiness 仍靠文案提示，不能提前检测 settings、资源和 executor strategy | Runs 创建页增加 qwen readiness check 和失败建议 |
+| P1 | 产物预览只支持小型文本，无法预览图片、PDF、HTML、压缩包索引 | 增加 artifact manifest、content type、图片/PDF 安全预览 |
+| P2 | 文档入口固定到 GitHub Pages，私有部署或离线部署时可能不匹配 | 支持 `VITE_DOCS_URL` 或 runtime capabilities 返回 docs_url |
+| P2 | Mission Stream 仍缺 supervisor 自动总结和 reviewer gate 快捷操作 | 下一轮聚焦 Mission 视角的任务完成感 |
+
+### 下一轮 loop 建议
+
+下一轮优先做“动态可用性”而不是继续增加静态说明：
+
+1. Overview onboarding checklist 根据真实状态显示完成/待处理。
+2. qwen readiness check：settings、adapter 状态、worker 资源、executor strategy、最近 qwen 失败原因。
+3. Run Detail 增加 artifact preview 的类型探测和更安全的大文件处理。
+4. Mission Detail 补 supervisor summary，让多 run 输出形成一个最终任务视角。
 5. 工具调用以可读摘要出现，原始 JSON 保留为排障材料。
 6. 刷新页面后，已提交或已解决的权限请求不会继续显示为常驻待处理按钮。

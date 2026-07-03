@@ -474,6 +474,12 @@ describe("AgentFlow console", () => {
     expect(await screen.findByText("健康")).toBeInTheDocument();
     expect(screen.getByText("最近运行")).toBeInTheDocument();
     expect(screen.getByText("最近任务")).toBeInTheDocument();
+    expect(screen.getByText("首次使用路径")).toBeInTheDocument();
+    expect(screen.getByText("先创建 fake run")).toBeInTheDocument();
+    expect(screen.getByText("阅读架构与术语")).toHaveAttribute(
+      "href",
+      "https://chiga0.github.io/agent-research/architecture/",
+    );
     expect(await screen.findByText("活跃运行")).toBeInTheDocument();
     expect(screen.getByText("回到对话")).toBeInTheDocument();
 
@@ -507,16 +513,26 @@ describe("AgentFlow console", () => {
 
   it("creates a run from the Runs page", async () => {
     const user = userEvent.setup();
-    await act(async () => {
-      await router.navigate({ to: "/runs" });
-    });
     render(<App />);
     await switchToEnglish(user);
+    await user.click(await screen.findByRole("link", { name: "Runs" }));
 
     expect(
       await screen.findByRole("heading", { name: "Runs" }),
     ).toBeInTheDocument();
+    expect(await screen.findByLabelText("Adapter")).toHaveValue("fake");
+    expect(
+      screen.getByText(
+        "fake is a low-cost smoke test. Run it first when validating a new deployment.",
+      ),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /refresh/i }));
+    await user.selectOptions(screen.getByLabelText("Adapter"), "qwen");
+    expect(
+      screen.getByText(
+        "qwen consumes more CPU/memory and may require approvals. Use it after fake passes.",
+      ),
+    ).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("Adapter"), "fake");
     await user.clear(await screen.findByLabelText("Prompt"));
     await user.type(screen.getByLabelText("Prompt"), "Run a smoke validation");

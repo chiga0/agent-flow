@@ -357,6 +357,8 @@ function OverviewPage() {
         />
       </div>
 
+      <GettingStartedPanel />
+
       <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
         <Card>
           <CardHeader>
@@ -409,6 +411,63 @@ function OverviewPage() {
         <RecentMissions missions={missions.data?.missions ?? []} />
       </div>
     </Page>
+  );
+}
+
+function GettingStartedPanel() {
+  const { t } = useI18n();
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("overview.getStarted")}</CardTitle>
+        <a
+          className="text-sm text-primary"
+          href="https://chiga0.github.io/agent-research/architecture/"
+          rel="noreferrer"
+          target="_blank"
+        >
+          {t("overview.checkDocs")}
+        </a>
+      </CardHeader>
+      <CardBody className="grid gap-3 md:grid-cols-3">
+        <Link
+          className="rounded-md border border-border p-3 hover:bg-muted"
+          to="/runs"
+        >
+          <div className="flex items-center gap-2 font-medium">
+            <Play className="h-4 w-4 text-primary" />
+            {t("overview.checkFake")}
+          </div>
+          <div className="mt-2 text-sm text-muted-foreground">
+            {t("overview.checkFakeDetail")}
+          </div>
+        </Link>
+        <Link
+          className="rounded-md border border-border p-3 hover:bg-muted"
+          to="/runs"
+        >
+          <div className="flex items-center gap-2 font-medium">
+            <MessageSquare className="h-4 w-4 text-primary" />
+            {t("overview.checkQwen")}
+          </div>
+          <div className="mt-2 text-sm text-muted-foreground">
+            {t("overview.checkQwenDetail")}
+          </div>
+        </Link>
+        <Link
+          className="rounded-md border border-border p-3 hover:bg-muted"
+          to="/units"
+        >
+          <div className="flex items-center gap-2 font-medium">
+            <Server className="h-4 w-4 text-primary" />
+            {t("overview.checkWorker")}
+          </div>
+          <div className="mt-2 text-sm text-muted-foreground">
+            {t("overview.checkWorkerDetail")}
+          </div>
+        </Link>
+      </CardBody>
+    </Card>
   );
 }
 
@@ -1073,7 +1132,7 @@ function CreateRunForm({ adapters }: { adapters: string[] }) {
   });
   const form = useForm({
     defaultValues: {
-      adapter: adapters.includes("qwen") ? "qwen" : adapters[0] || "fake",
+      adapter: adapters.includes("fake") ? "fake" : adapters[0] || "fake",
       prompt:
         "Summarize the current runtime status and produce a short final report.",
       repo: "",
@@ -1107,18 +1166,23 @@ function CreateRunForm({ adapters }: { adapters: string[] }) {
         >
           <form.Field name="adapter">
             {(field) => (
-              <Field label={t("common.adapter")}>
-                <Select
-                  value={field.state.value}
-                  onChange={(event) => field.handleChange(event.target.value)}
-                >
-                  {adapters.map((adapter) => (
-                    <option key={adapter} value={adapter}>
-                      {adapter}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
+              <div className="grid gap-1.5">
+                <Field label={t("common.adapter")}>
+                  <Select
+                    value={field.state.value}
+                    onChange={(event) => field.handleChange(event.target.value)}
+                  >
+                    {adapters.map((adapter) => (
+                      <option key={adapter} value={adapter}>
+                        {adapter}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <p className="text-xs text-muted-foreground">
+                  {adapterTip(field.state.value, t)}
+                </p>
+              </div>
             )}
           </form.Field>
           <form.Field name="prompt">
@@ -1184,6 +1248,10 @@ function CreateRunForm({ adapters }: { adapters: string[] }) {
       </CardBody>
     </Card>
   );
+}
+
+function adapterTip(adapter: string, t: (key: I18nKey) => string) {
+  return adapter === "qwen" ? t("runs.adapterQwenTip") : t("runs.adapterFakeTip");
 }
 
 function RunDetailPage() {
