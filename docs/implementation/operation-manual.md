@@ -127,6 +127,8 @@ RUN_MANAGER_LOGIN_PASSWORD="$(
 - Audit Bundle：下载完整审计包。
 - Permission：处理 pending permission request。
 
+权限确认当前以 Web 控制台为权威入口；远程 worker 的权限决策会先写入中心事件流，再通过 worker control plane 下发到对应执行单元。邮件、飞书、企业微信等外部通知 channel 的目标架构见：[人类介入、权限确认与通知 Channel 架构](human-in-the-loop-permission-channel-architecture.md)。
+
 如果你觉得“卡住了”，优先看：
 
 1. Agent Chat 是否仍有实时输出，或者是否停在 permission。

@@ -21,6 +21,7 @@ nav:
       - ACP、A2A 与 MCP 协议选型: implementation/protocol-acp-a2a.md
       - Temporal 调研与适配方案: implementation/temporal-evaluation.md
       - 事件溯源、JSONL 与回放: implementation/event-sourcing-and-replay.md
+      - 人类介入与权限 Channel 架构: implementation/human-in-the-loop-permission-channel-architecture.md
       - 单 Agent 基座选型: implementation/single-agent-strategy.md
       - 从单 Agent 执行单元到多 Agent 编排: implementation/single-to-multi-agent-implementation-plan.md
       - 外部方案对比与多方向审计: implementation/alternative-solutions-comparative-audit.md
