@@ -71,19 +71,50 @@ jobs:
             local method="$1"
             local path="$2"
             local body="${3:-{}}"
-            curl -fsS \
-              -X "$method" \
-              -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
-              -H "content-type: application/json" \
-              --data "$body" \
-              "$API_BASE$path"
+            local response_file
+            local status
+            response_file="$(mktemp)"
+            status="$(
+              curl -sS \
+                -o "$response_file" \
+                -w '%{http_code}' \
+                -X "$method" \
+                -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
+                -H "content-type: application/json" \
+                --data "$body" \
+                "$API_BASE$path"
+            )"
+            cat "$response_file"
+            rm -f "$response_file"
+            if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
+              echo "runtime api $method $path returned HTTP $status" >&2
+              return 22
+            fi
+          }
+
+          api_get() {
+            local path="$1"
+            local response_file
+            local status
+            response_file="$(mktemp)"
+            status="$(
+              curl -sS \
+                -o "$response_file" \
+                -w '%{http_code}' \
+                -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
+                "$API_BASE$path"
+            )"
+            cat "$response_file"
+            rm -f "$response_file"
+            if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
+              echo "runtime api GET $path returned HTTP $status" >&2
+              return 22
+            fi
           }
 
           case "$RUNTIME_OP_ACTION" in
             queue_status)
-              curl -fsS \
-                -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
-                "$API_BASE/queue"
+              api_get /queue
               ;;
             retry_worker)
               api \
@@ -91,16 +122,12 @@ jobs:
                 "/workers/$RUNTIME_OP_WORKER_ID/retry" \
                 '{"reason":"manual runtime ops retry"}'
               echo
-              curl -fsS \
-                -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
-                "$API_BASE/queue"
+              api_get /queue
               ;;
             restart_runtime)
               systemctl restart cloud-agents-runtime
               sleep 3
-              curl -fsS \
-                -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
-                "$API_BASE/health"
+              api_get /health
               ;;
             restart_nginx)
               nginx -t
