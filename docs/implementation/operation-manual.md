@@ -27,13 +27,13 @@ http://47.243.94.91/cloud-agents/
 
 ### 登录信息
 
-默认登录用户名通常是：
+当前推荐使用本地邮箱账户登录，不再把浏览器登录解释成旧的 Basic Auth 用户名密码。
 
-```text
-cloudagents
-```
+- 邮箱来自 GitHub Secret `RUNTIME_AUTH_EMAIL`，部署后会写入服务器环境变量 `RUN_MANAGER_BOOTSTRAP_EMAIL`。
+- 密码优先来自 `RUNTIME_AUTH_PASSWORD`，部署后会写入 `RUN_MANAGER_BOOTSTRAP_PASSWORD`。
+- 如果未配置 `RUNTIME_AUTH_PASSWORD`，CI 会兼容使用 `RUNTIME_BASIC_AUTH_PASSWORD` 作为登录密码。
 
-密码来自部署脚本输出、GitHub Actions secret，或服务器上的 `/etc/cloud-agents-runtime.env`。不要把密码写入仓库或聊天记录。
+当前还没有 SMTP 邮箱验证、验证码或找回密码。忘记密码时，需要更新 GitHub Secret 后重新部署，或在服务器侧重置本地用户数据。不要把密码写入仓库或聊天记录。
 
 服务器上读取当前登录密码或 master token 时，不要直接 `source /etc/cloud-agents-runtime.env`，
 因为其中包含带空格的 systemd 环境值。建议使用精确读取：
@@ -42,8 +42,13 @@ cloudagents
 RUN_MANAGER_TOKEN="$(awk -F= '$1=="RUN_MANAGER_TOKEN"{print substr($0,index($0,"=")+1)}' \
   /etc/cloud-agents-runtime.env)"
 
-RUN_MANAGER_LOGIN_PASSWORD="$(
-  awk -F= '$1=="RUN_MANAGER_LOGIN_PASSWORD"{print substr($0,index($0,"=")+1)}' \
+RUN_MANAGER_BOOTSTRAP_EMAIL="$(
+  awk -F= '$1=="RUN_MANAGER_BOOTSTRAP_EMAIL"{print substr($0,index($0,"=")+1)}' \
+    /etc/cloud-agents-runtime.env
+)"
+
+RUN_MANAGER_BOOTSTRAP_PASSWORD="$(
+  awk -F= '$1=="RUN_MANAGER_BOOTSTRAP_PASSWORD"{print substr($0,index($0,"=")+1)}' \
     /etc/cloud-agents-runtime.env
 )"
 ```
@@ -274,7 +279,7 @@ Profile 是“执行模板”，不是 Agent 实例。
 cookie_jar=/tmp/cloud-agents.cookies
 curl -s -c "$cookie_jar" \
   -H 'content-type: application/json' \
-  -d '{"username":"cloudagents","password":"<password>"}' \
+  -d '{"email":"<RUNTIME_AUTH_EMAIL>","password":"<password>"}' \
   https://doubaofans.site/cloud-agents/auth/login
 
 curl -s https://doubaofans.site/cloud-agents/runs \
@@ -503,8 +508,8 @@ curl -s -X POST https://doubaofans.site/cloud-agents/ops/drills \
 ```bash
 QWEN_SETTINGS_FILE=/Users/chigao/Documents/works/settings.json \
 PUBLIC_DOMAIN=doubaofans.site \
-BASIC_AUTH_USER=cloudagents \
-BASIC_AUTH_PASSWORD=<password> \
+AUTH_EMAIL=<owner@example.com> \
+AUTH_PASSWORD=<password> \
   bash scripts/deploy_runtime_vps.sh \
   root@47.243.94.91 \
   /Users/chigao/Documents/works/ecs/aliyun-hongkong.pem
@@ -580,8 +585,8 @@ journalctl -u cloud-agents-worker -n 120 --no-pager
 ```bash
 python3 scripts/monitor_runtime.py \
   --base-url https://doubaofans.site/cloud-agents \
-  --basic-user cloudagents \
-  --basic-password <password> \
+  --auth-email <RUNTIME_AUTH_EMAIL> \
+  --auth-password <password> \
   --json
 ```
 
@@ -633,8 +638,8 @@ python3 scripts/validate_qwen_mission.py \
 ```bash
 python3 scripts/monitor_runtime.py \
   --base-url https://doubaofans.site/cloud-agents \
-  --basic-user cloudagents \
-  --basic-password "$RUN_MANAGER_LOGIN_PASSWORD" \
+  --auth-email "$RUN_MANAGER_BOOTSTRAP_EMAIL" \
+  --auth-password "$RUN_MANAGER_BOOTSTRAP_PASSWORD" \
   --deep-run \
   --json
 ```

@@ -86,7 +86,7 @@ sudo chown "$USER":"$USER" /var/lib/agentflow-runtime
 python3 - <<'PY'
 import secrets
 print("RUN_MANAGER_TOKEN=" + secrets.token_urlsafe(32))
-print("RUN_MANAGER_LOGIN_PASSWORD=" + secrets.token_urlsafe(18))
+print("RUN_MANAGER_BOOTSTRAP_PASSWORD=" + secrets.token_urlsafe(18))
 PY
 ```
 
@@ -98,9 +98,9 @@ RUN_MANAGER_HOST=127.0.0.1
 RUN_MANAGER_PORT=8765
 RUN_MANAGER_ARTIFACT_ROOT=/var/lib/agentflow-runtime
 RUN_MANAGER_TOKEN=replace-with-generated-token
-RUN_MANAGER_LOGIN_USERNAME=cloudagents
-RUN_MANAGER_LOGIN_PASSWORD=replace-with-generated-password
-RUN_MANAGER_BASIC_AUTH_ENABLED=true
+RUN_MANAGER_BOOTSTRAP_EMAIL=owner@example.com
+RUN_MANAGER_BOOTSTRAP_PASSWORD=replace-with-generated-password
+RUN_MANAGER_BOOTSTRAP_NAME=Owner
 RUN_MANAGER_WORKER_CAPACITY=0
 RUN_MANAGER_REMOTE_WORKERS_ENABLED=true
 QWEN_COMMAND=qwen
@@ -151,8 +151,10 @@ curl -s http://127.0.0.1:8765/capabilities \
 浏览器打开：
 
 ```text
-http://127.0.0.1:8765/agentflow/
+http://127.0.0.1:8765/
 ```
+
+使用 `RUN_MANAGER_BOOTSTRAP_EMAIL` 和 `RUN_MANAGER_BOOTSTRAP_PASSWORD` 登录。
 
 ## 4. 公网访问
 

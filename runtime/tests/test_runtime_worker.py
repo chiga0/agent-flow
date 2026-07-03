@@ -4,8 +4,10 @@ import tempfile
 import time
 import unittest
 import urllib.parse
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from runtime.cloud_agents_runtime.adapters import FakeAdapter, RuntimeAdapter
 from runtime.cloud_agents_runtime.models import RunState
@@ -13,6 +15,9 @@ from runtime.cloud_agents_runtime.store import RunStore
 from runtime.cloud_agents_runtime.worker import (
     RemoteWorkerConfig,
     RemoteWorkerDaemon,
+    host_resource_capacity,
+    host_resource_metrics,
+    parse_json_object,
     main as worker_main,
 )
 from runtime.tests.test_runtime_server import request_json, running_runtime
@@ -99,6 +104,67 @@ class RemoteWorkerDaemonTest(unittest.TestCase):
                     "claim",
                     worker_state["worker"]["metadata"]["capabilities"]["features"],
                 )
+                self.assertIn("metrics", worker_state["worker"]["metadata"])
+                self.assertIn("resources", worker_state["worker"]["metadata"])
+
+    def test_remote_worker_reports_host_resource_snapshot(self) -> None:
+        capacity = host_resource_capacity()
+        metrics = host_resource_metrics()
+        self.assertGreaterEqual(capacity["cpus"], 1)
+        self.assertIsInstance(metrics, dict)
+        self.assertTrue(
+            {
+                "cpu_percent",
+                "memory_percent",
+                "disk_percent",
+                "load_average",
+                "swap_percent",
+            }.intersection(metrics.keys())
+        )
+
+    def test_resource_metric_helpers_cover_edge_cases(self) -> None:
+        with patch(
+            "runtime.cloud_agents_runtime.worker.linux_meminfo_kb",
+            return_value={
+                "MemTotal": 2 * 1024 * 1024,
+                "MemAvailable": 512 * 1024,
+                "SwapTotal": 1024,
+                "SwapFree": 256,
+            },
+        ):
+            self.assertEqual(host_resource_capacity()["memory_gb"], 2)
+            with (
+                patch("runtime.cloud_agents_runtime.worker.os.cpu_count", return_value=2),
+                patch(
+                    "runtime.cloud_agents_runtime.worker.os.getloadavg",
+                    return_value=(4.0, 0.0, 0.0),
+                ),
+                patch(
+                    "runtime.cloud_agents_runtime.worker.shutil.disk_usage",
+                    return_value=SimpleNamespace(total=100, used=75),
+                ),
+            ):
+                metrics = host_resource_metrics()
+        self.assertEqual(metrics["cpu_percent"], 100.0)
+        self.assertEqual(metrics["memory_percent"], 75.0)
+        self.assertEqual(metrics["swap_percent"], 75.0)
+        self.assertEqual(metrics["disk_percent"], 75.0)
+
+        with (
+            patch(
+                "runtime.cloud_agents_runtime.worker.os.getloadavg",
+                side_effect=OSError("load unavailable"),
+            ),
+            patch(
+                "runtime.cloud_agents_runtime.worker.shutil.disk_usage",
+                side_effect=OSError("disk unavailable"),
+            ),
+            patch("runtime.cloud_agents_runtime.worker.linux_meminfo_kb", return_value={}),
+        ):
+            self.assertEqual(host_resource_metrics(), {})
+        self.assertEqual(parse_json_object(None), {})
+        with self.assertRaises(ValueError):
+            parse_json_object("[]")
 
     def test_remote_worker_cli_help(self) -> None:
         with self.assertRaises(SystemExit) as ctx:

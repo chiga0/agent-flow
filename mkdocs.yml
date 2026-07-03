@@ -12,8 +12,20 @@ theme:
 
 nav:
   - 首页: index.md
-  - 落地方案:
-      - 可云端长期运行的多 Agent 系统落地方案: implementation/index.md
+  - 快速开始:
+      - 认识 AgentFlow: getting-started.md
+      - 核心概念: concepts.md
+      - 使用管理台: user-guide.md
+      - 自我部署: self-deploy.md
+      - 排障手册: troubleshooting.md
+  - 运维与审计:
+      - AgentFlow 操作手册: implementation/operation-manual.md
+      - 产品可用性审计: implementation/product-usability-audit.md
+      - 方案审计与 Review 记录: implementation/review-and-audit-record.md
+      - 本地或 NAS 主控部署教程: implementation/local-nas-control-plane-deployment.md
+      - 实施 Roadmap: implementation/implementation-roadmap.md
+  - 架构设计:
+      - 架构总览: implementation/index.md
       - 稳定单 Agent 执行单元: implementation/stable-agent-execution-unit.md
       - SubAgent 与独立执行单元边界: implementation/subagent-vs-execution-unit.md
       - 基于 qwen-code serve 的云端单 Agent 单元方案: implementation/qwen-serve-single-agent-cloud-unit.md
@@ -25,16 +37,9 @@ nav:
       - 单 Agent 基座选型: implementation/single-agent-strategy.md
       - 从单 Agent 执行单元到多 Agent 编排: implementation/single-to-multi-agent-implementation-plan.md
       - 外部方案对比与多方向审计: implementation/alternative-solutions-comparative-audit.md
-      - 方案审计与 Review 记录: implementation/review-and-audit-record.md
-      - 产品可用性审计: implementation/product-usability-audit.md
-      - 本地或 NAS 主控部署教程: implementation/local-nas-control-plane-deployment.md
-      - 实施 Roadmap: implementation/implementation-roadmap.md
-      - AgentFlow 操作手册: implementation/operation-manual.md
-  - AgentFlow:
+  - 研究资料:
       - AgentFlow 与企业级 Cloud Agents 技术调研报告: cloud-agents/index.md
-  - 多 Agent:
       - 生产级多 Agent 系统编排与运行屏障工程: multi-agent/research-on-multi-agent-orchestration-frameworks.md
-  - 其他 Agent:
       - Qwen Code Core 与 SDK Agent 架构分析: other-agents/qwen-code-core-sdk-agent-architecture.md
 
 markdown_extensions:

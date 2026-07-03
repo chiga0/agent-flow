@@ -1,8 +1,16 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App, __testUtils, queryClient, router } from "./app";
+import { __shellTestUtils } from "./components/shell";
 
 const run = {
   run_id: "run_1",
@@ -85,6 +93,7 @@ const events = [
     data: {
       permission_id: "perm_1",
       prompt: "Allow shell command?",
+      tool: "shell",
       options: [
         { id: "approve", label: "Approve" },
         { id: "deny", label: "Deny" },
@@ -439,6 +448,8 @@ describe("AgentFlow console", () => {
     expect(await screen.findByText("健康")).toBeInTheDocument();
     expect(screen.getByText("最近运行")).toBeInTheDocument();
     expect(screen.getByText("最近任务")).toBeInTheDocument();
+    expect(await screen.findByText("活跃运行")).toBeInTheDocument();
+    expect(screen.getByText("回到对话")).toBeInTheDocument();
 
     await user.click(screen.getByLabelText("切换语言"));
     expect(
@@ -531,8 +542,12 @@ describe("AgentFlow console", () => {
     expect(screen.getByText("webhook:failed")).toBeInTheDocument();
     expect(screen.getByText("webhook unreachable")).toBeInTheDocument();
     expect(await screen.findByText("Agent Chat")).toBeInTheDocument();
+    expect(screen.getByText("Human approval required")).toBeInTheDocument();
+    expect(screen.getByText(/Tool: shell/)).toBeInTheDocument();
     expect(
-      screen.getByText("Inspecting live runner state."),
+      within(screen.getByRole("main")).getByText(
+        "Inspecting live runner state.",
+      ),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Agent" }));
     await user.click(screen.getByRole("button", { name: "Permissions" }));
@@ -563,7 +578,7 @@ describe("AgentFlow console", () => {
         expect.objectContaining({ method: "POST" }),
       ),
     );
-    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(screen.getAllByRole("button", { name: "Approve" })[0]);
 
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
@@ -587,6 +602,8 @@ describe("AgentFlow console", () => {
     expect(await screen.findByText("Ship beta")).toBeInTheDocument();
     expect(screen.getByText("Plan mission")).toBeInTheDocument();
     await user.click(screen.getByRole("link", { name: /open detail/i }));
+    expect(await screen.findByText("Mission Stream")).toBeInTheDocument();
+    expect(screen.getByText(/Artifacts: plan.md/)).toBeInTheDocument();
     expect(await screen.findByText("Task DAG")).toBeInTheDocument();
     expect(screen.getByText("Mission Events")).toBeInTheDocument();
     expect(screen.getByText("final_report.md")).toBeInTheDocument();
@@ -715,6 +732,16 @@ describe("AgentFlow console", () => {
     ).toBeInTheDocument();
     expect(await screen.findByText("hk-2c2g-a")).toBeInTheDocument();
     expect(screen.getByText("adapter:qwen")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "2 GB memory is already running work. Keep this worker at capacity=1.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This execution unit is at capacity; new work will remain queued.",
+      ),
+    ).toBeInTheDocument();
     await user.clear(screen.getByLabelText("Unit ID"));
     await user.type(screen.getByLabelText("Unit ID"), "hk-2c2g-b");
     await user.clear(screen.getByLabelText("Worker control URL"));
@@ -1042,6 +1069,323 @@ describe("AgentFlow console", () => {
         },
       }),
     ).toEqual(["region:hk", "cpus:2", "adapter:fake"]);
+    expect(
+      __testUtils.workerResourceRows({
+        worker_id: "metrics-worker",
+        status: "active",
+        capacity: 2,
+        active_count: 1,
+        heartbeat_at: now,
+        lease_ttl_seconds: 60,
+        metadata: {
+          resources: { cpus: 2 },
+          metrics: {
+            cpu_percent: 90,
+            memory_percent: "70",
+            disk_percent: 86,
+            swap_percent: 41,
+            load_average: 1.5,
+          },
+        },
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "cpu", tone: "warn", value: "90%" }),
+        expect.objectContaining({ label: "memory", value: "70%" }),
+        expect.objectContaining({ label: "disk", tone: "warn" }),
+        expect.objectContaining({ label: "swap", tone: "warn" }),
+        expect.objectContaining({ label: "load", value: "1.50" }),
+      ]),
+    );
+    expect(
+      __testUtils.workerResourceRows({
+        worker_id: "declared-worker",
+        status: "active",
+        capacity: 1,
+        active_count: 1,
+        heartbeat_at: now,
+        lease_ttl_seconds: 60,
+        metadata: { resources: { cpus: 1, memory_gb: 2 } },
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "capacity", tone: "warn" }),
+        expect.objectContaining({ label: "memory", tone: "warn" }),
+      ]),
+    );
+    expect(
+      __testUtils.workerResourceRows({
+        worker_id: "zero-capacity",
+        status: "active",
+        capacity: 0,
+        active_count: 0,
+        heartbeat_at: now,
+        lease_ttl_seconds: 60,
+        metadata: { resources: { cpu_percent: "bad", memory_percent: 0 / 0 } },
+      }),
+    ).toEqual([expect.objectContaining({ label: "capacity", percent: 0 })]);
+    expect(
+      __testUtils.workerResourceRows({
+        worker_id: "nan-capacity",
+        status: "active",
+        capacity: 1,
+        active_count: Number.NaN,
+        heartbeat_at: now,
+        lease_ttl_seconds: 60,
+        metadata: {},
+      })[0],
+    ).toEqual(expect.objectContaining({ label: "capacity", percent: 0 }));
+    expect(
+      __testUtils.workerResourceWarnings({
+        worker_id: "stale-worker",
+        status: "stale",
+        capacity: 1,
+        active_count: 1,
+        heartbeat_at: now,
+        lease_ttl_seconds: 60,
+        metadata: { resources: { memory_gb: 2 } },
+      }),
+    ).toEqual([
+      "units.lowMemoryWarning",
+      "units.capacityFullWarning",
+      "units.staleWarning",
+    ]);
+    expect(
+      __testUtils.runnerStallExplanation(
+        [event("permission.requested", 40, { permission_id: "perm_x" }, now)],
+        "running",
+      ),
+    ).toBe("live.stallPermission");
+    expect(
+      __testUtils.runnerStallExplanation(
+        [event("run.queued", 41, {}, now)],
+        "running",
+        [],
+      ),
+    ).toBe("live.stallQueuedNoWorker");
+    expect(
+      __testUtils.runnerStallExplanation(
+        [event("run.queued", 42, {}, now)],
+        "running",
+        [
+          {
+            worker_id: "worker",
+            status: "active",
+            capacity: 1,
+            active_count: 1,
+            heartbeat_at: now,
+            lease_ttl_seconds: 60,
+            metadata: {},
+          },
+        ],
+      ),
+    ).toBe("live.stallQueuedCapacity");
+    expect(
+      __testUtils.runnerStallExplanation(
+        [event("lease.claimed", 43, { worker_id: "worker" }, now)],
+        "running",
+        [
+          {
+            worker_id: "worker",
+            status: "stale",
+            capacity: 1,
+            active_count: 1,
+            heartbeat_at: now,
+            lease_ttl_seconds: 60,
+            metadata: {},
+          },
+        ],
+      ),
+    ).toBe("live.stallWorkerStale");
+    expect(
+      __testUtils.runnerStallExplanation(
+        [event("executor.failed", 44, {}, now)],
+        "running",
+      ),
+    ).toBe("live.stallExecutorFailed");
+    expect(__testUtils.runnerStallExplanation([], "completed")).toBe(
+      "live.stallTerminal",
+    );
+    expect(__testUtils.runnerStallExplanation([], "running")).toBe(
+      "live.stallNoRecentEvent",
+    );
+    expect(__testUtils.missionChatItems(mission, missionEvents)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "Plan mission · planner",
+          body: expect.stringContaining("Artifacts: plan.md"),
+          runId: "run_1",
+        }),
+        expect.objectContaining({
+          title: "task.created",
+          body: expect.stringContaining("Task: plan"),
+        }),
+      ]),
+    );
+    expect(
+      __testUtils.missionChatItems(mission, missionEvents, {
+        run_1: "planner is producing a concrete plan",
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          body: expect.stringContaining(
+            "Last output: planner is producing a concrete plan",
+          ),
+        }),
+      ]),
+    );
+    expect(
+      __testUtils.latestRunOutput([
+        event("run.started", 1, {}, now),
+        event("message.delta", 2, { text: "streaming output" }, now),
+      ]),
+    ).toBe("streaming output");
+    expect(
+      __testUtils.permissionContextRows({
+        permission_id: "perm_1",
+        raw: {
+          risk: "high",
+          cwd: "/workspace",
+          payload: { command: "rm -rf build-cache" },
+        },
+      }),
+    ).toEqual([
+      { label: "live.permissionRisk", value: "high" },
+      { label: "live.permissionCwd", value: "/workspace" },
+      { label: "live.permissionCommand", value: "rm -rf build-cache" },
+    ]);
+    expect(
+      __testUtils.permissionContextRows({
+        permission_id: "perm_2",
+        raw: {
+          raw: {
+            risk_level: "medium",
+            workspace: "/repo",
+            cmd: "npm test",
+          },
+        },
+      }),
+    ).toEqual([
+      { label: "live.permissionRisk", value: "medium" },
+      { label: "live.permissionCwd", value: "/repo" },
+      { label: "live.permissionCommand", value: "npm test" },
+    ]);
+    expect(
+      __testUtils.permissionContextRows({ permission_id: "empty" }),
+    ).toEqual([]);
+    expect(
+      __testUtils.latestRunOutput([
+        event(
+          "adapter.event",
+          3,
+          {
+            raw: {
+              data: {
+                update: {
+                  sessionUpdate: "agent_message_chunk",
+                  content: { text: "nested qwen chunk" },
+                },
+              },
+            },
+          },
+          now,
+        ),
+      ]),
+    ).toBe("nested qwen chunk");
+    expect(
+      __testUtils.latestRunOutput([event("run.started", 1, {}, now)]),
+    ).toBe(undefined);
+    expect(
+      __shellTestUtils.dockPendingPermission([
+        event("permission.requested", 1, { permission_id: "perm_1" }, now),
+      ]),
+    ).toEqual(expect.objectContaining({ permission_id: "perm_1" }));
+    expect(
+      __shellTestUtils.dockPendingPermission([
+        event("permission.requested", 1, { permission_id: "perm_1" }, now),
+        event("permission.resolved", 2, { permission_id: "perm_1" }, now),
+      ]),
+    ).toBeUndefined();
+    expect(
+      __shellTestUtils.dockRunPreview([
+        event("input.accepted", 1, { prompt_preview: "operator prompt" }, now),
+      ]),
+    ).toBe("operator prompt");
+    expect(
+      __shellTestUtils.dockRunPreview([
+        event(
+          "adapter.event",
+          2,
+          {
+            raw: {
+              data: {
+                update: {
+                  content: { text: "dock nested output" },
+                },
+              },
+            },
+          },
+          now,
+        ),
+      ]),
+    ).toBe("dock nested output");
+    expect(
+      __shellTestUtils.dockRunPreview([event("run.started", 1, {}, now)]),
+    ).toBe(undefined);
+    expect(__testUtils.missionChatItems(undefined, [])).toHaveLength(0);
+    expect(
+      __testUtils.missionChatItems(
+        {
+          ...mission,
+          tasks: [
+            {
+              task_id: "write",
+              title: "Write report",
+              profile_id: "doc-writer",
+              status: "running",
+              run_id: null,
+              depends_on: ["plan"],
+              result: { summary: "drafting" },
+            },
+            {
+              task_id: "ship",
+              title: "Ship report",
+              profile_id: "operator",
+              status: "pending",
+              run_id: null,
+              depends_on: ["write"],
+            },
+            {
+              task_id: "archive",
+              title: "Archive",
+              profile_id: "doc-writer",
+              status: "completed",
+              run_id: null,
+              depends_on: [],
+              result: { artifacts: ["archive.md", { name: "manifest.json" }] },
+            },
+          ],
+        },
+        [
+          event("mission.completed", 50, { status: "completed" }, now),
+          event("task.failed", 51, { run_id: "run_failed" }, now),
+        ].map((item) => ({
+          ...item,
+          mission_id: "mission_1",
+        })),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ body: expect.stringContaining("Result:") }),
+        expect.objectContaining({ body: "Dependencies: write\nNo result yet" }),
+        expect.objectContaining({
+          body: expect.stringContaining("Artifacts: archive.md, manifest.json"),
+        }),
+        expect.objectContaining({ status: "completed" }),
+        expect.objectContaining({ status: "failed" }),
+      ]),
+    );
   });
 
   it("downloads a readable runner report", () => {

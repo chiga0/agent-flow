@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import socket
 import threading
 import time
@@ -428,6 +429,11 @@ class RemoteWorkerDaemon:
     def _worker_payload(self) -> dict[str, Any]:
         metadata = dict(self.config.metadata)
         metadata.setdefault("hostname", socket.gethostname())
+        metadata.setdefault("resources", host_resource_capacity())
+        raw_metrics = metadata.get("metrics")
+        metrics = dict(raw_metrics) if isinstance(raw_metrics, dict) else {}
+        metrics.update(host_resource_metrics())
+        metadata["metrics"] = metrics
         raw_capabilities = metadata.get("capabilities")
         capabilities = dict(raw_capabilities) if isinstance(raw_capabilities, dict) else {}
         raw_features = capabilities.get("features")
@@ -505,6 +511,62 @@ def parse_json_object(value: str | None) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError("metadata must be a JSON object")
     return parsed
+
+
+def host_resource_capacity() -> dict[str, Any]:
+    resources: dict[str, Any] = {"cpus": os.cpu_count() or 1}
+    memory_total = linux_meminfo_kb().get("MemTotal")
+    if memory_total:
+        resources["memory_gb"] = round(memory_total / 1024 / 1024, 2)
+    return resources
+
+
+def host_resource_metrics() -> dict[str, Any]:
+    metrics: dict[str, Any] = {}
+    cpu_count = max(1, os.cpu_count() or 1)
+    try:
+        load_average = os.getloadavg()[0]
+    except (AttributeError, OSError):
+        load_average = None
+    if load_average is not None:
+        metrics["load_average"] = round(load_average, 2)
+        metrics["cpu_percent"] = min(100.0, round((load_average / cpu_count) * 100, 1))
+    meminfo = linux_meminfo_kb()
+    memory_total = meminfo.get("MemTotal")
+    memory_available = meminfo.get("MemAvailable")
+    if memory_total and memory_available is not None:
+        used = max(0, memory_total - memory_available)
+        metrics["memory_percent"] = round((used / memory_total) * 100, 1)
+    swap_total = meminfo.get("SwapTotal")
+    swap_free = meminfo.get("SwapFree")
+    if swap_total and swap_free is not None:
+        used_swap = max(0, swap_total - swap_free)
+        metrics["swap_percent"] = round((used_swap / swap_total) * 100, 1)
+    try:
+        disk = shutil.disk_usage("/")
+    except OSError:
+        disk = None
+    if disk and disk.total:
+        metrics["disk_percent"] = round((disk.used / disk.total) * 100, 1)
+    return metrics
+
+
+def linux_meminfo_kb() -> dict[str, int]:
+    path = Path("/proc/meminfo")
+    if not path.exists():
+        return {}
+    values: dict[str, int] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            key, _, rest = line.partition(":")
+            if not key or not rest:
+                continue
+            amount = rest.strip().split()[0]
+            if amount.isdigit():
+                values[key] = int(amount)
+    except OSError:
+        return {}
+    return values
 
 
 def positive_int(value: int | None, default: int) -> int:

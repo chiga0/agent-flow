@@ -69,6 +69,11 @@ const zh = {
   "common.profile": "Profile",
   "common.updated": "更新于",
   "common.workspace": "工作区",
+  "dock.activeRuns": "活跃运行",
+  "dock.collapse": "折叠活跃运行",
+  "dock.expand": "展开活跃运行",
+  "dock.openChat": "回到对话",
+  "dock.permission": "待审批",
   "executors.activeDetail": "启动中/运行中",
   "executors.container": "容器",
   "executors.failedDetail": "失败/孤儿进程",
@@ -93,11 +98,29 @@ const zh = {
   "live.lastEvent": "最新事件",
   "live.noRecentEvent":
     "最近没有收到 runner 事件。你可以查看原始事件、下载审计包，或取消/重试该运行。",
+  "live.permissionAction": "需要人工确认",
+  "live.permissionCommand": "命令",
+  "live.permissionCwd": "目录",
+  "live.permissionPayload": "下载请求",
+  "live.permissionRisk": "风险",
+  "live.permissionTool": "工具",
   "live.permissions": "权限",
   "live.runnerSignal": "Runner 信号",
   "live.runStatus": "运行状态",
   "live.send": "发送",
   "live.sending": "发送中",
+  "live.stallExecutorFailed":
+    "执行器或适配器已经报错，请查看错误气泡、诊断信息或审计包后重试。",
+  "live.stallNoRecentEvent":
+    "最近没有收到 runner 事件，可能是模型仍在执行、SSE 重连中，或执行单元资源压力较高。",
+  "live.stallPermission":
+    "当前正在等待人工权限确认，请在对话中的权限卡片处理。",
+  "live.stallQueuedCapacity": "任务仍在排队，已有 worker 但当前容量已满。",
+  "live.stallQueuedNoWorker": "任务仍在排队，当前没有可用执行单元接收租约。",
+  "live.stallTerminal": "运行已经进入终态，不再等待新的 runner 输出。",
+  "live.stallTitle": "可能卡住的原因",
+  "live.stallWorkerStale":
+    "接管该运行的 worker 心跳已失联，建议重试该 worker 上的运行。",
   "live.subtitle": "实时流会在这里追加步骤、消息、权限请求和终态事件。",
   "live.title": "Agent 实时对话",
   "live.waiting": "等待 runner 输出",
@@ -124,9 +147,12 @@ const zh = {
   "missions.detail": "任务详情",
   "missions.events": "任务事件",
   "missions.history": "任务历史",
+  "missions.chat": "任务实时流",
   "missions.loadingGoal": "正在加载任务目标",
   "missions.noArtifacts": "暂无任务产物",
   "missions.noEvents": "暂无任务事件",
+  "missions.noMissionChat": "暂无任务流",
+  "missions.noMissionChatDetail": "任务节点和任务事件会在这里聚合成可读进展。",
   "missions.noMissions": "暂无任务",
   "missions.noMissionsDetail": "创建任务以跨 Profile 扇出执行。",
   "missions.noTasks": "暂无任务节点",
@@ -226,6 +252,9 @@ const zh = {
   "units.heartbeat": "心跳",
   "units.leaseTtl": "租约 TTL",
   "units.localRemote": "本地与远程",
+  "units.capacityFullWarning": "该执行单元容量已满，新任务会继续排队。",
+  "units.lowMemoryWarning":
+    "2GB 内存正在承载运行任务，建议只作为 capacity=1 的 worker。",
   "units.memoryGb": "内存 GB",
   "units.noUnits": "暂无执行单元",
   "units.noUnitsDetail": "注册 VPS worker 或等待本地心跳。",
@@ -235,6 +264,7 @@ const zh = {
   "units.resume": "恢复",
   "units.retry": "重试",
   "units.staleDetail": "心跳超时",
+  "units.staleWarning": "该执行单元心跳失联，运行可能需要重试或迁移。",
   "units.subtitle": "注册、排空并操作远程稳定执行单元。",
   "units.title": "执行单元",
   "units.tokenDetail": "令牌只显示一次。运行前请替换 worker IP 与密钥路径。",
@@ -302,6 +332,11 @@ const en: Record<keyof typeof zh, string> = {
   "common.profile": "Profile",
   "common.updated": "Updated",
   "common.workspace": "Workspace",
+  "dock.activeRuns": "Active Runs",
+  "dock.collapse": "Collapse active runs",
+  "dock.expand": "Expand active runs",
+  "dock.openChat": "Open chat",
+  "dock.permission": "approval",
   "executors.activeDetail": "starting/running",
   "executors.container": "Container",
   "executors.failedDetail": "failed/orphaned",
@@ -327,11 +362,32 @@ const en: Record<keyof typeof zh, string> = {
   "live.lastEvent": "Last event",
   "live.noRecentEvent":
     "No runner event has arrived recently. You can inspect raw events, download the audit bundle, or cancel/retry the run.",
+  "live.permissionAction": "Human approval required",
+  "live.permissionCommand": "Command",
+  "live.permissionCwd": "Directory",
+  "live.permissionPayload": "Download request",
+  "live.permissionRisk": "Risk",
+  "live.permissionTool": "Tool",
   "live.permissions": "Permissions",
   "live.runnerSignal": "Runner signal",
   "live.runStatus": "Run status",
   "live.send": "Send",
   "live.sending": "Sending",
+  "live.stallExecutorFailed":
+    "The executor or adapter has reported an error. Inspect the error bubble, diagnostics, or audit bundle before retrying.",
+  "live.stallNoRecentEvent":
+    "No runner event has arrived recently. The model may still be working, SSE may be reconnecting, or the execution unit may be under pressure.",
+  "live.stallPermission":
+    "The run is waiting for human approval. Resolve the permission card in the chat timeline.",
+  "live.stallQueuedCapacity":
+    "The run is still queued. Workers exist, but current capacity is full.",
+  "live.stallQueuedNoWorker":
+    "The run is still queued and no available execution unit can claim it.",
+  "live.stallTerminal":
+    "The run is terminal and no longer expects runner output.",
+  "live.stallTitle": "Likely reason",
+  "live.stallWorkerStale":
+    "The worker that claimed this run has a stale heartbeat. Retry or migrate runs from that worker.",
   "live.subtitle":
     "The live stream will append steps, messages, permission requests, and terminal state here.",
   "live.title": "Agent Chat",
@@ -359,9 +415,13 @@ const en: Record<keyof typeof zh, string> = {
   "missions.detail": "Mission Detail",
   "missions.events": "Mission Events",
   "missions.history": "Mission History",
+  "missions.chat": "Mission Stream",
   "missions.loadingGoal": "Loading mission goal",
   "missions.noArtifacts": "No mission artifacts yet",
   "missions.noEvents": "No mission events",
+  "missions.noMissionChat": "No mission stream yet",
+  "missions.noMissionChatDetail":
+    "Task nodes and mission events will be summarized here.",
   "missions.noMissions": "No missions",
   "missions.noMissionsDetail":
     "Create a mission to fan out work across profiles.",
@@ -463,6 +523,10 @@ const en: Record<keyof typeof zh, string> = {
   "units.heartbeat": "heartbeat",
   "units.leaseTtl": "lease ttl",
   "units.localRemote": "local and remote",
+  "units.capacityFullWarning":
+    "This execution unit is at capacity; new work will remain queued.",
+  "units.lowMemoryWarning":
+    "2 GB memory is already running work. Keep this worker at capacity=1.",
   "units.memoryGb": "Memory GB",
   "units.noUnits": "No units",
   "units.noUnitsDetail": "Register a VPS worker or wait for local heartbeat.",
@@ -472,6 +536,8 @@ const en: Record<keyof typeof zh, string> = {
   "units.resume": "Resume",
   "units.retry": "Retry",
   "units.staleDetail": "heartbeat overdue",
+  "units.staleWarning":
+    "This execution unit heartbeat is stale. Runs may need retry or migration.",
   "units.subtitle":
     "Register, drain, and operate remote stable execution units.",
   "units.title": "Units",

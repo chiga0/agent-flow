@@ -1,8 +1,10 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   Boxes,
+  ChevronDown,
+  ChevronUp,
   ClipboardList,
   Languages,
   LogOut,
@@ -18,8 +20,14 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { Button } from "./ui";
-import { runtimeApi } from "../lib/api";
+import { Badge, Button, StatusBadge } from "./ui";
+import {
+  extractPermissionRequest,
+  resolvedPermissionIds,
+  runtimeApi,
+  type RuntimeEvent,
+  type RunState,
+} from "../lib/api";
 import { useI18n, type I18nKey } from "../lib/i18n";
 import { cn } from "../lib/utils";
 
@@ -90,10 +98,11 @@ export function Shell() {
             </div>
           </div>
         ) : null}
-        <main className="min-w-0 p-4 lg:p-6">
+        <main className="min-w-0 p-4 pb-36 lg:p-6 lg:pb-36">
           <Outlet />
         </main>
       </div>
+      <ActiveRunDock />
     </div>
   );
 }
@@ -189,3 +198,133 @@ export function LanguageToggle() {
     </Button>
   );
 }
+
+function ActiveRunDock() {
+  const { t } = useI18n();
+  const [collapsed, setCollapsed] = useState(false);
+  const runs = useQuery({
+    queryKey: ["runs"],
+    queryFn: runtimeApi.runs,
+    refetchInterval: 5000,
+  });
+  const activeRuns = (runs.data?.runs ?? [])
+    .filter((run) => !["completed", "failed", "cancelled"].includes(run.status))
+    .slice(0, 3);
+  if (!activeRuns.length) {
+    return null;
+  }
+  return (
+    <div className="fixed inset-x-3 bottom-3 z-20 grid gap-2 sm:left-auto sm:w-[360px]">
+      <div className="rounded-md border border-border bg-card/95 p-3 shadow-lg backdrop-blur">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="text-sm font-semibold">{t("dock.activeRuns")}</div>
+          <div className="flex items-center gap-2">
+            <Badge tone="info">{activeRuns.length}</Badge>
+            <Button
+              aria-label={collapsed ? t("dock.expand") : t("dock.collapse")}
+              size="icon"
+              variant="ghost"
+              onClick={() => setCollapsed((value) => !value)}
+            >
+              {collapsed ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
+        </div>
+        {!collapsed ? (
+          <div className="grid gap-2">
+            {activeRuns.map((run) => (
+              <ActiveRunLink key={run.run_id} run={run} />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ActiveRunLink({ run }: { run: RunState }) {
+  const { t } = useI18n();
+  const events = useQuery({
+    queryKey: ["runs", run.run_id, "events"],
+    queryFn: () => runtimeApi.runEvents(run.run_id),
+    refetchInterval: 2500,
+    retry: 1,
+  });
+  const eventList = events.data?.events ?? [];
+  const permission = dockPendingPermission(eventList);
+  const preview = dockRunPreview(eventList) ?? run.spec.prompt;
+  return (
+    <Link
+      className="grid gap-1 rounded-md border border-border p-2 text-sm hover:bg-muted"
+      to="/runs/$runId"
+      params={{ runId: run.run_id }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate font-mono text-xs">{run.run_id}</span>
+        <div className="flex shrink-0 items-center gap-1">
+          {permission ? (
+            <Badge tone="warn">{t("dock.permission")}</Badge>
+          ) : null}
+          <StatusBadge status={run.status} />
+        </div>
+      </div>
+      <div className="line-clamp-1 text-xs text-muted-foreground">
+        {preview || run.spec.adapter || t("dock.openChat")}
+      </div>
+      <div className="text-xs text-primary">{t("dock.openChat")}</div>
+    </Link>
+  );
+}
+
+function dockPendingPermission(events: RuntimeEvent[]) {
+  const resolved = resolvedPermissionIds(events);
+  return events
+    .map(extractPermissionRequest)
+    .find((request) => request && !resolved.has(request.permission_id));
+}
+
+function dockRunPreview(events: RuntimeEvent[]) {
+  for (const event of [...events].reverse()) {
+    const text = eventPreviewText(event);
+    if (text) {
+      return text.length > 140 ? `${text.slice(0, 140)}...` : text;
+    }
+  }
+  return undefined;
+}
+
+function eventPreviewText(event: RuntimeEvent) {
+  const direct =
+    stringValue(event.data.text) ??
+    stringValue(event.data.message) ??
+    stringValue(event.data.output) ??
+    stringValue(event.data.prompt_preview);
+  if (direct) {
+    return direct;
+  }
+  const raw = recordValue(event.data.raw);
+  const data = recordValue(raw?.data);
+  const update = recordValue(data?.update) ?? data;
+  const content = recordValue(update?.content);
+  return stringValue(content?.text) ?? stringValue(update?.rawOutput);
+}
+
+function recordValue(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+export const __shellTestUtils = {
+  dockPendingPermission,
+  dockRunPreview,
+  eventPreviewText,
+};

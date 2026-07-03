@@ -2,6 +2,7 @@ import {
   QueryClient,
   QueryClientProvider,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -82,12 +83,13 @@ import {
   type MissionEvent,
   type MissionState,
   type PermissionNotification,
+  type PermissionRequest,
   type RuntimeEvent,
   type RunState,
   type WorkerInfo,
   type WorkerRegistration,
 } from "./lib/api";
-import { LanguageProvider, useI18n } from "./lib/i18n";
+import { LanguageProvider, useI18n, type I18nKey } from "./lib/i18n";
 import { downloadJson } from "./lib/utils";
 
 export const queryClient = new QueryClient({
@@ -726,6 +728,7 @@ function WorkerList({
                 </Badge>
               ))}
             </div>
+            <WorkerResourceWaterline worker={worker} />
           </div>
           <div className="grid content-start gap-2">
             <Metric
@@ -760,6 +763,45 @@ function WorkerList({
               {t("units.retry")}
             </Button>
           </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function WorkerResourceWaterline({ worker }: { worker: WorkerInfo }) {
+  const { t } = useI18n();
+  const resources = workerResourceRows(worker);
+  const warnings = workerResourceWarnings(worker);
+  if (!resources.length && !warnings.length) {
+    return null;
+  }
+  return (
+    <div className="mt-3 grid gap-2">
+      {resources.length ? (
+        <div className="grid gap-2 md:grid-cols-2">
+          {resources.map((resource) => (
+            <div key={resource.label} className="grid gap-1">
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-muted-foreground">{resource.label}</span>
+                <span className="font-mono">{resource.value}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className={`h-full rounded-full ${resource.tone === "warn" ? "bg-warning" : "bg-primary"}`}
+                  style={{ width: `${resource.percent}%` }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {warnings.map((warning) => (
+        <div
+          key={warning}
+          className="rounded-md border border-warning/30 bg-warning/10 p-2 text-xs text-amber-800 dark:text-warning"
+        >
+          {t(warning)}
         </div>
       ))}
     </div>
@@ -1299,6 +1341,17 @@ function LiveRunnerPanel({
   );
   const latest = events.at(-1);
   const signal = runnerSignal(latest, runStatus);
+  const workers = useQuery({
+    queryKey: ["workers"],
+    queryFn: runtimeApi.workers,
+    enabled: signal.tone === "warn",
+  });
+  const stallReason = runnerStallExplanation(
+    events,
+    runStatus,
+    workers.data?.workers ?? [],
+  );
+  const resolvedPermissions = resolvedPermissionIds(events);
   const ended = isTerminal(runStatus);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const submitInput = useMutation({
@@ -1395,8 +1448,9 @@ function LiveRunnerPanel({
           </Button>
         </div>
         {signal.tone === "warn" ? (
-          <div className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-amber-800 dark:text-warning">
-            {t("live.noRecentEvent")}
+          <div className="grid gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-amber-800 dark:text-warning">
+            <div className="font-medium">{t("live.stallTitle")}</div>
+            <div>{t(stallReason)}</div>
           </div>
         ) : null}
         <div
@@ -1404,7 +1458,12 @@ function LiveRunnerPanel({
           className="grid min-h-[420px] max-h-[min(68vh,760px)] gap-3 overflow-auto rounded-md border border-border bg-muted/40 p-3"
         >
           {filteredTranscript.map((item) => (
-            <RunnerBubble key={item.id} item={item} />
+            <RunnerBubble
+              key={item.id}
+              item={item}
+              resolvedPermissions={resolvedPermissions}
+              runId={runId}
+            />
           ))}
           {!filteredTranscript.length ? (
             <EmptyState title={t("live.waiting")} detail={t("live.subtitle")} />
@@ -1463,11 +1522,49 @@ type RunnerTranscriptItem = {
   created_at: string;
   event_type: string;
   sequence: number;
+  permissionRequest?: PermissionRequest;
 };
 
 type RunnerFilter = "all" | "agent" | "permission" | "warning" | "error";
 
-function RunnerBubble({ item }: { item: RunnerTranscriptItem }) {
+function RunnerBubble({
+  item,
+  resolvedPermissions,
+  runId,
+}: {
+  item: RunnerTranscriptItem;
+  resolvedPermissions?: Set<string>;
+  runId?: string;
+}) {
+  const { t } = useI18n();
+  const queryClient = useQueryClient();
+  const permission = item.permissionRequest;
+  const isPendingPermission =
+    permission && !resolvedPermissions?.has(permission.permission_id);
+  const permissionContext = permission ? permissionContextRows(permission) : [];
+  const resolve = useMutation({
+    mutationFn: ({ id, decision }: { id: string; decision: string }) => {
+      if (!runId) {
+        throw new Error("run id is required");
+      }
+      return runtimeApi.resolvePermission(runId, id, {
+        decision,
+        option_id: decision,
+        reason: "resolved from Agent Chat action bubble",
+      });
+    },
+    onSuccess: async () => {
+      if (!runId) {
+        return;
+      }
+      await queryClient.invalidateQueries({
+        queryKey: ["runs", runId, "events"],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["runs", runId, "permission-notifications"],
+      });
+    },
+  });
   return (
     <div
       className={`flex ${item.role === "agent" ? "justify-start" : "justify-end"}`}
@@ -1484,6 +1581,63 @@ function RunnerBubble({ item }: { item: RunnerTranscriptItem }) {
         <div className="mt-2 whitespace-pre-wrap break-words leading-6">
           {item.body}
         </div>
+        {isPendingPermission ? (
+          <div className="mt-3 grid gap-2 rounded-md border border-warning/30 bg-warning/10 p-2">
+            <div className="text-xs font-medium text-amber-800 dark:text-warning">
+              {t("live.permissionAction")}
+            </div>
+            <div className="grid gap-1 text-xs opacity-80">
+              <div>
+                {t("common.token")}: {permission.permission_id}
+              </div>
+              {permission.tool ? (
+                <div>
+                  {t("live.permissionTool")}: {permission.tool}
+                </div>
+              ) : null}
+              {permissionContext.map((row) => (
+                <div key={row.label}>
+                  {t(row.label)}: {row.value}
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(permission.options?.length
+                ? permission.options
+                : [{ id: "approve" }, { id: "deny" }]
+              ).map((option) => (
+                <Button
+                  key={option.id}
+                  disabled={resolve.isPending}
+                  size="sm"
+                  variant={option.id === "deny" ? "danger" : "primary"}
+                  onClick={() =>
+                    resolve.mutate({
+                      id: permission.permission_id,
+                      decision: option.id,
+                    })
+                  }
+                >
+                  {option.label || option.id}
+                </Button>
+              ))}
+              <Button
+                disabled={resolve.isPending}
+                size="sm"
+                variant="secondary"
+                onClick={() =>
+                  downloadJson(
+                    `permission-${permission.permission_id}.json`,
+                    permission.raw ?? {},
+                  )
+                }
+              >
+                <Download className="h-4 w-4" />
+                {t("live.permissionPayload")}
+              </Button>
+            </div>
+          </div>
+        ) : null}
         <div className="mt-2 font-mono text-xs opacity-60">
           {item.event_type}
         </div>
@@ -1805,6 +1959,7 @@ function MissionDetailPage() {
               </CardBody>
             </Card>
           ) : null}
+          <MissionChatPanel events={missionEvents} mission={state} />
           <MissionDagPanel mission={state} />
           <MissionEventList events={missionEvents} />
         </div>
@@ -2744,6 +2899,108 @@ function MissionList({ missions }: { missions: MissionState[] }) {
   );
 }
 
+type MissionChatItem = {
+  id: string;
+  title: string;
+  body: string;
+  status: string;
+  time?: string;
+  runId?: string | null;
+  sequence: number;
+};
+
+function MissionChatPanel({
+  events,
+  mission,
+}: {
+  events: MissionEvent[];
+  mission?: MissionState;
+}) {
+  const { t } = useI18n();
+  const runIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (mission?.tasks ?? [])
+            .map((task) => task.run_id)
+            .filter((runId): runId is string => Boolean(runId)),
+        ),
+      ),
+    [mission?.tasks],
+  );
+  const runEventQueries = useQueries({
+    queries: runIds.map((runId) => ({
+      queryKey: ["runs", runId, "events"],
+      queryFn: () => runtimeApi.runEvents(runId),
+      refetchInterval: 5000,
+      retry: 1,
+    })),
+  });
+  const runOutputById = useMemo(() => {
+    const outputs: Record<string, string> = {};
+    runIds.forEach((runId, index) => {
+      const output = latestRunOutput(
+        runEventQueries[index]?.data?.events ?? [],
+      );
+      if (output) {
+        outputs[runId] = output;
+      }
+    });
+    return outputs;
+  }, [runIds, runEventQueries]);
+  const items = missionChatItems(mission, events, runOutputById);
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex min-w-0 items-center gap-2">
+          <MessageSquare className="h-4 w-4 text-primary" />
+          <CardTitle>{t("missions.chat")}</CardTitle>
+        </div>
+        <Badge tone="info">{items.length}</Badge>
+      </CardHeader>
+      <CardBody className="grid max-h-[620px] gap-3 overflow-auto">
+        {items.map((item) => (
+          <div
+            key={item.id}
+            className="grid gap-2 rounded-md border border-border bg-muted/30 p-3 text-sm"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="truncate font-medium">{item.title}</div>
+                {item.time ? (
+                  <div className="text-xs text-muted-foreground">
+                    {timeAgo(item.time)}
+                  </div>
+                ) : null}
+              </div>
+              <StatusBadge status={item.status} />
+            </div>
+            <div className="whitespace-pre-wrap break-words leading-6">
+              {item.body}
+            </div>
+            {item.runId ? (
+              <Link
+                className="inline-flex items-center gap-2 text-xs text-primary"
+                to="/runs/$runId"
+                params={{ runId: item.runId }}
+              >
+                <MessageSquare className="h-4 w-4" />
+                {t("missions.openRun")}
+              </Link>
+            ) : null}
+          </div>
+        ))}
+        {!items.length ? (
+          <EmptyState
+            title={t("missions.noMissionChat")}
+            detail={t("missions.noMissionChatDetail")}
+          />
+        ) : null}
+      </CardBody>
+    </Card>
+  );
+}
+
 function MissionDagPanel({ mission }: { mission?: MissionState }) {
   const { t } = useI18n();
   const tasks = mission?.tasks ?? [];
@@ -3257,13 +3514,16 @@ function transcriptItemForEvent(
         title: "Step completed",
         body: stepBody(event),
       };
-    case "permission.requested":
+    case "permission.requested": {
+      const request = extractPermissionRequest(event);
       return {
         ...base,
         role: "warning",
         title: "Permission required",
         body: permissionBody(event),
+        permissionRequest: request ?? undefined,
       };
+    }
     case "permission.resolved":
       return {
         ...base,
@@ -3339,6 +3599,35 @@ function stepBody(event: RuntimeEvent) {
 function permissionBody(event: RuntimeEvent) {
   const request = extractPermissionRequest(event);
   return request?.prompt ?? request?.tool ?? compactJson(event.data);
+}
+
+function permissionContextRows(permission: PermissionRequest) {
+  const raw = recordValue(permission.raw);
+  const rawPayload = recordValue(raw?.payload) ?? recordValue(raw?.raw);
+  const command =
+    stringValue(raw?.command) ??
+    stringValue(rawPayload?.command) ??
+    stringValue(rawPayload?.cmd) ??
+    stringValue(rawPayload?.shell);
+  const cwd =
+    stringValue(raw?.cwd) ??
+    stringValue(rawPayload?.cwd) ??
+    stringValue(rawPayload?.workspace);
+  const risk =
+    stringValue(raw?.risk) ??
+    stringValue(raw?.risk_level) ??
+    stringValue(rawPayload?.risk) ??
+    stringValue(rawPayload?.risk_level);
+  return [
+    risk ? { label: "live.permissionRisk" as I18nKey, value: risk } : undefined,
+    cwd ? { label: "live.permissionCwd" as I18nKey, value: cwd } : undefined,
+    command
+      ? {
+          label: "live.permissionCommand" as I18nKey,
+          value: command.length > 220 ? `${command.slice(0, 220)}...` : command,
+        }
+      : undefined,
+  ].filter((row): row is { label: I18nKey; value: string } => Boolean(row));
 }
 
 function failureBody(event: RuntimeEvent) {
@@ -3462,6 +3751,21 @@ function qwenContentText(update: Record<string, unknown>) {
     .join("\n");
 }
 
+function latestRunOutput(events: RuntimeEvent[]) {
+  for (const event of [...events].reverse()) {
+    const text =
+      event.type === "message.delta"
+        ? stringValue(event.data.text)
+        : (qwenMessageDeltaFromAdapterEvent(event) ??
+          stringValue(event.data.output) ??
+          stringValue(event.data.message));
+    if (text) {
+      return text.length > 500 ? `${text.slice(0, 500)}...` : text;
+    }
+  }
+  return undefined;
+}
+
 function filterTranscript(
   transcript: RunnerTranscriptItem[],
   filter: RunnerFilter,
@@ -3511,6 +3815,46 @@ function runnerSignal(latest?: RuntimeEvent, runStatus?: string) {
   return { label: "active", tone: "ok" as const };
 }
 
+function runnerStallExplanation(
+  events: RuntimeEvent[],
+  runStatus?: string,
+  workers: WorkerInfo[] = [],
+): I18nKey {
+  if (isTerminal(runStatus)) {
+    return "live.stallTerminal";
+  }
+  const resolved = resolvedPermissionIds(events);
+  const pendingPermission = events
+    .map(extractPermissionRequest)
+    .some((request) => request && !resolved.has(request.permission_id));
+  if (pendingPermission) {
+    return "live.stallPermission";
+  }
+  const latest = events.at(-1);
+  if (latest?.type === "run.queued") {
+    return workers.some((worker) => worker.status === "active")
+      ? "live.stallQueuedCapacity"
+      : "live.stallQueuedNoWorker";
+  }
+  const workerId = latest ? stringValue(latest.data.worker_id) : undefined;
+  if (
+    workerId &&
+    workers.some(
+      (worker) => worker.worker_id === workerId && worker.status === "stale",
+    )
+  ) {
+    return "live.stallWorkerStale";
+  }
+  if (
+    latest?.type === "adapter.not_configured" ||
+    latest?.type === "executor.failed" ||
+    latest?.type === "run.failed"
+  ) {
+    return "live.stallExecutorFailed";
+  }
+  return "live.stallNoRecentEvent";
+}
+
 function runnerReadableReport(
   transcript: RunnerTranscriptItem[],
   events: RuntimeEvent[],
@@ -3536,6 +3880,84 @@ function runnerReadableReport(
     );
   }
   return lines.join("\n");
+}
+
+function missionChatItems(
+  mission: MissionState | undefined,
+  events: MissionEvent[],
+  runOutputById: Record<string, string> = {},
+): MissionChatItem[] {
+  const items: MissionChatItem[] = [];
+  if (mission) {
+    mission.tasks.forEach((task, index) => {
+      const artifacts = taskResultArtifactNames(task.result);
+      const dependencyText = task.depends_on.length
+        ? `Dependencies: ${task.depends_on.join(", ")}`
+        : "Root task";
+      const resultText = artifacts.length
+        ? `Artifacts: ${artifacts.join(", ")}`
+        : task.result
+          ? `Result: ${compactJson(task.result).slice(0, 500)}`
+          : "No result yet";
+      const lastOutput = task.run_id ? runOutputById[task.run_id] : undefined;
+      items.push({
+        id: `task-${task.task_id}`,
+        title: `${task.title} · ${task.profile_id}`,
+        body: [
+          dependencyText,
+          resultText,
+          lastOutput ? `Last output: ${lastOutput}` : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        runId: task.run_id,
+        sequence: index + 1,
+        status: task.status,
+      });
+    });
+  }
+  for (const event of events.slice(-8)) {
+    items.push({
+      id: event.id,
+      title: event.type,
+      body: missionEventSummary(event),
+      sequence: 10_000 + event.sequence,
+      status: event.type.includes("failed")
+        ? "failed"
+        : event.type.includes("completed")
+          ? "completed"
+          : "running",
+      time: event.created_at,
+    });
+  }
+  return items.sort((left, right) => left.sequence - right.sequence);
+}
+
+function missionEventSummary(event: MissionEvent) {
+  const taskId = stringValue(event.data.task_id);
+  const runId = stringValue(event.data.run_id);
+  const status = stringValue(event.data.status);
+  return [
+    taskId ? `Task: ${taskId}` : undefined,
+    runId ? `Run: ${runId}` : undefined,
+    status ? `Status: ${status}` : undefined,
+    compactJson(event.data).slice(0, 600),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function taskResultArtifactNames(result?: Record<string, unknown>) {
+  const artifacts = Array.isArray(result?.artifacts) ? result.artifacts : [];
+  return artifacts
+    .map((artifact) => {
+      if (typeof artifact === "string") {
+        return artifact;
+      }
+      const item = recordValue(artifact);
+      return stringValue(item?.name);
+    })
+    .filter((name): name is string => Boolean(name));
 }
 
 function downloadText(filename: string, content: string) {
@@ -3606,6 +4028,138 @@ function workerBadges(worker: WorkerInfo) {
     ),
     ...adapters.map((adapter) => `adapter:${adapter}`),
   ].slice(0, 8);
+}
+
+function workerResourceRows(worker: WorkerInfo) {
+  const resources = objectValue(worker.metadata?.resources);
+  const metrics = objectValue(worker.metadata?.metrics);
+  const cpus =
+    numericValue(metrics.cpu_percent) ?? numericValue(resources.cpu_percent);
+  const memoryPercent =
+    numericValue(metrics.memory_percent) ??
+    numericValue(resources.memory_percent);
+  const diskPercent =
+    numericValue(metrics.disk_percent) ?? numericValue(resources.disk_percent);
+  const swapPercent =
+    numericValue(metrics.swap_percent) ?? numericValue(resources.swap_percent);
+  const loadAverage =
+    numericValue(metrics.load_average) ?? numericValue(resources.load_average);
+  const rows: Array<{
+    label: string;
+    percent: number;
+    tone: "ok" | "warn";
+    value: string;
+  }> = [];
+  const capacityPercent =
+    worker.capacity > 0 ? (worker.active_count / worker.capacity) * 100 : 0;
+  rows.push({
+    label: "capacity",
+    percent: clampPercent(capacityPercent),
+    tone: capacityPercent >= 100 ? "warn" : "ok",
+    value: `${worker.active_count}/${worker.capacity}`,
+  });
+  if (cpus != null) {
+    rows.push({
+      label: "cpu",
+      percent: clampPercent(cpus),
+      tone: cpus >= 85 ? "warn" : "ok",
+      value: `${Math.round(cpus)}%`,
+    });
+  } else if (numericValue(resources.cpus) != null) {
+    rows.push({
+      label: "cpu",
+      percent: clampPercent(
+        (worker.active_count / Math.max(1, numericValue(resources.cpus) ?? 1)) *
+          100,
+      ),
+      tone:
+        worker.active_count >= (numericValue(resources.cpus) ?? 1)
+          ? "warn"
+          : "ok",
+      value: `${resources.cpus} cores`,
+    });
+  }
+  if (memoryPercent != null) {
+    rows.push({
+      label: "memory",
+      percent: clampPercent(memoryPercent),
+      tone: memoryPercent >= 85 ? "warn" : "ok",
+      value: `${Math.round(memoryPercent)}%`,
+    });
+  } else if (numericValue(resources.memory_gb) != null) {
+    const memoryGb = numericValue(resources.memory_gb) ?? 0;
+    rows.push({
+      label: "memory",
+      percent: clampPercent(
+        (worker.active_count / Math.max(1, memoryGb / 2)) * 100,
+      ),
+      tone: memoryGb <= 2 && worker.active_count > 0 ? "warn" : "ok",
+      value: `${memoryGb} GB`,
+    });
+  }
+  if (diskPercent != null) {
+    rows.push({
+      label: "disk",
+      percent: clampPercent(diskPercent),
+      tone: diskPercent >= 85 ? "warn" : "ok",
+      value: `${Math.round(diskPercent)}%`,
+    });
+  }
+  if (swapPercent != null) {
+    rows.push({
+      label: "swap",
+      percent: clampPercent(swapPercent),
+      tone: swapPercent >= 40 ? "warn" : "ok",
+      value: `${Math.round(swapPercent)}%`,
+    });
+  }
+  if (loadAverage != null) {
+    const cpuCount = Math.max(1, numericValue(resources.cpus) ?? 1);
+    const loadPercent = (loadAverage / cpuCount) * 100;
+    rows.push({
+      label: "load",
+      percent: clampPercent(loadPercent),
+      tone: loadPercent >= 85 ? "warn" : "ok",
+      value: loadAverage.toFixed(2),
+    });
+  }
+  return rows;
+}
+
+function workerResourceWarnings(worker: WorkerInfo): I18nKey[] {
+  const resources = objectValue(worker.metadata?.resources);
+  const warnings: I18nKey[] = [];
+  if (
+    (numericValue(resources.memory_gb) ?? 0) <= 2 &&
+    worker.active_count > 0
+  ) {
+    warnings.push("units.lowMemoryWarning");
+  }
+  if (worker.capacity > 0 && worker.active_count >= worker.capacity) {
+    warnings.push("units.capacityFullWarning");
+  }
+  if (worker.status === "stale") {
+    warnings.push("units.staleWarning");
+  }
+  return warnings;
+}
+
+function clampPercent(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function numericValue(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 function objectValue(value: unknown) {
@@ -3702,6 +4256,7 @@ export const __testUtils = {
   parseJsonObject,
   prettyJson,
   registryValue,
+  runnerStallExplanation,
   runnerReadableReport,
   runnerSignal,
   runnerTranscript,
@@ -3709,6 +4264,11 @@ export const __testUtils = {
   toolEventBody,
   toolEventRole,
   workerBadges,
+  workerResourceRows,
+  workerResourceWarnings,
+  latestRunOutput,
+  missionChatItems,
+  permissionContextRows,
   isTerminal,
   statusLine,
   timeAgo,

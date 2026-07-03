@@ -27,29 +27,39 @@ test("manages runs, permissions, profiles, and operations", async ({
   await navigate(page, /Runs/);
   await page.getByLabel("Prompt").fill("Browser smoke run");
   await page.getByRole("button", { name: "Start" }).click();
-  await expect(page.getByText("run_created")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Run Detail" })).toBeVisible();
+  await expect(page.getByText("Active Runs")).toBeVisible();
 
   await navigate(page, /Runs/);
-  await page.getByText("run_1").click();
+  await page
+    .locator("main")
+    .getByRole("link", { name: "run_1 running Inspect runtime", exact: true })
+    .click();
   await expect(page.getByText("Permission Requests")).toBeVisible();
   await expect(page.getByText("log:sent")).toBeVisible();
   await expect(page.getByText("webhook:failed")).toBeVisible();
   await expect(page.getByText("Agent Chat")).toBeVisible();
+  await expect(page.getByText("Human approval required")).toBeVisible();
   await expect(page.getByText("Agent output #1")).toBeVisible();
   await expect(
-    page.getByText("Live runner output from the mocked SSE stream.", {
-      exact: true,
-    }),
+    page
+      .locator("main")
+      .getByText("Live runner output from the mocked SSE stream.", {
+        exact: true,
+      }),
   ).toBeVisible();
   await page.getByLabel("Continue chat").fill("Please continue");
   await page.getByRole("button", { name: "Send" }).click();
   await page.getByRole("button", { name: "Retry notification" }).click();
-  await page.getByRole("button", { name: "Approve" }).click();
+  await page.getByRole("button", { name: "Approve" }).first().click();
   await expect(page.getByText("final-report.md")).toBeVisible();
 
   await navigate(page, /Missions/);
   await page.getByRole("link", { name: /Open detail/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "Mission Stream" }),
+  ).toBeVisible();
+  await expect(page.getByText("Artifacts: plan.md")).toBeVisible();
   await expect(page.getByText("Task DAG")).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Mission Events" }),
@@ -69,6 +79,11 @@ test("manages runs, permissions, profiles, and operations", async ({
   await navigate(page, /Units/);
   await expect(
     page.getByRole("heading", { name: "Execution Units" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "2 GB memory is already running work. Keep this worker at capacity=1.",
+    ),
   ).toBeVisible();
   await page.getByLabel("Unit ID").fill("hk-2c2g-b");
   await page
@@ -235,6 +250,7 @@ async function mockRuntime(
           data: {
             permission_id: "perm_1",
             prompt: "Allow shell command?",
+            tool: "shell",
             options: [{ id: "approve", label: "Approve" }],
           },
         },
