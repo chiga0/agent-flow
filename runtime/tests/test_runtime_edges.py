@@ -62,10 +62,20 @@ from runtime.cloud_agents_runtime.models import (
     AuthUser,
     ExecutorLease,
     MissionSpec,
+    PermissionNotification,
     RunSpec,
     RunState,
     clean_identifier,
     hash_token,
+)
+from runtime.cloud_agents_runtime.notifications import (
+    PermissionNotificationConfig,
+    PermissionNotifier,
+    empty_to_none,
+    env_float,
+    permission_action_url,
+    permission_message,
+    split_csv,
 )
 from runtime.cloud_agents_runtime.ops import (
     env_nonnegative_int,
@@ -356,6 +366,112 @@ class RuntimeEdgeTest(unittest.TestCase):
             self.assertEqual(env_nonnegative_int("BAD_INT", 7), 7)
         with patch.dict(os.environ, {"NEG_INT": "-5"}):
             self.assertEqual(env_nonnegative_int("NEG_INT", 7), 0)
+
+    def test_permission_notification_helpers_and_delivery_edges(self) -> None:
+        with patched_env(
+            RUN_MANAGER_PERMISSION_NOTIFY_CHANNELS=" log,webhook ",
+            RUN_MANAGER_PERMISSION_NOTIFY_TARGETS=" operator,oncall ",
+            RUN_MANAGER_PUBLIC_BASE_URL=" https://agentflow.example/base/ ",
+            RUN_MANAGER_PERMISSION_WEBHOOK_URL=" https://hooks.example/permission ",
+            RUN_MANAGER_PERMISSION_WEBHOOK_TOKEN="secret",
+            RUN_MANAGER_PERMISSION_WEBHOOK_TIMEOUT_SECONDS="bad",
+        ):
+            config = PermissionNotificationConfig.from_env()
+        self.assertEqual(config.channels, ("log", "webhook"))
+        self.assertEqual(config.targets, ("operator", "oncall"))
+        self.assertEqual(config.public_base_url, "https://agentflow.example/base/")
+        self.assertEqual(config.webhook_url, "https://hooks.example/permission")
+        self.assertEqual(config.webhook_timeout_seconds, 5.0)
+        self.assertEqual(config.to_dict()["webhook_token"], "configured")
+        self.assertEqual(split_csv(" a, ,b "), ["a", "b"])
+        self.assertIsNone(empty_to_none(" "))
+        self.assertEqual(env_float("__missing_float__", 1.5), 1.5)
+
+        run = RunState.create(RunSpec(adapter="fake"), run_id="run_notice")
+        event = RuntimeEvent(
+            "permission.requested",
+            run.run_id,
+            7,
+            {
+                "raw": {
+                    "data": {
+                        "requestId": "perm-raw",
+                        "prompt": "Approve shell?",
+                        "tool": "shell",
+                    }
+                }
+            },
+            id="evt_notice",
+        )
+        notifier = PermissionNotifier(config)
+        notifications = notifier.notifications_for(
+            run=run,
+            permission_id="perm-raw",
+            event=event,
+        )
+        self.assertEqual(len(notifications), 4)
+        self.assertIn("Approve shell?", notifications[0].message)
+        self.assertEqual(
+            notifications[0].action_url,
+            "https://agentflow.example/base/#/runs/run_notice",
+        )
+        self.assertIn("tool=shell", permission_message(run, "perm-raw", event))
+        self.assertEqual(permission_action_url(None, run.run_id), "/runs/run_notice")
+        self.assertEqual(
+            notifier.deliver(notifications[0], run=run, event=event).status,
+            "sent",
+        )
+
+        unsupported = PermissionNotification.create(
+            run_id=run.run_id,
+            permission_id="perm-raw",
+            channel="sms",
+            target="operator",
+            message="msg",
+            action_url="/runs/run_notice",
+        )
+        self.assertEqual(
+            notifier.deliver(unsupported, run=run, event=event).status,
+            "failed",
+        )
+
+        webhook = next(item for item in notifications if item.channel == "webhook")
+        missing_url = PermissionNotifier(
+            PermissionNotificationConfig(channels=("webhook",), webhook_url=None)
+        )
+        self.assertIn(
+            "not configured",
+            missing_url.deliver(webhook, run=run, event=event).error or "",
+        )
+
+        class Response:
+            status = 202
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, limit: int = -1) -> bytes:
+                return b"accepted"
+
+        with patch("runtime.cloud_agents_runtime.notifications.urllib.request.urlopen") as urlopen:
+            urlopen.return_value = Response()
+            result = notifier.deliver(webhook, run=run, event=event)
+        self.assertEqual(result.status, "sent")
+        self.assertIn("webhook:202:accepted", result.delivery_ref or "")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer secret")
+        self.assertIn(b"permission.requested", request.data)
+
+        with patch(
+            "runtime.cloud_agents_runtime.notifications.urllib.request.urlopen",
+            side_effect=RuntimeError("network down"),
+        ):
+            result = notifier.deliver(webhook, run=run, event=event)
+        self.assertEqual(result.status, "failed")
+        self.assertIn("network down", result.error or "")
 
     def test_mission_model_and_dag_validation_edges(self) -> None:
         with self.assertRaisesRegex(ValueError, "goal is required"):
