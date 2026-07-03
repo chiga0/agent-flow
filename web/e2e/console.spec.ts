@@ -28,7 +28,9 @@ test("manages runs, permissions, profiles, and operations", async ({
   await page.getByLabel("Prompt").fill("Browser smoke run");
   await page.getByRole("button", { name: "Start" }).click();
   await expect(page.getByText("run_created")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Run Detail" })).toBeVisible();
 
+  await navigate(page, /Runs/);
   await page.getByText("run_1").click();
   await expect(page.getByText("Permission Requests")).toBeVisible();
   await expect(page.getByText("Live Runner Chat")).toBeVisible();
