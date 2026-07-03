@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - queue_status
+          - cancel_run
           - retry_worker
           - restart_runtime
           - restart_nginx
@@ -17,6 +18,11 @@ on:
         description: "Worker id used by retry_worker"
         required: false
         default: "cloud-agents-runtime"
+        type: string
+      run_id:
+        description: "Run id used by cancel_run"
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -51,6 +57,7 @@ jobs:
           RUNTIME_SSH_TARGET: ${{ secrets.RUNTIME_SSH_TARGET }}
           RUNTIME_OP_ACTION: ${{ inputs.action }}
           RUNTIME_OP_WORKER_ID: ${{ inputs.worker_id }}
+          RUNTIME_OP_RUN_ID: ${{ inputs.run_id }}
         run: |
           set -euo pipefail
           ssh -i "$RUNNER_TEMP/runtime-ops/ssh_key" \
@@ -59,7 +66,7 @@ jobs:
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=20 \
             "$RUNTIME_SSH_TARGET" \
-            "RUNTIME_OP_ACTION='$RUNTIME_OP_ACTION' RUNTIME_OP_WORKER_ID='$RUNTIME_OP_WORKER_ID' bash -s" <<'REMOTE'
+            "RUNTIME_OP_ACTION='$RUNTIME_OP_ACTION' RUNTIME_OP_WORKER_ID='$RUNTIME_OP_WORKER_ID' RUNTIME_OP_RUN_ID='$RUNTIME_OP_RUN_ID' bash -s" <<'REMOTE'
           set -euo pipefail
 
           RUN_MANAGER_TOKEN="$(
@@ -71,9 +78,12 @@ jobs:
             local method="$1"
             local path="$2"
             local body="${3:-{}}"
+            local body_file
             local response_file
             local status
+            body_file="$(mktemp)"
             response_file="$(mktemp)"
+            printf '%s' "$body" > "$body_file"
             status="$(
               curl -sS \
                 -o "$response_file" \
@@ -81,11 +91,11 @@ jobs:
                 -X "$method" \
                 -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
                 -H "content-type: application/json" \
-                --data "$body" \
+                --data-binary "@$body_file" \
                 "$API_BASE$path"
             )"
             cat "$response_file"
-            rm -f "$response_file"
+            rm -f "$body_file" "$response_file"
             if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
               echo "runtime api $method $path returned HTTP $status" >&2
               return 22
@@ -114,6 +124,15 @@ jobs:
 
           case "$RUNTIME_OP_ACTION" in
             queue_status)
+              api_get /queue
+              ;;
+            cancel_run)
+              test -n "$RUNTIME_OP_RUN_ID" || { echo "run_id is required for cancel_run" >&2; exit 2; }
+              api \
+                POST \
+                "/runs/$RUNTIME_OP_RUN_ID/cancel" \
+                '{"reason":"manual runtime ops cancel"}'
+              echo
               api_get /queue
               ;;
             retry_worker)
