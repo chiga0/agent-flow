@@ -54,8 +54,11 @@ Run Detail 是最重要的页面。
 | Composer | run 仍可交互时继续追加输入 |
 | Permission | 处理 pending permission request |
 | Event Stream | 查看底层事件，用于排障和审计 |
-| Artifacts | 下载 diagnostics、executor 日志、final report |
+| Artifacts | 预览或下载 diagnostics、executor 日志、final report、events 等文件 |
+| 审计下载 | 固定下载 events、diagnostics、audit bundle |
 | Audit Bundle | 下载完整审计包 |
+
+Artifact 区的小型文本文件可以直接预览，例如 `.json`、`.jsonl`、`.md`、`.txt`、`.log`。大文件或二进制文件只保留下载，避免浏览器卡顿。
 
 如果 run 一直 running，优先看：
 
@@ -91,6 +94,22 @@ Units 用来管理 worker。
 - Resume 一个 worker，让它重新接任务。
 - Retry worker 上卡住的任务。
 
+这里的术语关系是：
+
+- 执行单元：管理台里的产品视图。
+- Worker：部署在 VPS、NAS、本地电脑或主控机上的后台进程。
+- 一次性令牌：注册 worker 时创建的 `workers:*` API token，明文只显示一次。
+
+注册步骤：
+
+1. 在 Units 页面填写 Unit ID、控制地址、容量和资源标签。
+2. 点击 Generate。
+3. 优先复制“无需本地源码”命令，替换 `root@<worker-ip>` 和 `/path/to/key.pem`。
+4. 在你的本地机器执行该命令，它会通过 SSH 安装远端 worker。
+5. 回到 Units 页面刷新，确认心跳、容量和 adapter 标签出现。
+
+“已有本地源码”命令适合你已经 clone 本仓库并在仓库根目录执行；“无需本地源码”命令会先从 GitHub 下载部署脚本，所以新机器接入更直观。远端 VPS 仍会 clone 本仓库，因为 worker service、运行时代码和 systemd 文件来自仓库。
+
 2C2G VPS 建议：
 
 - `capacity=1` 起步。
@@ -108,6 +127,9 @@ Executors 用于排查 qwen。
 - pid、port、workspace。
 - stdout/stderr artifact。
 - last error。
+- registry 配置和 lease 计数。
+
+执行单元/worker 是接任务的机器或进程；executor 是 worker 为某次 run 启动或复用的真实运行实例；registry 是控制面保存 executor 租约和状态的台账。
 
 如果 fake run 正常但 qwen run 失败，优先看这里。
 

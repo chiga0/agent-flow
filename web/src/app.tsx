@@ -501,6 +501,22 @@ function UnitsPage() {
           detail={t("units.staleDetail")}
         />
       </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("units.howItWorks")}</CardTitle>
+        </CardHeader>
+        <CardBody className="grid gap-3 md:grid-cols-3">
+          <div className="rounded-md bg-muted/50 p-3 text-sm">
+            {t("units.helpWorker")}
+          </div>
+          <div className="rounded-md bg-muted/50 p-3 text-sm">
+            {t("units.helpRegister")}
+          </div>
+          <div className="rounded-md bg-muted/50 p-3 text-sm">
+            {t("units.helpToken")}
+          </div>
+        </CardBody>
+      </Card>
 
       <div className="grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
         <WorkerRegistrationForm onCreated={setRegistration} />
@@ -815,6 +831,7 @@ function WorkerRegistrationResult({
   registration: WorkerRegistration;
 }) {
   const { t } = useI18n();
+  const noSourceCommand = workerNoSourceDeployCommand(registration);
   return (
     <Card className="border-warning/40">
       <CardHeader>
@@ -824,7 +841,7 @@ function WorkerRegistrationResult({
             {t("units.tokenDetail")}
           </div>
         </div>
-        <Button size="sm" onClick={() => copyText(registration.deploy_command)}>
+        <Button size="sm" onClick={() => copyText(noSourceCommand)}>
           <Copy className="h-4 w-4" />
           {t("common.copy")}
         </Button>
@@ -838,9 +855,32 @@ function WorkerRegistrationResult({
             value={registration.token.token_prefix}
           />
         </div>
-        <pre className="max-h-[320px] overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">
-          {registration.deploy_command}
-        </pre>
+        <div className="grid gap-2">
+          <div>
+            <div className="text-sm font-medium">
+              {t("units.deployNoSource")}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {t("units.deployNoSourceDetail")}
+            </div>
+          </div>
+          <pre className="max-h-[320px] overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">
+            {noSourceCommand}
+          </pre>
+        </div>
+        <div className="grid gap-2">
+          <div>
+            <div className="text-sm font-medium">
+              {t("units.deployLocalSource")}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {t("units.deployLocalSourceDetail")}
+            </div>
+          </div>
+          <pre className="max-h-[320px] overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">
+            {registration.deploy_command}
+          </pre>
+        </div>
       </CardBody>
     </Card>
   );
@@ -895,6 +935,22 @@ function ExecutorsPage() {
           detail={stringValue(config.container_network ?? "bridge")}
         />
       </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("executors.howItWorks")}</CardTitle>
+        </CardHeader>
+        <CardBody className="grid gap-3 md:grid-cols-3">
+          <div className="rounded-md bg-muted/50 p-3 text-sm">
+            {t("executors.helpUnit")}
+          </div>
+          <div className="rounded-md bg-muted/50 p-3 text-sm">
+            {t("executors.helpExecutor")}
+          </div>
+          <div className="rounded-md bg-muted/50 p-3 text-sm">
+            {t("executors.helpRegistry")}
+          </div>
+        </CardBody>
+      </Card>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <Card>
@@ -3532,6 +3588,17 @@ function MissionArtifactPanel({
   artifacts: ArtifactInfo[];
 }) {
   const { t } = useI18n();
+  const [previewName, setPreviewName] = useState<string | null>(null);
+  const selectedArtifact = artifacts.find(
+    (artifact) => artifact.name === previewName,
+  );
+  const preview = useQuery({
+    queryKey: ["missions", missionId, "artifact-preview", previewName],
+    queryFn: () =>
+      fetchTextArtifact(missionArtifactHref(missionId, previewName ?? "")),
+    enabled: Boolean(previewName && selectedArtifact),
+    retry: 1,
+  });
   return (
     <Card>
       <CardHeader>
@@ -3540,19 +3607,70 @@ function MissionArtifactPanel({
       </CardHeader>
       <CardBody className="grid gap-2">
         {artifacts.map((artifact) => (
-          <a
+          <div
             key={artifact.name}
-            className="rounded-md border border-border p-3 text-sm hover:bg-muted"
-            href={missionArtifactHref(missionId, artifact.name)}
+            className="grid gap-3 rounded-md border border-border p-3 text-sm"
           >
-            <div className="font-medium">{artifact.name}</div>
-            <div className="text-xs text-muted-foreground">
-              {formatBytes(artifact.size_bytes)}
+            <div className="min-w-0">
+              <div className="break-words font-medium">{artifact.name}</div>
+              <div className="text-xs text-muted-foreground">
+                {formatBytes(artifact.size_bytes)}
+              </div>
             </div>
-          </a>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                disabled={!canPreviewArtifact(artifact)}
+                size="sm"
+                onClick={() => setPreviewName(artifact.name)}
+              >
+                <FileText className="h-4 w-4" />
+                {t("common.preview")}
+              </Button>
+              <LinkButton
+                href={missionArtifactHref(missionId, artifact.name)}
+                size="sm"
+              >
+                <Download className="h-4 w-4" />
+                {t("common.download")}
+              </LinkButton>
+            </div>
+          </div>
         ))}
         {!artifacts.length ? (
           <EmptyState title={t("missions.noArtifacts")} />
+        ) : null}
+        {selectedArtifact ? (
+          <div className="mt-2 grid gap-2 rounded-md border border-border bg-muted/30 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="font-medium">{t("runs.artifactPreview")}</div>
+                <div className="break-words text-xs text-muted-foreground">
+                  {selectedArtifact.name} ·{" "}
+                  {formatBytes(selectedArtifact.size_bytes)}
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setPreviewName(null)}
+              >
+                {t("common.close")}
+              </Button>
+            </div>
+            {preview.isLoading ? (
+              <div className="text-sm text-muted-foreground">
+                {t("common.loading")}
+              </div>
+            ) : preview.isError ? (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                {String(preview.error)}
+              </div>
+            ) : (
+              <pre className="max-h-[520px] overflow-auto rounded-md bg-slate-950 p-3 text-xs leading-5 text-slate-100">
+                {preview.data}
+              </pre>
+            )}
+          </div>
         ) : null}
       </CardBody>
     </Card>
@@ -4843,6 +4961,21 @@ function defaultWorkerControlUrl() {
   return `${window.location.origin}/cloud-agents-worker`;
 }
 
+function workerNoSourceDeployCommand(registration: WorkerRegistration) {
+  const token = registration.token.token ?? "<worker-token-shown-once>";
+  return [
+    `RUN_WORKER_CONTROL_URL=${shellSingleQuote(registration.control_url)}`,
+    `RUN_WORKER_TOKEN=${shellSingleQuote(token)}`,
+    `RUN_WORKER_ID=${shellSingleQuote(registration.worker_id)}`,
+    `RUN_WORKER_CAPACITY=${registration.capacity}`,
+    "bash -c 'tmp=$(mktemp); curl -fsSL https://raw.githubusercontent.com/chiga0/agent-research/main/scripts/deploy_worker_vps.sh -o \"$tmp\"; bash \"$tmp\" root@<worker-ip> /path/to/key.pem'",
+  ].join(" \\\n  ");
+}
+
+function shellSingleQuote(value: string) {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
 function workerBadges(worker: WorkerInfo) {
   const metadata = worker.metadata ?? {};
   const labels = objectValue(metadata.labels);
@@ -5069,6 +5202,7 @@ function isTerminal(status?: string) {
 
 export const __testUtils = {
   bubbleClass,
+  canPreviewArtifact,
   connectionLabel,
   connectionTone,
   compactJson,
@@ -5081,6 +5215,7 @@ export const __testUtils = {
   filterLabel,
   filterTranscript,
   formatBytes,
+  fetchTextArtifact,
   isTerminalEvent,
   mergeEvents,
   money,
@@ -5094,10 +5229,13 @@ export const __testUtils = {
   runnerSignal,
   runnerTranscript,
   runTaskProgress,
+  shellSingleQuote,
   stringValue,
   toolEventBody,
   toolEventRole,
+  transcriptItemForEvent,
   workerBadges,
+  workerNoSourceDeployCommand,
   workerResourceRows,
   workerResourceWarnings,
   latestRunOutput,

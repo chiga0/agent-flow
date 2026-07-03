@@ -15,6 +15,7 @@ nav:
   - 快速开始:
       - 认识 AgentFlow: getting-started.md
       - 核心概念: concepts.md
+      - 架构与术语: architecture.md
       - 使用管理台: user-guide.md
       - 自我部署: self-deploy.md
       - 排障手册: troubleshooting.md
@@ -26,6 +27,7 @@ nav:
       - 实施 Roadmap: implementation/implementation-roadmap.md
   - 架构设计:
       - 架构总览: implementation/index.md
+      - AgentFlow 架构与术语: architecture.md
       - 稳定单 Agent 执行单元: implementation/stable-agent-execution-unit.md
       - SubAgent 与独立执行单元边界: implementation/subagent-vs-execution-unit.md
       - 基于 qwen-code serve 的云端单 Agent 单元方案: implementation/qwen-serve-single-agent-cloud-unit.md

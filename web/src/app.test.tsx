@@ -1241,6 +1241,58 @@ describe("AgentFlow console", () => {
         .body,
     ).toBe("The runner reached a terminal success state.");
     expect(
+      __testUtils.runnerTranscript([
+        event("run.started", 34, { adapter: "qwen" }, now),
+      ])[0].body,
+    ).toBe("qwen");
+    expect(
+      __testUtils.runnerTranscript([event("run.started", 34, {}, now)])[0]
+        .body,
+    ).toBe("Session is active.");
+    expect(
+      __testUtils.runnerTranscript([
+        event("input.accepted", 35, { prompt_number: 3 }, now),
+      ])[0].body,
+    ).toBe("Prompt #3");
+    expect(
+      __testUtils.runnerTranscript([
+        event(
+          "adapter.event",
+          36,
+          {
+            raw: {
+              data: {
+                update: {
+                  sessionUpdate: "agent_thought_chunk",
+                  content: { text: "private reasoning chunk" },
+                },
+              },
+            },
+          },
+          now,
+        ),
+      ])[0].body,
+    ).toBe("Model is analyzing the request and preparing the next action.");
+    expect(
+      __testUtils.transcriptItemForEvent(
+        event(
+          "adapter.event",
+          37,
+          {
+            raw: {
+              data: {
+                update: {
+                  sessionUpdate: "agent_thought_chunk",
+                  content: { text: "private reasoning chunk" },
+                },
+              },
+            },
+          },
+          now,
+        ),
+      ),
+    ).toBeNull();
+    expect(
       __testUtils.runnerTranscript([event("unmapped.event", 34, {}, now)]),
     ).toHaveLength(0);
     expect(
@@ -1474,6 +1526,51 @@ describe("AgentFlow console", () => {
       "/agentflow-worker",
     );
     window.history.pushState({}, "", "/");
+    expect(
+      __testUtils.canPreviewArtifact({
+        name: "diagnostics.json",
+        size_bytes: 512,
+        updated_at: now,
+      }),
+    ).toBe(true);
+    expect(
+      __testUtils.canPreviewArtifact({
+        name: "video.bin",
+        size_bytes: 512,
+        updated_at: now,
+      }),
+    ).toBe(false);
+    expect(
+      __testUtils.canPreviewArtifact({
+        name: "large.jsonl",
+        size_bytes: 300 * 1024,
+        updated_at: now,
+      }),
+    ).toBe(false);
+    expect(__testUtils.shellSingleQuote("worker's token")).toBe(
+      "'worker'\"'\"'s token'",
+    );
+    expect(
+      __testUtils.workerNoSourceDeployCommand({
+        worker_id: "hk-worker",
+        capacity: 1,
+        control_url: "https://doubaofans.site/cloud-agents-worker",
+        token: {
+          token_id: "token_worker",
+          name: "worker-hk-worker",
+          principal_id: "operator",
+          scopes: ["workers:*"],
+          status: "active",
+          token_prefix: "cat_worker",
+          token: "cat_worker_secret",
+          created_at: now,
+          updated_at: now,
+          metadata: {},
+        },
+        metadata: {},
+        deploy_command: "local-source-command",
+      }),
+    ).toContain("raw.githubusercontent.com/chiga0/agent-research");
     expect(
       __testUtils.workerBadges({
         worker_id: "worker",
@@ -1829,6 +1926,23 @@ describe("AgentFlow console", () => {
     expect(createObjectURL).toHaveBeenCalled();
     expect(click).toHaveBeenCalled();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:report");
+  });
+
+  it("fetches text artifacts and surfaces preview errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response("preview body", { status: 200 }))
+        .mockResolvedValueOnce(new Response("missing artifact", { status: 404 })),
+    );
+
+    await expect(__testUtils.fetchTextArtifact("/artifact.txt")).resolves.toBe(
+      "preview body",
+    );
+    await expect(__testUtils.fetchTextArtifact("/missing.txt")).rejects.toThrow(
+      "missing artifact",
+    );
   });
 
   it("copies text with the textarea fallback", () => {

@@ -128,9 +128,11 @@ RUN_MANAGER_BOOTSTRAP_PASSWORD="$(
 
 - Agent Chat：实时事件、模型流式输出、工具事件摘要、warning、error，并可继续追加输入。
 - Event Stream：完整 canonical event。
-- Artifacts：下载 `events.jsonl`、`raw_events.jsonl`、`diagnostics.json`、`final_*.json`、executor 日志等。
-- Audit Bundle：下载完整审计包。
+- Artifacts：预览或下载 `events.jsonl`、`raw_events.jsonl`、`diagnostics.json`、`final_*.json`、executor 日志等。
+- 审计下载：固定下载事件、诊断和完整审计包。
 - Permission：处理 pending permission request。
+
+`.json`、`.jsonl`、`.md`、`.txt`、`.log`、`.csv`、`.yaml` 等小型文本产物可以直接在页面预览。大文件或二进制产物保留下载，避免浏览器卡死。
 
 权限确认当前以 Web 控制台为权威入口；远程 worker 的权限决策会先写入中心事件流，再通过 worker control plane 下发到对应执行单元。邮件、飞书、企业微信等外部通知 channel 的目标架构见：[人类介入、权限确认与通知 Channel 架构](human-in-the-loop-permission-channel-architecture.md)。
 
@@ -419,6 +421,8 @@ Run Detail 中常用下载：
 | `executor.stderr.log` | executor stderr |
 | `audit.json` | 完整 run 审计包 |
 
+页面上“Artifacts/产物”是具体文件列表，支持小型文本文件预览；“审计下载”是固定导出区，方便快速拿到事件、诊断和审计包。两者不是重复入口。
+
 API 下载示例：
 
 ```bash
@@ -536,7 +540,16 @@ AUTH_PASSWORD=<password> \
 5. CPUs 填 `2`，Memory GB 填 `2`。
 6. Region label 填 `hk`。
 7. 点击 Generate。
-8. 复制生成的部署命令，把 `root@<worker-ip>` 和 `/path/to/key.pem` 替换成目标 VPS。
+8. 优先复制“无需本地源码”命令，把 `root@<worker-ip>` 和 `/path/to/key.pem` 替换成目标 VPS。
+
+命令分两类：
+
+| 命令 | 是否需要本地 clone 仓库 | 适用场景 |
+| --- | --- | --- |
+| 无需本地源码 | 不需要 | 新机器快速接入，命令会先从 GitHub 下载部署脚本 |
+| 已有本地源码 | 需要在仓库根目录执行 | 开发者本地或 CI，从当前 checkout 执行 |
+
+注意：远端 VPS 仍会 clone 本仓库。原因是 worker 的 systemd service、daemon 代码、部署模板和运行时依赖都来自仓库；“无需本地源码”只是不要求你的本机提前 clone。
 
 也可以在 Access 页面或 API 创建 worker token：
 
