@@ -30,6 +30,7 @@ import {
   Radio,
   RefreshCw,
   Save,
+  Send,
   Server,
   ShieldCheck,
   UserCog,
@@ -1115,6 +1116,16 @@ function RunDetailPage() {
     <Page title={t("runs.detail")} subtitle={runId}>
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="grid gap-4">
+          <LiveRunnerPanel
+            connectionStatus={live.status}
+            events={live.events}
+            runId={runId}
+            runStatus={run.data?.status}
+          />
+          <PermissionPanel runId={runId} events={live.events} />
+          <EventList events={live.events} />
+        </div>
+        <div className="grid content-start gap-4">
           <Card>
             <CardHeader>
               <CardTitle>{t("runs.state")}</CardTitle>
@@ -1149,15 +1160,6 @@ function RunDetailPage() {
               />
             </CardBody>
           </Card>
-          <PermissionPanel runId={runId} events={live.events} />
-          <LiveRunnerPanel
-            connectionStatus={live.status}
-            events={live.events}
-            runStatus={run.data?.status}
-          />
-          <EventList events={live.events} />
-        </div>
-        <div className="grid content-start gap-4">
           <ArtifactPanel
             runId={runId}
             artifacts={artifacts.data?.artifacts ?? []}
@@ -1274,22 +1276,51 @@ function useRunLiveEvents(
 function LiveRunnerPanel({
   connectionStatus,
   events,
+  runId,
   runStatus,
 }: {
   connectionStatus: LiveConnectionStatus;
   events: RuntimeEvent[];
+  runId: string;
   runStatus?: string;
 }) {
   const { t } = useI18n();
+  const queryClient = useQueryClient();
   const transcript = useMemo(() => runnerTranscript(events), [events]);
   const [filter, setFilter] = useState<RunnerFilter>("all");
+  const [prompt, setPrompt] = useState("");
+  const [inputError, setInputError] = useState<string | null>(null);
   const filteredTranscript = useMemo(
     () => filterTranscript(transcript, filter),
     [filter, transcript],
   );
   const latest = events.at(-1);
   const signal = runnerSignal(latest, runStatus);
+  const ended = isTerminal(runStatus);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const submitInput = useMutation({
+    mutationFn: (nextPrompt: string) =>
+      runtimeApi.submitRunInput(runId, nextPrompt),
+    onSuccess: async () => {
+      setPrompt("");
+      setInputError(null);
+      await queryClient.invalidateQueries({ queryKey: ["runs"] });
+      await queryClient.invalidateQueries({ queryKey: ["runs", runId] });
+      await queryClient.invalidateQueries({
+        queryKey: ["runs", runId, "events"],
+      });
+    },
+    onError: (error) => setInputError(String(error)),
+  });
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextPrompt = prompt.trim();
+    if (!nextPrompt || ended) {
+      return;
+    }
+    submitInput.mutate(nextPrompt);
+  };
 
   useEffect(() => {
     if (!scrollRef.current) {
@@ -1318,7 +1349,7 @@ function LiveRunnerPanel({
         </Badge>
       </CardHeader>
       <CardBody className="grid gap-4">
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-4">
           <Metric
             label={t("live.runStatus")}
             value={runStatus ?? t("common.loading")}
@@ -1329,6 +1360,7 @@ function LiveRunnerPanel({
             value={signal.label}
             detail={latest ? `seq ${latest.sequence}` : undefined}
           />
+          <Metric label={t("common.events")} value={events.length} />
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap gap-2">
@@ -1356,7 +1388,7 @@ function LiveRunnerPanel({
             }
           >
             <FileText className="h-4 w-4" />
-            Download Report
+            {t("live.downloadReport")}
           </Button>
         </div>
         {signal.tone === "warn" ? (
@@ -1366,7 +1398,7 @@ function LiveRunnerPanel({
         ) : null}
         <div
           ref={scrollRef}
-          className="grid max-h-[520px] gap-3 overflow-auto rounded-md border border-border bg-muted/40 p-3"
+          className="grid min-h-[420px] max-h-[min(68vh,760px)] gap-3 overflow-auto rounded-md border border-border bg-muted/40 p-3"
         >
           {filteredTranscript.map((item) => (
             <RunnerBubble key={item.id} item={item} />
@@ -1375,6 +1407,46 @@ function LiveRunnerPanel({
             <EmptyState title={t("live.waiting")} detail={t("live.subtitle")} />
           ) : null}
         </div>
+        <form
+          className="grid gap-2 rounded-md border border-border bg-background p-3"
+          onSubmit={handleSubmit}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label
+              className="text-sm font-medium"
+              htmlFor={`run-input-${runId}`}
+            >
+              {t("live.followUp")}
+            </label>
+            {ended ? (
+              <span className="text-xs text-muted-foreground">
+                {t("live.inputDisabled")}
+              </span>
+            ) : null}
+          </div>
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+            <Textarea
+              className="min-h-20 resize-y"
+              disabled={ended || submitInput.isPending}
+              id={`run-input-${runId}`}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder={t("live.inputPlaceholder")}
+              value={prompt}
+            />
+            <Button
+              className="self-end"
+              disabled={!prompt.trim() || ended || submitInput.isPending}
+              type="submit"
+              variant="primary"
+            >
+              <Send className="h-4 w-4" />
+              {submitInput.isPending ? t("live.sending") : t("live.send")}
+            </Button>
+          </div>
+          {inputError ? (
+            <div className="text-sm text-destructive">{inputError}</div>
+          ) : null}
+        </form>
       </CardBody>
     </Card>
   );

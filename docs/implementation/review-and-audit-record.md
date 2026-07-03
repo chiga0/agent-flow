@@ -788,6 +788,34 @@ python3 scripts/validate_qwen_mission.py \
 - Worker route 当前依赖 TLS + scoped bearer token；mTLS、Nginx IP allowlist、WireGuard/Tailscale 仍属于外部部署配置。
 - 远程取消和 permission resolution 仍需补 worker pull-loop 对 control-plane state 的反向订阅/轮询。
 
+## 2026-07-03 产品可用性审计与低资源部署复盘
+
+### 背景
+
+用户反馈：发起任务后虽然底层已有 SSE 和 canonical events，但页面感知不到实时进度和模型流式输出，体验不像 AI Chat；同时 2C2G ECS 容易 CPU/内存打满，导致页面 pending、白屏或 SSH/部署链路不稳定。
+
+### 审计结论
+
+- 运行详情页的信息架构偏“运维面板”，不是“任务协作面板”。状态、权限、事件流、artifact 都存在，但首屏没有把模型输出和继续交互作为主线。
+- 2C2G 可以做最小公网入口或单 worker，不适合作为控制面、qwen executor、构建机和多任务执行机的混合节点。
+- 更稳的产品形态是控制面/执行面分离：本地电脑、NAS 或更大 VPS 运行 AgentFlow Control Plane，2C2G VPS 以 `capacity=1` 作为远程 worker 或公网边缘。
+
+### 已修复
+
+- Run Detail 改为 Chat-first：Agent Chat 进入首屏，状态和 artifact 退到侧栏。
+- Agent Chat 增加继续输入 composer，调用 `POST /runs/{run_id}/input` 并刷新 run/events。
+- 单测和 E2E 增加“创建 run 后进入详情页、看到 Agent Chat、继续输入”的覆盖。
+- 新增 [产品可用性审计](product-usability-audit.md)。
+- 新增 [本地电脑或 NAS 作为 AgentFlow 主控的部署教程](local-nas-control-plane-deployment.md)。
+
+### 后续产品项
+
+- 把 permission request 做成 Chat 内 action bubble，同时保留独立审批面板。
+- 增加全局活跃任务 Dock，让用户离开 Run Detail 后仍能看到任务状态。
+- Mission Detail 增加聚合 Chat，隐藏多 SAEU 的底层复杂度。
+- Units 增加 CPU、内存、swap、磁盘和进程 RSS 监控。
+- Runtime Monitor 增加深度 SSE smoke，确认流式输出没有被代理 buffering。
+
 ## Go / No-Go 决策
 
 ### Go

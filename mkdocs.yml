@@ -25,6 +25,8 @@ nav:
       - 从单 Agent 执行单元到多 Agent 编排: implementation/single-to-multi-agent-implementation-plan.md
       - 外部方案对比与多方向审计: implementation/alternative-solutions-comparative-audit.md
       - 方案审计与 Review 记录: implementation/review-and-audit-record.md
+      - 产品可用性审计: implementation/product-usability-audit.md
+      - 本地或 NAS 主控部署教程: implementation/local-nas-control-plane-deployment.md
       - 实施 Roadmap: implementation/implementation-roadmap.md
       - AgentFlow 操作手册: implementation/operation-manual.md
   - AgentFlow:

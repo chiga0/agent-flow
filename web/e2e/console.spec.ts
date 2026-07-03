@@ -33,13 +33,15 @@ test("manages runs, permissions, profiles, and operations", async ({
   await navigate(page, /Runs/);
   await page.getByText("run_1").click();
   await expect(page.getByText("Permission Requests")).toBeVisible();
-  await expect(page.getByText("Live Runner Chat")).toBeVisible();
+  await expect(page.getByText("Agent Chat")).toBeVisible();
   await expect(page.getByText("Agent output #1")).toBeVisible();
   await expect(
     page.getByText("Live runner output from the mocked SSE stream.", {
       exact: true,
     }),
   ).toBeVisible();
+  await page.getByLabel("Continue chat").fill("Please continue");
+  await page.getByRole("button", { name: "Send" }).click();
   await page.getByRole("button", { name: "Approve" }).click();
   await expect(page.getByText("final-report.md")).toBeVisible();
 
@@ -389,6 +391,13 @@ async function mockRuntime(
     }
     if (request.method() === "POST" && path.includes("/permissions/")) {
       await route.fulfill({ json: { accepted: true } });
+      return;
+    }
+    if (request.method() === "POST" && path.endsWith("/input")) {
+      await route.fulfill({
+        status: 202,
+        json: { accepted: true, run_id: path.split("/")[1] },
+      });
       return;
     }
     if (request.method() === "POST" && path === "ops/backups") {

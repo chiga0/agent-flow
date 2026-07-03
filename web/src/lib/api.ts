@@ -25,6 +25,11 @@ export interface RunState {
   spec: RunSpec;
 }
 
+export interface RunInputResponse {
+  accepted: boolean;
+  run_id: string;
+}
+
 export interface RuntimeEvent {
   id: string;
   run_id: string;
@@ -343,6 +348,11 @@ export const runtimeApi = {
     api<Record<string, unknown>>(`runs/${runId}/audit.json`),
   createRun: (payload: Partial<RunSpec>) =>
     api<RunState>("runs", { method: "POST", body: JSON.stringify(payload) }),
+  submitRunInput: (runId: string, prompt: string) =>
+    api<RunInputResponse>(`runs/${runId}/input`, {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+    }),
   cancelRun: (runId: string) =>
     api<{ cancelled: boolean }>(`runs/${runId}/cancel`, {
       method: "POST",

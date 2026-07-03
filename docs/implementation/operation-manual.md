@@ -2,6 +2,8 @@
 
 > 适用范围：当前单租户 beta 版 AgentFlow Runtime。它适合单控制面、1 台主 VPS、1-2 个本地或远程 worker、fake/qwen run、轻量 mission 和人工审计闭环。
 
+如果 2C2G VPS 经常 CPU/内存打满，优先采用“本地电脑或 NAS 作为主控，VPS 作为 worker/公网入口”的分离部署。完整步骤见：[本地电脑或 NAS 作为 AgentFlow 主控的部署教程](local-nas-control-plane-deployment.md)。
+
 ## 1. 访问入口
 
 ### Web 管理台
@@ -119,7 +121,7 @@ RUN_MANAGER_LOGIN_PASSWORD="$(
 
 你可以查看：
 
-- Runner Chat：实时事件、模型输出、工具事件摘要、warning、error。
+- Agent Chat：实时事件、模型流式输出、工具事件摘要、warning、error，并可继续追加输入。
 - Event Stream：完整 canonical event。
 - Artifacts：下载 `events.jsonl`、`raw_events.jsonl`、`diagnostics.json`、`final_*.json`、executor 日志等。
 - Audit Bundle：下载完整审计包。
@@ -127,10 +129,12 @@ RUN_MANAGER_LOGIN_PASSWORD="$(
 
 如果你觉得“卡住了”，优先看：
 
-1. Runner Chat 是否停在 permission。
+1. Agent Chat 是否仍有实时输出，或者是否停在 permission。
 2. Event Stream 最后一条 event 是什么。
 3. Artifacts 里是否有 `diagnostics.json`、`executor.stderr.log`。
 4. Executor 页面里对应 lease 是否 failed/orphaned/running。
+
+如果需要继续给当前 run 补充上下文，直接在 Agent Chat 底部输入并发送。运行已完成、失败或取消后，输入框会禁用；这时应创建新 run 或通过 mission 重新编排任务。
 
 ### Missions
 

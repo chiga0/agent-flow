@@ -464,6 +464,7 @@ describe("AgentFlow console", () => {
     );
     expect(await screen.findByText("run_created")).toBeInTheDocument();
     expect(await screen.findByText("Run Detail")).toBeInTheDocument();
+    expect(await screen.findByText("Agent Chat")).toBeInTheDocument();
   });
 
   it("resolves a run permission and exposes artifact downloads", async () => {
@@ -489,7 +490,7 @@ describe("AgentFlow console", () => {
     await switchToEnglish(user);
 
     expect(await screen.findByText("Permission Requests")).toBeInTheDocument();
-    expect(await screen.findByText("Live Runner Chat")).toBeInTheDocument();
+    expect(await screen.findByText("Agent Chat")).toBeInTheDocument();
     expect(
       screen.getByText("Inspecting live runner state."),
     ).toBeInTheDocument();
@@ -501,6 +502,17 @@ describe("AgentFlow console", () => {
     await user.click(screen.getByRole("button", { name: "Download Report" }));
     expect(click).toHaveBeenCalled();
     expect(screen.getByText("final-report.md")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Continue chat"), "Please continue");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/runs/run_1/input",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining("Please continue"),
+        }),
+      ),
+    );
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     await user.click(screen.getByRole("button", { name: "Approve" }));
 
@@ -1153,6 +1165,9 @@ async function fetchMock(input: RequestInfo | URL, init?: RequestInit) {
       requeued_run_ids: ["run_1"],
       control: {},
     });
+  }
+  if (init?.method === "POST" && path.endsWith("/input")) {
+    return jsonResponse({ accepted: true, run_id: path.split("/")[1] }, 202);
   }
   if (init?.method === "POST" && path.includes("/permissions/")) {
     return jsonResponse({ accepted: true });
