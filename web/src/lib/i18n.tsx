@@ -417,6 +417,13 @@ const en: Record<keyof typeof zh, string> = {
   "executors.activeDetail": "starting/running",
   "executors.container": "Container",
   "executors.failedDetail": "failed/orphaned",
+  "executors.helpExecutor":
+    "An executor is the concrete Agent runtime a worker starts or reuses for one run, such as qwen serve, a per-run qwen process, or a container.",
+  "executors.helpRegistry":
+    "The registry is the control-plane ledger for executor leases, PIDs, ports, workspaces, and errors. It supports recovery, audit, and cleanup.",
+  "executors.helpUnit":
+    "An execution unit/worker claims work; an executor is the runtime instance it creates for a specific run.",
+  "executors.howItWorks": "Concepts",
   "executors.leases": "Executor Leases",
   "executors.noLeases": "No executor leases",
   "executors.registry": "Registry",
@@ -617,11 +624,24 @@ const en: Record<keyof typeof zh, string> = {
   "units.activeDetail": "eligible for claims",
   "units.cpUs": "CPUs",
   "units.deploymentCommand": "Deployment Command",
+  "units.deployLocalSource": "Local source checkout",
+  "units.deployLocalSourceDetail":
+    "Run this from the repository directory. It is best for developers or CI and installs the remote worker over SSH.",
+  "units.deployNoSource": "No local source required",
+  "units.deployNoSourceDetail":
+    "Downloads the deploy script from GitHub, then installs the remote worker over SSH. Use this for a fresh machine.",
   "units.drain": "Drain",
   "units.draining": "Draining",
   "units.drainingDetail": "no new runs",
   "units.executionUnits": "Execution Units",
   "units.heartbeat": "heartbeat",
+  "units.helpRegister":
+    "Registration creates a workers:* token and a deploy command. Copy it, replace worker IP and key path, then run it to install the worker.",
+  "units.helpToken":
+    "The one-time token is shown only at creation. The worker uses it against /cloud-agents-worker/; revoke it from Access if leaked.",
+  "units.helpWorker":
+    "A worker is a background process on a local host, VPS, or NAS. It heartbeats, claims queued runs, executes adapters, and uploads events and artifacts.",
+  "units.howItWorks": "How Units Work",
   "units.leaseTtl": "lease ttl",
   "units.localRemote": "local and remote",
   "units.capacityFullWarning":
