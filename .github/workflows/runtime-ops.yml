@@ -1,0 +1,117 @@
+name: Runtime Ops
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Runtime operation to execute on the VPS"
+        required: true
+        default: "retry_worker"
+        type: choice
+        options:
+          - queue_status
+          - retry_worker
+          - restart_runtime
+          - restart_nginx
+      worker_id:
+        description: "Worker id used by retry_worker"
+        required: false
+        default: "cloud-agents-runtime"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-ops
+  cancel-in-progress: false
+
+jobs:
+  runtime-ops:
+    runs-on: ubuntu-latest
+    environment: runtime-production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write SSH key
+        env:
+          RUNTIME_SSH_KEY: ${{ secrets.RUNTIME_SSH_KEY }}
+          RUNTIME_SSH_TARGET: ${{ secrets.RUNTIME_SSH_TARGET }}
+        run: |
+          set -euo pipefail
+          test -n "$RUNTIME_SSH_TARGET" || { echo "missing RUNTIME_SSH_TARGET"; exit 1; }
+          test -n "$RUNTIME_SSH_KEY" || { echo "missing RUNTIME_SSH_KEY"; exit 1; }
+          install -d -m 700 "$RUNNER_TEMP/runtime-ops"
+          printf '%s\n' "$RUNTIME_SSH_KEY" > "$RUNNER_TEMP/runtime-ops/ssh_key"
+          chmod 600 "$RUNNER_TEMP/runtime-ops/ssh_key"
+
+      - name: Run runtime operation
+        env:
+          RUNTIME_SSH_TARGET: ${{ secrets.RUNTIME_SSH_TARGET }}
+          RUNTIME_OP_ACTION: ${{ inputs.action }}
+          RUNTIME_OP_WORKER_ID: ${{ inputs.worker_id }}
+        run: |
+          set -euo pipefail
+          ssh -i "$RUNNER_TEMP/runtime-ops/ssh_key" \
+            -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=30 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            "$RUNTIME_SSH_TARGET" \
+            "RUNTIME_OP_ACTION='$RUNTIME_OP_ACTION' RUNTIME_OP_WORKER_ID='$RUNTIME_OP_WORKER_ID' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          RUN_MANAGER_TOKEN="$(
+            awk -F= '$1 == "RUN_MANAGER_TOKEN" {print $2}' /etc/cloud-agents-runtime.env
+          )"
+          API_BASE="http://127.0.0.1:8765"
+
+          api() {
+            local method="$1"
+            local path="$2"
+            local body="${3:-{}}"
+            curl -fsS \
+              -X "$method" \
+              -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
+              -H "content-type: application/json" \
+              --data "$body" \
+              "$API_BASE$path"
+          }
+
+          case "$RUNTIME_OP_ACTION" in
+            queue_status)
+              curl -fsS \
+                -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
+                "$API_BASE/queue"
+              ;;
+            retry_worker)
+              api \
+                POST \
+                "/workers/$RUNTIME_OP_WORKER_ID/retry" \
+                '{"reason":"manual runtime ops retry"}'
+              echo
+              curl -fsS \
+                -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
+                "$API_BASE/queue"
+              ;;
+            restart_runtime)
+              systemctl restart cloud-agents-runtime
+              sleep 3
+              curl -fsS \
+                -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
+                "$API_BASE/health"
+              ;;
+            restart_nginx)
+              nginx -t
+              systemctl restart nginx
+              sleep 2
+              curl -fsS http://127.0.0.1/agentflow/ >/dev/null
+              echo '{"nginx":"ok"}'
+              ;;
+            *)
+              echo "unknown runtime operation: $RUNTIME_OP_ACTION" >&2
+              exit 2
+              ;;
+          esac
+          REMOTE
