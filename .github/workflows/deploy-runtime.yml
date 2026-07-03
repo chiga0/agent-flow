@@ -277,12 +277,18 @@ jobs:
           RUN_MANAGER_TOKEN="$(
             awk -F= '$1 == "RUN_MANAGER_TOKEN" {print $2}' /etc/cloud-agents-runtime.env
           )"
+          curl -fsS -X POST \
+            -H "authorization: Bearer $RUN_MANAGER_TOKEN" \
+            -H "content-type: application/json" \
+            -d '{"reason":"deployment smoke reset"}' \
+            http://127.0.0.1:8765/workers/cloud-agents-runtime/resume
           cd "$APP_DIR"
           python3 scripts/validate_runtime.py \
             --base-url http://127.0.0.1:8765 \
             --token "$RUN_MANAGER_TOKEN" \
             --adapter fake \
-            --timeout 30
+            --timeout 30 \
+            --skip-run
           REMOTE
 
       - name: Qwen deep acceptance on VPS

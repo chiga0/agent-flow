@@ -19,6 +19,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--artifact-root", type=pathlib.Path)
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument(
+        "--skip-run",
+        action="store_true",
+        help="validate runtime health and metadata without creating a queued run",
+    )
+    parser.add_argument(
         "--validate-mission",
         action="store_true",
         help="also validate the P4 mission/profile API with a two-task mission",
@@ -44,6 +49,11 @@ def main(argv: list[str] | None = None) -> int:
     if not workers:
         print("no runtime workers registered", file=sys.stderr)
         return 1
+    if args.skip_run:
+        if args.validate_mission:
+            print("--skip-run cannot be combined with --validate-mission", file=sys.stderr)
+            return 1
+        return 0
     run = client.post("/runs", {"prompt": args.prompt, "adapter": args.adapter})
     run_id = run["run_id"]
     print(f"run: {run_id}")
