@@ -129,11 +129,15 @@ class MonitorHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.path == "/agentflow/auth/login":
             payload = json.loads(self.read_body().decode("utf-8"))
-            if payload == {"username": "cloudagents", "password": "secret"}:
+            if payload == {"email": "cloudagents@local.test", "password": "secret"}:
                 self.send_json(
                     {
                         "authenticated": True,
-                        "principal": {"id": "cloudagents", "roles": ["owner"]},
+                        "principal": {
+                            "id": "cloudagents@local.test",
+                            "email": "cloudagents@local.test",
+                            "roles": ["owner"],
+                        },
                     },
                     headers={"Set-Cookie": f"{self.session_cookie}; Path=/agentflow"},
                 )

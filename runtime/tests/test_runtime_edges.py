@@ -23,7 +23,13 @@ from runtime.cloud_agents_runtime.adapters.qwen import (
     parse_int,
     parse_json_or_text,
 )
-from runtime.cloud_agents_runtime.auth import AuthConfig, is_authorized
+from runtime.cloud_agents_runtime.auth import (
+    AuthConfig,
+    hash_password,
+    is_authorized,
+    normalize_email,
+    verify_password,
+)
 from runtime.cloud_agents_runtime.events import RuntimeEvent
 from runtime.cloud_agents_runtime.executors import (
     ExecutorConfig,
@@ -52,11 +58,14 @@ from runtime.cloud_agents_runtime.interop import (
 from runtime.cloud_agents_runtime.manager import RunManager
 from runtime.cloud_agents_runtime.missions import build_task_definitions, run_status_to_task_status
 from runtime.cloud_agents_runtime.models import (
+    AuthSession,
+    AuthUser,
     ExecutorLease,
     MissionSpec,
     RunSpec,
     RunState,
     clean_identifier,
+    hash_token,
 )
 from runtime.cloud_agents_runtime.ops import (
     env_nonnegative_int,
@@ -173,13 +182,25 @@ class RuntimeEdgeTest(unittest.TestCase):
             token="x",
             login_user="operator",
             login_password="secret",
-            session_secret="session-secret",
         )
         self.assertTrue(auth.login_matches("operator", "secret"))
+        self.assertTrue(auth.login_matches("cloudagents@local.test", "secret"))
         self.assertFalse(auth.login_matches("operator", "wrong"))
-        cookie = auth.issue_session_cookie("operator")
-        self.assertEqual(auth.session_identity(cookie)["principal_id"], "operator")
-        self.assertTrue(auth.session_status(cookie)["authenticated"])
+        password_hash = hash_password("secret")
+        self.assertTrue(verify_password("secret", password_hash))
+        self.assertFalse(verify_password("wrong", password_hash))
+        cookie = auth.issue_session_cookie("cas_test")
+        self.assertEqual(auth.session_token(cookie), "cas_test")
+        self.assertTrue(
+            auth.session_status(
+                {
+                    "principal_id": "cloudagents@local.test",
+                    "email": "cloudagents@local.test",
+                    "display_name": "Operator",
+                    "roles": ["owner"],
+                }
+            )["authenticated"]
+        )
         self.assertFalse(auth.session_status(None)["authenticated"])
         self.assertEqual(parse_last_event_id(None), 0)
         self.assertEqual(parse_last_event_id("bad"), 0)
@@ -189,6 +210,94 @@ class RuntimeEdgeTest(unittest.TestCase):
         self.assertIsNone(parse_optional_int(""))
         self.assertIsNone(parse_optional_int("bad"))
         self.assertEqual(parse_optional_int("4"), 4)
+
+    def test_email_auth_store_edges(self) -> None:
+        self.assertEqual(normalize_email(" Owner@Example.COM "), "owner@example.com")
+        with self.assertRaises(ValueError):
+            normalize_email("not-an-email")
+        self.assertFalse(verify_password("secret", "bad-hash"))
+        self.assertFalse(verify_password(123, hash_password("secret")))
+
+        auth = AuthConfig(
+            login_user="legacy",
+            login_password="secret",
+            bootstrap_email="owner@example.com",
+            bootstrap_name="Owner",
+        )
+        self.assertEqual(auth.session_secret_value, None)
+        self.assertEqual(auth.bootstrap_display_name, "Owner")
+        self.assertEqual(auth.resolve_login_email("legacy"), "owner@example.com")
+        self.assertIsNone(auth.resolve_login_email(""))
+        secure_cookie = auth.issue_session_cookie(
+            "cas_secure",
+            cookie_path="bad",
+            secure=True,
+        )
+        self.assertIn("Path=/", secure_cookie)
+        self.assertIn("Secure", secure_cookie)
+        self.assertIsNone(auth.session_token("not a cookie; bad"))
+        self.assertIsNone(auth.session_token(auth.clear_session_cookie()))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = RunStore(Path(tmp))
+            password_hash = hash_password("secret")
+            user = store.ensure_auth_user(
+                email="OWNER@example.com",
+                display_name="Owner",
+                password_hash=password_hash,
+                roles=None,
+                email_verified=False,
+            )
+            self.assertEqual(user.email, "owner@example.com")
+            self.assertIsNone(user.email_verified_at)
+            self.assertIsNone(store.get_auth_user("bad"))
+            updated = store.ensure_auth_user(
+                email="owner@example.com",
+                display_name="Owner 2",
+                password_hash=hash_password("rotated"),
+                roles=["operator"],
+                email_verified=True,
+                rotate_password=False,
+            )
+            self.assertEqual(updated.display_name, "Owner 2")
+            self.assertEqual(updated.roles, ["operator"])
+            self.assertTrue(verify_password("secret", updated.password_hash))
+            session, token = store.create_auth_session(
+                user=updated,
+                ttl_seconds=60,
+                user_agent="tests",
+                ip_address="127.0.0.1",
+            )
+            self.assertNotIn("session_hash", session.to_dict())
+            identity = store.auth_session_identity(token)
+            self.assertEqual(identity["principal_id"], "owner@example.com")
+            self.assertEqual(identity["roles"], ["operator"])
+            self.assertIsNone(store.auth_session_identity("missing"))
+            self.assertTrue(store.revoke_auth_session(token))
+            self.assertFalse(store.revoke_auth_session(token))
+            self.assertIsNone(store.auth_session_identity(token))
+
+            expired_user = AuthUser(
+                email="expired@example.com",
+                display_name="Expired",
+                password_hash=hash_password("secret"),
+                roles=["owner"],
+            )
+            store.ensure_auth_user(
+                email=expired_user.email,
+                display_name=expired_user.display_name,
+                password_hash=expired_user.password_hash,
+                roles=expired_user.roles,
+            )
+            expired = AuthSession(
+                session_id="sess_expired",
+                user_email=expired_user.email,
+                session_hash=hash_token("expired-token"),
+                created_at="2020-01-01T00:00:00.000+00:00",
+                expires_at="2020-01-01T00:00:01.000+00:00",
+            )
+            store._persist_auth_session(expired)
+            self.assertIsNone(store.auth_session_identity("expired-token"))
 
     def test_ops_helper_edges(self) -> None:
         self.assertEqual(permission_id_from_data({"permission_id": "direct"}), "direct")

@@ -263,9 +263,11 @@ export interface AuthSession {
   login_required: boolean;
   principal?: {
     id: string;
+    email?: string | null;
     display_name: string;
     roles: string[];
   } | null;
+  auth_mode?: string;
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -285,7 +287,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const runtimeApi = {
   session: () => api<AuthSession>("auth/session"),
-  login: (payload: { username: string; password: string }) =>
+  login: (payload: { email: string; password: string }) =>
     api<AuthSession>("auth/login", {
       method: "POST",
       body: JSON.stringify(payload),

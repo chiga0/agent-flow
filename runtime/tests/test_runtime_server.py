@@ -141,7 +141,7 @@ class RuntimeServerTest(unittest.TestCase):
             token="secret",
             login_user="cloudagents",
             login_password="password",
-            session_secret="session-secret",
+            bootstrap_email="owner@example.com",
         ) as base_url:
             session = request_json(f"{base_url}/auth/session")
             self.assertFalse(session["authenticated"])
@@ -154,17 +154,18 @@ class RuntimeServerTest(unittest.TestCase):
                 request_json(
                     f"{base_url}/auth/login",
                     method="POST",
-                    payload={"username": "cloudagents", "password": "wrong"},
+                    payload={"email": "owner@example.com", "password": "wrong"},
                 )
             self.assertEqual(bad_login.exception.code, HTTPStatus.UNAUTHORIZED)
 
             login_response = request_raw(
                 f"{base_url}/auth/login",
                 method="POST",
-                payload={"username": "cloudagents", "password": "password"},
+                payload={"email": "owner@example.com", "password": "password"},
             )
             cookie = login_response.headers["set-cookie"]
             self.assertIn("HttpOnly", cookie)
+            self.assertNotIn("owner@example.com", cookie)
             capabilities = request_json(
                 f"{base_url}/capabilities",
                 headers={"cookie": cookie},
@@ -174,7 +175,7 @@ class RuntimeServerTest(unittest.TestCase):
                 f"{base_url}/access/policy",
                 headers={"cookie": cookie},
             )
-            self.assertEqual(access["current_principal"]["id"], "cloudagents")
+            self.assertEqual(access["current_principal"]["id"], "owner@example.com")
             access_with_legacy_bearer = request_json(
                 f"{base_url}/access/policy",
                 headers={
@@ -185,8 +186,14 @@ class RuntimeServerTest(unittest.TestCase):
             )
             self.assertEqual(
                 access_with_legacy_bearer["current_principal"]["id"],
-                "cloudagents",
+                "owner@example.com",
             )
+            legacy_login = request_raw(
+                f"{base_url}/auth/login",
+                method="POST",
+                payload={"username": "cloudagents", "password": "password"},
+            )
+            self.assertIn("HttpOnly", legacy_login.headers["set-cookie"])
             redirect = request_no_redirect(
                 f"{base_url}/access",
                 headers={
@@ -202,7 +209,45 @@ class RuntimeServerTest(unittest.TestCase):
                 payload={"name": "console", "scopes": ["runs:read"]},
                 headers={"cookie": cookie},
             )
-            self.assertEqual(created["principal_id"], "cloudagents")
+            self.assertEqual(created["principal_id"], "owner@example.com")
+            user = request_json(
+                f"{base_url}/auth/users",
+                method="POST",
+                payload={
+                    "email": "operator@example.com",
+                    "display_name": "Operator",
+                    "password": "operator-password",
+                    "roles": ["operator"],
+                },
+                headers={"cookie": cookie},
+            )
+            self.assertEqual(user["email"], "operator@example.com")
+            self.assertNotIn("password_hash", user)
+            users = request_json(f"{base_url}/auth/users", headers={"cookie": cookie})
+            self.assertEqual(
+                [item["email"] for item in users["users"]],
+                ["operator@example.com", "owner@example.com"],
+            )
+            with self.assertRaises(urllib.error.HTTPError) as duplicate_user:
+                request_json(
+                    f"{base_url}/auth/users",
+                    method="POST",
+                    payload={
+                        "email": "operator@example.com",
+                        "password": "operator-password",
+                    },
+                    headers={"cookie": cookie},
+                )
+            self.assertEqual(duplicate_user.exception.code, HTTPStatus.BAD_REQUEST)
+            operator_login = request_raw(
+                f"{base_url}/auth/login",
+                method="POST",
+                payload={
+                    "email": "operator@example.com",
+                    "password": "operator-password",
+                },
+            )
+            self.assertIn("HttpOnly", operator_login.headers["set-cookie"])
 
             logout_response = request_raw(
                 f"{base_url}/auth/logout",
@@ -211,6 +256,9 @@ class RuntimeServerTest(unittest.TestCase):
                 headers={"cookie": cookie},
             )
             self.assertIn("Max-Age=0", logout_response.headers["set-cookie"])
+            with self.assertRaises(urllib.error.HTTPError) as logged_out:
+                request_json(f"{base_url}/capabilities", headers={"cookie": cookie})
+            self.assertEqual(logged_out.exception.code, HTTPStatus.UNAUTHORIZED)
 
     def test_remote_worker_http_registry_claims_and_reports_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -785,6 +833,9 @@ class running_runtime:
         worker_capacity: int | None = None,
         login_user: str | None = None,
         login_password: str | None = None,
+        bootstrap_email: str | None = None,
+        bootstrap_password: str | None = None,
+        bootstrap_name: str | None = None,
         session_secret: str | None = None,
     ):
         self.tmp = tempfile.TemporaryDirectory() if artifact_root is None else None
@@ -797,6 +848,9 @@ class running_runtime:
                 token=token,
                 login_user=login_user,
                 login_password=login_password,
+                bootstrap_email=bootstrap_email,
+                bootstrap_password=bootstrap_password,
+                bootstrap_name=bootstrap_name,
                 session_secret=session_secret,
             ),
             qwen_base_url=qwen_url,

@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from . import __version__
-from .auth import AuthConfig, is_authorized
+from .auth import AuthConfig, hash_password, is_authorized, verify_password
 from .executors import ExecutorConfig
 from .interop import (
     a2a_agent_card,
@@ -32,6 +32,18 @@ def make_handler(
     auth_config: AuthConfig | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     auth_config = auth_config or AuthConfig()
+    if auth_config.login_enabled:
+        manager.store.ensure_auth_user(
+            email=auth_config.bootstrap_email_value or "",
+            display_name=auth_config.bootstrap_display_name
+            or auth_config.bootstrap_email_value
+            or "Cloud Agents Owner",
+            password_hash=hash_password(auth_config.bootstrap_password_value or ""),
+            roles=["owner"],
+            email_verified=True,
+            rotate_password=True,
+        )
+    login_failures: dict[str, list[float]] = {}
 
     class RuntimeHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -41,7 +53,7 @@ def make_handler(
         def do_GET(self) -> None:
             path = urlparse(self.path).path
             if path == "/auth/session":
-                self.write_json(auth_config.session_status(self.headers.get("cookie")))
+                self.write_json(auth_config.session_status(self.session_identity()))
                 return
             spa_target = spa_redirect_target(path, self.headers)
             if spa_target:
@@ -125,6 +137,11 @@ def make_handler(
                 return
             if path == "/access/tokens":
                 self.write_json(manager.list_api_tokens())
+                return
+            if path == "/auth/users":
+                self.write_json(
+                    {"users": [user.to_dict() for user in manager.store.list_auth_users()]}
+                )
                 return
             if len(parts) == 3 and parts[0] == "ops" and parts[1] == "backups":
                 try:
@@ -306,6 +323,9 @@ def make_handler(
                 self.handle_login()
                 return
             if path == "/auth/logout":
+                manager.store.revoke_auth_session(
+                    auth_config.session_token(self.headers.get("cookie"))
+                )
                 self.write_json(
                     {"authenticated": False},
                     headers={
@@ -345,6 +365,10 @@ def make_handler(
                         principal=self.principal_id(),
                     )
                     self.write_json(token, status=HTTPStatus.CREATED)
+                    return
+                if len(parts) == 2 and parts[0] == "auth" and parts[1] == "users":
+                    user = self.create_auth_user(payload)
+                    self.write_json(user, status=HTTPStatus.CREATED)
                     return
                 if len(parts) == 2 and parts[0] == "workers" and parts[1] == "registrations":
                     registration = manager.create_worker_registration(payload)
@@ -519,7 +543,7 @@ def make_handler(
 
         def require_auth(self, path: str) -> bool:
             self.current_identity = None
-            session_identity = auth_config.session_identity(self.headers.get("cookie"))
+            session_identity = self.session_identity()
             if session_identity:
                 self.current_identity = session_identity
                 return True
@@ -556,34 +580,76 @@ def make_handler(
                 self.write_error(HTTPStatus.BAD_REQUEST, "invalid login payload")
                 return
             username = payload.get("username")
+            email = payload.get("email") or username
             password = payload.get("password")
             if not auth_config.login_enabled:
                 self.write_json(auth_config.session_status(None))
                 return
-            if not auth_config.login_matches(username, password):
+            login_email = auth_config.resolve_login_email(email)
+            if login_email is None:
+                self.record_login_failure("unknown")
                 self.write_json(
                     {"error": "invalid credentials"},
                     status=HTTPStatus.UNAUTHORIZED,
                 )
                 return
-            principal = str(username)
+            throttle_key = f"{self.client_ip()}:{login_email}"
+            if self.login_limited(throttle_key):
+                self.write_json(
+                    {"error": "too many login attempts"},
+                    status=HTTPStatus.TOO_MANY_REQUESTS,
+                )
+                return
+            user = manager.store.get_auth_user(login_email)
+            if (
+                user is None
+                or user.status != "active"
+                or not verify_password(password, user.password_hash)
+            ):
+                self.record_login_failure(throttle_key)
+                self.write_json(
+                    {"error": "invalid credentials"},
+                    status=HTTPStatus.UNAUTHORIZED,
+                )
+                return
+            login_failures.pop(throttle_key, None)
+            _, session_token = manager.store.create_auth_session(
+                user=user,
+                ttl_seconds=auth_config.session_ttl_seconds,
+                user_agent=self.headers.get("user-agent"),
+                ip_address=self.client_ip(),
+            )
+            identity = manager.store.auth_session_identity(session_token)
             self.write_json(
-                {
-                    "authenticated": True,
-                    "principal": {
-                        "id": principal,
-                        "display_name": principal,
-                        "roles": ["owner"],
-                    },
-                },
+                auth_config.session_status(identity),
                 headers={
                     "set-cookie": auth_config.issue_session_cookie(
-                        principal,
+                        session_token,
                         cookie_path=self.cookie_path(),
                         secure=self.is_secure_request(),
                     )
                 },
             )
+
+        def create_auth_user(self, payload: dict[str, Any]) -> dict[str, Any]:
+            email = payload.get("email")
+            password = payload.get("password")
+            if not isinstance(email, str) or not isinstance(password, str) or not password:
+                raise ValueError("email and password are required")
+            roles = payload.get("roles") or ["operator"]
+            if not isinstance(roles, list) or not all(isinstance(role, str) for role in roles):
+                raise ValueError("roles must be a list of strings")
+            allowed_roles = {"owner", "operator", "auditor"}
+            if any(role not in allowed_roles for role in roles):
+                raise ValueError("roles may only contain owner, operator, or auditor")
+            user = manager.store.create_auth_user(
+                email=email,
+                display_name=str(payload.get("display_name") or email),
+                password_hash=hash_password(password),
+                roles=list(roles),
+                email_verified=bool(payload.get("email_verified")),
+            )
+            return user.to_dict()
 
         def principal_id(self) -> str | None:
             if self.current_identity:
@@ -599,6 +665,39 @@ def make_handler(
 
         def is_secure_request(self) -> bool:
             return self.headers.get("x-forwarded-proto", "").lower() == "https"
+
+        def client_ip(self) -> str:
+            forwarded_for = self.headers.get("x-forwarded-for", "")
+            if forwarded_for:
+                return forwarded_for.split(",", 1)[0].strip()
+            return str(self.client_address[0])
+
+        def session_identity(self) -> dict[str, Any] | None:
+            return manager.store.auth_session_identity(
+                auth_config.session_token(self.headers.get("cookie"))
+            )
+
+        def login_limited(self, key: str) -> bool:
+            now = time.time()
+            window_start = now - 10 * 60
+            attempts = [
+                timestamp
+                for timestamp in login_failures.get(key, [])
+                if timestamp >= window_start
+            ]
+            login_failures[key] = attempts
+            return len(attempts) >= 5
+
+        def record_login_failure(self, key: str) -> None:
+            now = time.time()
+            window_start = now - 10 * 60
+            attempts = [
+                timestamp
+                for timestamp in login_failures.get(key, [])
+                if timestamp >= window_start
+            ]
+            attempts.append(now)
+            login_failures[key] = attempts
 
         def read_json(self) -> dict[str, Any]:
             length = int(self.headers.get("content-length", "0") or "0")
@@ -756,6 +855,8 @@ def required_scope_for(method: str, path: str) -> str | None:
         return None
     if not parts:
         return None
+    if parts[0] == "auth":
+        return "access:read" if method == "GET" else "access:write"
     if parts[0] == "workers":
         return "workers:read" if method == "GET" else "workers:write"
     if parts[0] == "access":
@@ -894,6 +995,21 @@ def main(argv: list[str] | None = None) -> int:
         help="console login password; defaults to RUN_MANAGER_LOGIN_PASSWORD",
     )
     parser.add_argument(
+        "--bootstrap-email",
+        default=os.environ.get("RUN_MANAGER_BOOTSTRAP_EMAIL"),
+        help="bootstrap owner email; defaults to RUN_MANAGER_BOOTSTRAP_EMAIL",
+    )
+    parser.add_argument(
+        "--bootstrap-password",
+        default=os.environ.get("RUN_MANAGER_BOOTSTRAP_PASSWORD"),
+        help="bootstrap owner password; defaults to RUN_MANAGER_BOOTSTRAP_PASSWORD",
+    )
+    parser.add_argument(
+        "--bootstrap-name",
+        default=os.environ.get("RUN_MANAGER_BOOTSTRAP_NAME"),
+        help="bootstrap owner display name; defaults to RUN_MANAGER_BOOTSTRAP_NAME",
+    )
+    parser.add_argument(
         "--session-secret",
         default=os.environ.get("RUN_MANAGER_SESSION_SECRET"),
         help="secret used to sign console session cookies",
@@ -939,6 +1055,9 @@ def main(argv: list[str] | None = None) -> int:
             protect_health=args.protect_health,
             login_user=args.login_user,
             login_password=args.login_password,
+            bootstrap_email=args.bootstrap_email,
+            bootstrap_password=args.bootstrap_password,
+            bootstrap_name=args.bootstrap_name,
             session_secret=args.session_secret,
         ),
         qwen_base_url=args.qwen_url,

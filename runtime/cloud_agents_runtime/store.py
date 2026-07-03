@@ -10,10 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from .events import RuntimeEvent, TERMINAL_RUN_EVENTS, utc_now
+from .auth import new_session_token, normalize_email, session_expiry
 from .models import (
     AgentProfile,
     AccessProject,
     ApiToken,
+    AuthSession,
+    AuthUser,
     MissionEvent,
     MissionSpec,
     MissionState,
@@ -23,6 +26,7 @@ from .models import (
     RunSpec,
     RunState,
     WorkerState,
+    hash_token,
 )
 from .profiles import builtin_profiles, latest_profiles
 
@@ -40,6 +44,7 @@ class RunStore:
         self._profiles: dict[tuple[str, int], AgentProfile] = builtin_profiles()
         self._access_projects: dict[str, AccessProject] = {}
         self._api_tokens: dict[str, ApiToken] = {}
+        self._auth_users: dict[str, AuthUser] = {}
         self._missions: dict[str, MissionState] = {}
         self._mission_tasks: dict[str, list[MissionTask]] = {}
         self._mission_events: dict[str, list[MissionEvent]] = {}
@@ -703,6 +708,172 @@ class RunStore:
                     return token
             return None
 
+    def ensure_auth_user(
+        self,
+        *,
+        email: str,
+        display_name: str,
+        password_hash: str,
+        roles: list[str] | None = None,
+        email_verified: bool = True,
+        rotate_password: bool = True,
+    ) -> AuthUser:
+        with self._lock:
+            normalized_email = normalize_email(email)
+            now = utc_now()
+            existing = self._auth_users.get(normalized_email)
+            if existing:
+                existing.display_name = display_name or existing.display_name
+                existing.roles = roles or existing.roles
+                existing.status = "active"
+                if email_verified and not existing.email_verified_at:
+                    existing.email_verified_at = now
+                if rotate_password:
+                    existing.password_hash = password_hash
+                existing.updated_at = now
+                self._persist_auth_user(existing)
+                return existing
+            user = AuthUser(
+                email=normalized_email,
+                display_name=display_name or normalized_email,
+                password_hash=password_hash,
+                roles=roles or ["owner"],
+                email_verified_at=now if email_verified else None,
+                created_at=now,
+                updated_at=now,
+            )
+            self._auth_users[user.email] = user
+            self._persist_auth_user(user)
+            return user
+
+    def get_auth_user(self, email: str) -> AuthUser | None:
+        with self._lock:
+            try:
+                normalized_email = normalize_email(email)
+            except ValueError:
+                return None
+            return self._auth_users.get(normalized_email)
+
+    def list_auth_users(self) -> list[AuthUser]:
+        with self._lock:
+            return sorted(
+                self._auth_users.values(),
+                key=lambda user: (user.status != "active", user.email),
+            )
+
+    def create_auth_user(
+        self,
+        *,
+        email: str,
+        display_name: str,
+        password_hash: str,
+        roles: list[str],
+        email_verified: bool = False,
+    ) -> AuthUser:
+        with self._lock:
+            normalized_email = normalize_email(email)
+            if normalized_email in self._auth_users:
+                raise ValueError(f"user already exists: {normalized_email}")
+            now = utc_now()
+            user = AuthUser(
+                email=normalized_email,
+                display_name=display_name or normalized_email,
+                password_hash=password_hash,
+                roles=roles,
+                email_verified_at=now if email_verified else None,
+                created_at=now,
+                updated_at=now,
+            )
+            self._auth_users[user.email] = user
+            self._persist_auth_user(user)
+            return user
+
+    def create_auth_session(
+        self,
+        *,
+        user: AuthUser,
+        ttl_seconds: int,
+        user_agent: str | None = None,
+        ip_address: str | None = None,
+    ) -> tuple[AuthSession, str]:
+        with self._lock:
+            token = new_session_token()
+            now = utc_now()
+            session = AuthSession(
+                session_id=f"sess_{token[4:20]}",
+                user_email=user.email,
+                session_hash=hash_token(token),
+                created_at=now,
+                expires_at=session_expiry(ttl_seconds),
+                last_seen_at=now,
+                user_agent=user_agent,
+                ip_address=ip_address,
+            )
+            user.last_login_at = now
+            user.updated_at = now
+            self._persist_auth_user(user)
+            self._persist_auth_session(session)
+            return session, token
+
+    def auth_session_identity(self, session_token: str | None) -> dict[str, Any] | None:
+        if not session_token:
+            return None
+        token_hash = hash_token(session_token)
+        with self._lock:
+            row = self._db.execute(
+                """
+                select
+                  s.session_id,
+                  s.user_email,
+                  s.expires_at,
+                  s.revoked_at,
+                  u.display_name,
+                  u.roles_json,
+                  u.status,
+                  u.email_verified_at
+                from auth_sessions s
+                join auth_users u on u.email = s.user_email
+                where s.session_hash = ?
+                """,
+                (token_hash,),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["revoked_at"] or row["expires_at"] <= utc_now() or row["status"] != "active":
+                return None
+            now = utc_now()
+            self._db.execute(
+                "update auth_sessions set last_seen_at = ? where session_id = ?",
+                (now, row["session_id"]),
+            )
+            self._db.commit()
+            roles = json.loads(row["roles_json"])
+            return {
+                "principal_id": row["user_email"],
+                "email": row["user_email"],
+                "display_name": row["display_name"],
+                "roles": roles,
+                "scopes": ["*:*"] if "owner" in roles else [],
+                "auth_type": "session",
+                "session_id": row["session_id"],
+                "email_verified": bool(row["email_verified_at"]),
+            }
+
+    def revoke_auth_session(self, session_token: str | None) -> bool:
+        if not session_token:
+            return False
+        with self._lock:
+            cursor = self._db.execute(
+                """
+                update auth_sessions
+                set revoked_at = ?
+                where session_hash = ? and revoked_at is null
+                """,
+                (utc_now(), hash_token(session_token)),
+            )
+            self._db.commit()
+            return cursor.rowcount > 0
+
     def update_status(self, run_id: str, status: str) -> None:
         with self._lock:
             run = self._require_run(run_id)
@@ -1043,6 +1214,29 @@ class RunStore:
               last_used_at text,
               metadata_json text not null
             );
+            create table if not exists auth_users (
+              email text primary key,
+              display_name text not null,
+              password_hash text not null,
+              roles_json text not null,
+              status text not null,
+              email_verified_at text,
+              created_at text not null,
+              updated_at text not null,
+              last_login_at text,
+              metadata_json text not null
+            );
+            create table if not exists auth_sessions (
+              session_id text primary key,
+              user_email text not null,
+              session_hash text not null unique,
+              created_at text not null,
+              expires_at text not null,
+              revoked_at text,
+              last_seen_at text,
+              user_agent text,
+              ip_address text
+            );
             create table if not exists agent_profiles (
               profile_id text not null,
               version integer not null,
@@ -1211,6 +1405,19 @@ class RunStore:
                     updated_at=row["updated_at"],
                     revoked_at=row["revoked_at"],
                     last_used_at=row["last_used_at"],
+                    metadata=json.loads(row["metadata_json"]),
+                )
+            for row in self._db.execute("select * from auth_users order by email"):
+                self._auth_users[row["email"]] = AuthUser(
+                    email=row["email"],
+                    display_name=row["display_name"],
+                    password_hash=row["password_hash"],
+                    roles=json.loads(row["roles_json"]),
+                    status=row["status"],
+                    email_verified_at=row["email_verified_at"],
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                    last_login_at=row["last_login_at"],
                     metadata=json.loads(row["metadata_json"]),
                 )
             for row in self._db.execute("select * from missions order by created_at"):
@@ -1462,6 +1669,66 @@ class RunStore:
                 token.revoked_at,
                 token.last_used_at,
                 json.dumps(token.metadata, ensure_ascii=False, sort_keys=True),
+            ),
+        )
+        self._db.commit()
+
+    def _persist_auth_user(self, user: AuthUser) -> None:
+        self._db.execute(
+            """
+            insert into auth_users(
+              email, display_name, password_hash, roles_json, status,
+              email_verified_at, created_at, updated_at, last_login_at, metadata_json
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(email) do update set
+              display_name=excluded.display_name,
+              password_hash=excluded.password_hash,
+              roles_json=excluded.roles_json,
+              status=excluded.status,
+              email_verified_at=excluded.email_verified_at,
+              updated_at=excluded.updated_at,
+              last_login_at=excluded.last_login_at,
+              metadata_json=excluded.metadata_json
+            """,
+            (
+                user.email,
+                user.display_name,
+                user.password_hash,
+                json.dumps(user.roles, ensure_ascii=False, sort_keys=True),
+                user.status,
+                user.email_verified_at,
+                user.created_at,
+                user.updated_at,
+                user.last_login_at,
+                json.dumps(user.metadata, ensure_ascii=False, sort_keys=True),
+            ),
+        )
+        self._db.commit()
+
+    def _persist_auth_session(self, session: AuthSession) -> None:
+        self._db.execute(
+            """
+            insert into auth_sessions(
+              session_id, user_email, session_hash, created_at, expires_at,
+              revoked_at, last_seen_at, user_agent, ip_address
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(session_id) do update set
+              expires_at=excluded.expires_at,
+              revoked_at=excluded.revoked_at,
+              last_seen_at=excluded.last_seen_at,
+              user_agent=excluded.user_agent,
+              ip_address=excluded.ip_address
+            """,
+            (
+                session.session_id,
+                session.user_email,
+                session.session_hash,
+                session.created_at,
+                session.expires_at,
+                session.revoked_at,
+                session.last_seen_at,
+                session.user_agent,
+                session.ip_address,
             ),
         )
         self._db.commit()

@@ -77,7 +77,7 @@ describe("api helpers", () => {
     );
 
     await runtimeApi.session();
-    await runtimeApi.login({ username: "cloudagents", password: "secret" });
+    await runtimeApi.login({ email: "owner@example.com", password: "secret" });
     await runtimeApi.logout();
     await runtimeApi.workerControl("worker 1");
     await runtimeApi.drainWorker("worker 1");

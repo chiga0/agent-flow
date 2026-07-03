@@ -41,6 +41,7 @@ jobs:
           RUNTIME_PUBLIC_HOST: ${{ secrets.RUNTIME_PUBLIC_HOST }}
           RUNTIME_PUBLIC_DOMAIN: ${{ secrets.RUNTIME_PUBLIC_DOMAIN }}
           RUNTIME_PUBLIC_URL: ${{ secrets.RUNTIME_PUBLIC_URL }}
+          RUNTIME_AUTH_PASSWORD: ${{ secrets.RUNTIME_AUTH_PASSWORD }}
           RUNTIME_BASIC_AUTH_PASSWORD: ${{ secrets.RUNTIME_BASIC_AUTH_PASSWORD }}
         run: |
           set -euo pipefail
@@ -50,8 +51,8 @@ jobs:
             echo "missing RUNTIME_PUBLIC_HOST, RUNTIME_PUBLIC_DOMAIN, or RUNTIME_PUBLIC_URL"
             exit 1
           fi
-          test -n "$RUNTIME_BASIC_AUTH_PASSWORD" || {
-            echo "missing RUNTIME_BASIC_AUTH_PASSWORD";
+          test -n "${RUNTIME_AUTH_PASSWORD:-$RUNTIME_BASIC_AUTH_PASSWORD}" || {
+            echo "missing RUNTIME_AUTH_PASSWORD or RUNTIME_BASIC_AUTH_PASSWORD";
             exit 1;
           }
 
@@ -60,6 +61,8 @@ jobs:
           RUNTIME_PUBLIC_HOST: ${{ secrets.RUNTIME_PUBLIC_HOST }}
           RUNTIME_PUBLIC_DOMAIN: ${{ secrets.RUNTIME_PUBLIC_DOMAIN }}
           RUNTIME_PUBLIC_URL: ${{ secrets.RUNTIME_PUBLIC_URL }}
+          RUNTIME_AUTH_EMAIL: ${{ secrets.RUNTIME_AUTH_EMAIL }}
+          RUNTIME_AUTH_PASSWORD: ${{ secrets.RUNTIME_AUTH_PASSWORD }}
           RUNTIME_BASIC_AUTH_USER: ${{ secrets.RUNTIME_BASIC_AUTH_USER }}
           RUNTIME_BASIC_AUTH_PASSWORD: ${{ secrets.RUNTIME_BASIC_AUTH_PASSWORD }}
           DEEP_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.deep_run || false }}

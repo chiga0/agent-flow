@@ -207,7 +207,7 @@ function AuthGate() {
 function LoginPage() {
   const { t } = useI18n();
   const client = useQueryClient();
-  const [username, setUsername] = useState("cloudagents");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const login = useMutation({
     mutationFn: runtimeApi.login,
@@ -218,7 +218,7 @@ function LoginPage() {
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    login.mutate({ username, password });
+    login.mutate({ email, password });
   };
 
   return (
@@ -272,11 +272,13 @@ function LoginPage() {
           </CardHeader>
           <CardBody>
             <form className="grid gap-4" onSubmit={submit}>
-              <Field label={t("login.username")}>
+              <Field label={t("login.email")}>
                 <Input
-                  autoComplete="username"
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
+                  autoComplete="email"
+                  inputMode="email"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
                 />
               </Field>
               <Field label={t("login.password")}>
@@ -294,7 +296,7 @@ function LoginPage() {
               ) : null}
               <Button
                 className="h-11 w-full"
-                disabled={login.isPending || !username || !password}
+                disabled={login.isPending || !email || !password}
                 type="submit"
                 variant="primary"
               >

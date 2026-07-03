@@ -417,11 +417,10 @@ describe("AgentFlow console", () => {
     expect(
       await screen.findByRole("heading", { name: "登录" }),
     ).toBeInTheDocument();
-    await user.clear(screen.getByLabelText("用户名"));
-    await user.type(screen.getByLabelText("用户名"), "cloudagents");
+    await user.type(screen.getByLabelText("邮箱"), "owner@example.com");
     await user.type(screen.getByLabelText("密码"), "wrong");
     await user.click(screen.getByRole("button", { name: "登录" }));
-    expect(await screen.findByText("用户名或密码无效。")).toBeInTheDocument();
+    expect(await screen.findByText("邮箱或密码无效。")).toBeInTheDocument();
     await user.clear(screen.getByLabelText("密码"));
     await user.type(screen.getByLabelText("密码"), "secret");
     await user.click(screen.getByRole("button", { name: "登录" }));
@@ -1023,21 +1022,30 @@ async function fetchMock(input: RequestInfo | URL, init?: RequestInit) {
       authenticated: authSessionAuthenticated,
       login_required: true,
       principal: authSessionAuthenticated
-        ? { id: "cloudagents", display_name: "cloudagents", roles: ["owner"] }
+        ? {
+            id: "owner@example.com",
+            email: "owner@example.com",
+            display_name: "Owner",
+            roles: ["owner"],
+          }
         : null,
     });
   }
   if (init?.method === "POST" && path === "auth/login") {
-    const body = JSON.parse(String(init.body ?? "{}")) as { password?: string };
-    if (body.password !== "secret") {
+    const body = JSON.parse(String(init.body ?? "{}")) as {
+      email?: string;
+      password?: string;
+    };
+    if (body.email !== "owner@example.com" || body.password !== "secret") {
       return jsonResponse({ error: "invalid credentials" }, 401);
     }
     authSessionAuthenticated = true;
     return jsonResponse({
       authenticated: true,
       principal: {
-        id: "cloudagents",
-        display_name: "cloudagents",
+        id: "owner@example.com",
+        email: "owner@example.com",
+        display_name: "Owner",
         roles: ["owner"],
       },
     });

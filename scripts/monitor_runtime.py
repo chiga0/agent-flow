@@ -23,6 +23,8 @@ TERMINAL_RUN_EVENTS = {"run.completed", "run.failed", "run.cancelled"}
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Monitor public AgentFlow Runtime")
     parser.add_argument("--base-url", default=default_base_url())
+    parser.add_argument("--auth-email", default=os.environ.get("RUNTIME_AUTH_EMAIL"))
+    parser.add_argument("--auth-password", default=os.environ.get("RUNTIME_AUTH_PASSWORD"))
     parser.add_argument("--basic-user", default=os.environ.get("RUNTIME_BASIC_AUTH_USER"))
     parser.add_argument("--basic-password", default=os.environ.get("RUNTIME_BASIC_AUTH_PASSWORD"))
     parser.add_argument("--timeout", type=float, default=10.0)
@@ -33,14 +35,22 @@ def main(argv: list[str] | None = None) -> int:
     if not args.base_url:
         print("missing --base-url or RUNTIME_PUBLIC_URL/RUNTIME_PUBLIC_HOST", file=sys.stderr)
         return 2
-    if not args.basic_password:
-        print("missing --basic-password or RUNTIME_BASIC_AUTH_PASSWORD", file=sys.stderr)
+    auth_password = args.auth_password or args.basic_password
+    if not auth_password:
+        print(
+            "missing --auth-password/RUNTIME_AUTH_PASSWORD "
+            "or --basic-password/RUNTIME_BASIC_AUTH_PASSWORD",
+            file=sys.stderr,
+        )
         return 2
+    auth_email = args.auth_email or auth_email_from_legacy_user(
+        args.basic_user or "cloudagents"
+    )
 
     monitor = PublicRuntimeMonitor(
         normalize_base_url(args.base_url),
-        args.basic_user or "cloudagents",
-        args.basic_password,
+        auth_email,
+        auth_password,
         args.timeout,
     )
     results = monitor.run(args.deep_run)
@@ -77,6 +87,12 @@ def normalize_base_url(value: str) -> str:
     return urllib.parse.urlunparse(normalized).rstrip("/")
 
 
+def auth_email_from_legacy_user(value: str) -> str:
+    if "@" in value:
+        return value
+    return "cloudagents@local.test"
+
+
 @dataclass(frozen=True)
 class CheckResult:
     name: str
@@ -101,13 +117,13 @@ class PublicRuntimeMonitor:
     def __init__(
         self,
         base_url: str,
-        basic_user: str,
-        basic_password: str,
+        auth_email: str,
+        auth_password: str,
         timeout: float,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.basic_user = basic_user
-        self.basic_password = basic_password
+        self.auth_email = auth_email_from_legacy_user(auth_email)
+        self.auth_password = auth_password
         self.timeout = timeout
         self.cookie_jar = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(
@@ -151,8 +167,8 @@ class PublicRuntimeMonitor:
             "/auth/login",
             auth=True,
             payload={
-                "username": self.basic_user,
-                "password": self.basic_password,
+                "email": self.auth_email,
+                "password": self.auth_password,
             },
         )
         if login.status != 200:

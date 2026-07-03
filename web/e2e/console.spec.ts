@@ -10,7 +10,7 @@ test("signs in from the responsive login page", async ({ page, isMobile }) => {
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "登录" })).toBeVisible();
-  await page.getByLabel("用户名").fill("cloudagents");
+  await page.getByLabel("邮箱").fill("owner@example.com");
   await page.getByLabel("密码").fill("secret");
   await page.getByRole("button", { name: "登录" }).click();
   await expect(page.getByRole("heading", { name: "概览" })).toBeVisible();
@@ -179,7 +179,12 @@ async function mockRuntime(
       authenticated,
       login_enabled: true,
       principal: authenticated
-        ? { id: "cloudagents", display_name: "cloudagents", roles: ["owner"] }
+        ? {
+            id: "owner@example.com",
+            email: "owner@example.com",
+            display_name: "Owner",
+            roles: ["owner"],
+          }
         : null,
     },
     health: { ok: true, version: "0.1-e2e" },
@@ -317,13 +322,19 @@ async function mockRuntime(
     const url = new URL(request.url());
     const path = url.pathname.replace(/^\//, "");
     if (request.method() === "POST" && path === "auth/login") {
+      const body = request.postDataJSON() as { email?: string; password?: string };
+      if (body.email !== "owner@example.com" || body.password !== "secret") {
+        await route.fulfill({ json: { error: "invalid credentials" }, status: 401 });
+        return;
+      }
       authenticated = true;
       fixtures["auth/session"] = {
         authenticated: true,
         login_enabled: true,
         principal: {
-          id: "cloudagents",
-          display_name: "cloudagents",
+          id: "owner@example.com",
+          email: "owner@example.com",
+          display_name: "Owner",
           roles: ["owner"],
         },
       };

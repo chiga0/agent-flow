@@ -3,14 +3,19 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import json
-import time
+import os
+import re
+import secrets
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from http import cookies
 from typing import Any
 
 
 SESSION_COOKIE = "cloud_agents_session"
+PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
+PASSWORD_HASH_ITERATIONS = 210_000
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 @dataclass(frozen=True)
@@ -19,6 +24,9 @@ class AuthConfig:
     protect_health: bool = False
     login_user: str | None = None
     login_password: str | None = None
+    bootstrap_email: str | None = None
+    bootstrap_password: str | None = None
+    bootstrap_name: str | None = None
     session_secret: str | None = None
     session_ttl_seconds: int = 12 * 60 * 60
 
@@ -28,11 +36,28 @@ class AuthConfig:
 
     @property
     def login_enabled(self) -> bool:
-        return bool(self.login_user and self.login_password and self.session_secret_value)
+        return bool(self.bootstrap_password_value and self.bootstrap_email_value)
 
     @property
     def session_secret_value(self) -> str | None:
         return self.session_secret or self.token
+
+    @property
+    def bootstrap_password_value(self) -> str | None:
+        return self.bootstrap_password or self.login_password
+
+    @property
+    def bootstrap_email_value(self) -> str | None:
+        configured = self.bootstrap_email or self.login_user
+        if not configured:
+            return None
+        if "@" in configured:
+            return normalize_email(configured)
+        return "cloudagents@local.test"
+
+    @property
+    def bootstrap_display_name(self) -> str | None:
+        return self.bootstrap_name or self.login_user or self.bootstrap_email_value
 
     def is_public_path(self, path: str) -> bool:
         if path == "/health" and not self.protect_health:
@@ -44,26 +69,22 @@ class AuthConfig:
     def login_matches(self, username: Any, password: Any) -> bool:
         if not self.login_enabled:
             return False
+        login_id = self.resolve_login_email(username)
         return (
-            isinstance(username, str)
-            and isinstance(password, str)
-            and hmac.compare_digest(username, self.login_user or "")
-            and hmac.compare_digest(password, self.login_password or "")
+            isinstance(password, str)
+            and login_id == self.bootstrap_email_value
+            and hmac.compare_digest(password, self.bootstrap_password_value or "")
         )
 
     def issue_session_cookie(
         self,
-        username: str,
+        session_token: str,
         *,
         cookie_path: str = "/",
         secure: bool = False,
     ) -> str:
-        expires_at = int(time.time()) + self.session_ttl_seconds
-        payload = {"u": username, "exp": expires_at}
-        encoded_payload = _b64encode_json(payload)
-        signature = _sign(encoded_payload, self.session_secret_value or "")
         return _cookie_header(
-            f"{encoded_payload}.{signature}",
+            session_token,
             max_age=self.session_ttl_seconds,
             path=cookie_path,
             secure=secure,
@@ -72,56 +93,49 @@ class AuthConfig:
     def clear_session_cookie(self, *, cookie_path: str = "/", secure: bool = False) -> str:
         return _cookie_header("", max_age=0, path=cookie_path, secure=secure)
 
-    def session_identity(self, cookie_header: str | None) -> dict[str, Any] | None:
-        if not self.login_enabled or not cookie_header:
+    def session_token(self, cookie_header: str | None) -> str | None:
+        if not cookie_header:
             return None
         try:
             parsed = cookies.SimpleCookie(cookie_header)
         except cookies.CookieError:
             return None
         morsel = parsed.get(SESSION_COOKIE)
-        if not morsel or "." not in morsel.value:
+        if not morsel or not morsel.value:
             return None
-        encoded_payload, signature = morsel.value.rsplit(".", 1)
-        expected = _sign(encoded_payload, self.session_secret_value or "")
-        if not hmac.compare_digest(signature, expected):
-            return None
-        try:
-            payload = _b64decode_json(encoded_payload)
-        except (ValueError, json.JSONDecodeError):
-            return None
-        username = payload.get("u")
-        expires_at = payload.get("exp")
-        if (
-            not isinstance(username, str)
-            or username != self.login_user
-            or not isinstance(expires_at, int)
-            or expires_at < int(time.time())
-        ):
-            return None
-        return {
-            "principal_id": username,
-            "roles": ["owner"],
-            "scopes": ["*:*"],
-            "auth_type": "session",
-        }
+        return morsel.value
 
-    def session_status(self, cookie_header: str | None) -> dict[str, Any]:
-        identity = self.session_identity(cookie_header)
-        principal = identity["principal_id"] if identity else None
+    def session_status(self, identity: dict[str, Any] | None) -> dict[str, Any]:
+        principal = str(identity["principal_id"]) if identity else None
         return {
             "authenticated": bool(identity) or not self.login_enabled,
             "login_required": self.login_enabled,
             "principal": (
                 {
                     "id": principal or "local-dev",
-                    "display_name": principal or "Local development",
-                    "roles": ["owner"],
+                    "email": identity.get("email") if identity else None,
+                    "display_name": (
+                        str(identity.get("display_name") or principal)
+                        if identity
+                        else "Local development"
+                    ),
+                    "roles": list(identity.get("roles") or ["owner"]) if identity else ["owner"],
                 }
                 if identity or not self.login_enabled
                 else None
             ),
+            "auth_mode": "local_email" if self.login_enabled else "disabled",
         }
+
+    def resolve_login_email(self, login_id: Any) -> str | None:
+        if not isinstance(login_id, str) or not login_id.strip():
+            return None
+        candidate = login_id.strip()
+        if "@" in candidate:
+            return normalize_email(candidate)
+        if self.login_user and hmac.compare_digest(candidate, self.login_user):
+            return self.bootstrap_email_value
+        return None
 
 
 def is_authorized(config: AuthConfig, path: str, authorization: str | None) -> bool:
@@ -129,6 +143,61 @@ def is_authorized(config: AuthConfig, path: str, authorization: str | None) -> b
         return True
     expected = f"Bearer {config.token}"
     return bool(authorization) and hmac.compare_digest(authorization, expected)
+
+
+def normalize_email(value: str) -> str:
+    email = value.strip().lower()
+    if len(email) > 254 or not EMAIL_RE.match(email):
+        raise ValueError("email is invalid")
+    return email
+
+
+def hash_password(password: str) -> str:
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        PASSWORD_HASH_ITERATIONS,
+    )
+    return "$".join(
+        [
+            PASSWORD_HASH_ALGORITHM,
+            str(PASSWORD_HASH_ITERATIONS),
+            _b64encode_bytes(salt),
+            _b64encode_bytes(digest),
+        ]
+    )
+
+
+def verify_password(password: Any, stored_hash: str) -> bool:
+    if not isinstance(password, str):
+        return False
+    try:
+        algorithm, iterations_raw, salt_raw, digest_raw = stored_hash.split("$", 3)
+        if algorithm != PASSWORD_HASH_ALGORITHM:
+            return False
+        iterations = int(iterations_raw)
+        salt = _b64decode_bytes(salt_raw)
+        expected = _b64decode_bytes(digest_raw)
+    except (ValueError, TypeError):
+        return False
+    actual = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        iterations,
+    )
+    return hmac.compare_digest(actual, expected)
+
+
+def new_session_token() -> str:
+    return f"cas_{secrets.token_urlsafe(32)}"
+
+
+def session_expiry(ttl_seconds: int) -> str:
+    expires = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+    return expires.isoformat(timespec="milliseconds")
 
 
 def _cookie_header(value: str, *, max_age: int, path: str, secure: bool) -> str:
@@ -145,19 +214,10 @@ def _cookie_header(value: str, *, max_age: int, path: str, secure: bool) -> str:
     return "; ".join(parts)
 
 
-def _sign(value: str, secret: str) -> str:
-    return hmac.new(secret.encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
+def _b64encode_bytes(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
 
-def _b64encode_json(payload: dict[str, Any]) -> str:
-    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-
-
-def _b64decode_json(value: str) -> dict[str, Any]:
+def _b64decode_bytes(value: str) -> bytes:
     padded = value + ("=" * (-len(value) % 4))
-    decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
-    payload = json.loads(decoded.decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("session payload must be an object")
-    return payload
+    return base64.urlsafe_b64decode(padded.encode("ascii"))

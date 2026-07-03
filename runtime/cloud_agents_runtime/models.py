@@ -354,6 +354,43 @@ class ApiToken:
         return data
 
 
+@dataclass
+class AuthUser:
+    email: str
+    display_name: str
+    password_hash: str
+    roles: list[str]
+    status: str = "active"
+    email_verified_at: str | None = None
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+    last_login_at: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data.pop("password_hash", None)
+        return data
+
+
+@dataclass
+class AuthSession:
+    session_id: str
+    user_email: str
+    session_hash: str
+    created_at: str
+    expires_at: str
+    revoked_at: str | None = None
+    last_seen_at: str | None = None
+    user_agent: str | None = None
+    ip_address: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data.pop("session_hash", None)
+        return data
+
+
 def hash_token(token: str) -> str:
     return sha256(token.encode("utf-8")).hexdigest()
 

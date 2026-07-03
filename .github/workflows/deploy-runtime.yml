@@ -105,13 +105,14 @@ jobs:
         env:
           RUNTIME_SSH_TARGET: ${{ secrets.RUNTIME_SSH_TARGET }}
           RUNTIME_SSH_KEY: ${{ secrets.RUNTIME_SSH_KEY }}
+          RUNTIME_AUTH_PASSWORD: ${{ secrets.RUNTIME_AUTH_PASSWORD }}
           RUNTIME_BASIC_AUTH_PASSWORD: ${{ secrets.RUNTIME_BASIC_AUTH_PASSWORD }}
         run: |
           set -euo pipefail
           test -n "$RUNTIME_SSH_TARGET" || { echo "missing RUNTIME_SSH_TARGET"; exit 1; }
           test -n "$RUNTIME_SSH_KEY" || { echo "missing RUNTIME_SSH_KEY"; exit 1; }
-          test -n "$RUNTIME_BASIC_AUTH_PASSWORD" || {
-            echo "missing RUNTIME_BASIC_AUTH_PASSWORD";
+          test -n "${RUNTIME_AUTH_PASSWORD:-$RUNTIME_BASIC_AUTH_PASSWORD}" || {
+            echo "missing RUNTIME_AUTH_PASSWORD or RUNTIME_BASIC_AUTH_PASSWORD";
             exit 1;
           }
 
@@ -173,6 +174,9 @@ jobs:
           PUBLIC_DOMAIN: ${{ secrets.RUNTIME_PUBLIC_DOMAIN }}
           BASIC_AUTH_USER: ${{ secrets.RUNTIME_BASIC_AUTH_USER }}
           BASIC_AUTH_PASSWORD: ${{ secrets.RUNTIME_BASIC_AUTH_PASSWORD }}
+          AUTH_EMAIL: ${{ secrets.RUNTIME_AUTH_EMAIL }}
+          AUTH_PASSWORD: ${{ secrets.RUNTIME_AUTH_PASSWORD }}
+          AUTH_NAME: ${{ secrets.RUNTIME_AUTH_NAME }}
           APP_DIR: ${{ vars.RUNTIME_APP_DIR }}
           STATE_DIR: ${{ vars.RUNTIME_STATE_DIR }}
           NODE_PACKAGE: ${{ vars.RUNTIME_QWEN_NODE_PACKAGE }}
@@ -404,10 +408,21 @@ jobs:
           PUBLIC_HOST: ${{ secrets.RUNTIME_PUBLIC_HOST }}
           BASIC_AUTH_USER: ${{ secrets.RUNTIME_BASIC_AUTH_USER }}
           BASIC_AUTH_PASSWORD: ${{ secrets.RUNTIME_BASIC_AUTH_PASSWORD }}
+          AUTH_EMAIL: ${{ secrets.RUNTIME_AUTH_EMAIL }}
+          AUTH_PASSWORD: ${{ secrets.RUNTIME_AUTH_PASSWORD }}
         run: |
           set -euo pipefail
           PUBLIC_HOST="${PUBLIC_HOST:-}"
           BASIC_AUTH_USER="${BASIC_AUTH_USER:-cloudagents}"
+          AUTH_EMAIL="${AUTH_EMAIL:-}"
+          AUTH_PASSWORD="${AUTH_PASSWORD:-$BASIC_AUTH_PASSWORD}"
+          if [[ -z "$AUTH_EMAIL" ]]; then
+            if [[ "$BASIC_AUTH_USER" == *@* ]]; then
+              AUTH_EMAIL="$BASIC_AUTH_USER"
+            else
+              AUTH_EMAIL="cloudagents@local.test"
+            fi
+          fi
           test -n "$PUBLIC_HOST" || { echo "missing RUNTIME_PUBLIC_HOST"; exit 1; }
           cookie_jar="$RUNNER_TEMP/runtime-deploy/public-cookies.txt"
           curl -fsS \
@@ -415,7 +430,7 @@ jobs:
             --retry-delay 2 \
             -c "$cookie_jar" \
             -H "content-type: application/json" \
-            -d "{\"username\":\"$BASIC_AUTH_USER\",\"password\":\"$BASIC_AUTH_PASSWORD\"}" \
+            -d "{\"email\":\"$AUTH_EMAIL\",\"password\":\"$AUTH_PASSWORD\"}" \
             "http://$PUBLIC_HOST/cloud-agents/auth/login"
           curl -fsS \
             --retry 5 \
