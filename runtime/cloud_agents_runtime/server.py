@@ -26,6 +26,7 @@ from .manager import RunManager
 from .models import RunSpec
 from .supervisor import qwen_supervisor_from_env
 from .temporal_poc import agent_run_workflow_plan, mission_workflow_plan
+from .ui_projection import project_event, project_events
 
 
 def make_handler(
@@ -288,6 +289,17 @@ def make_handler(
             if len(parts) == 3 and parts[0] == "runs" and parts[2] == "events":
                 self.stream_events(parts[1])
                 return
+            if len(parts) == 3 and parts[0] == "session" and parts[2] == "events":
+                self.stream_session_events(parts[1])
+                return
+            if len(parts) == 3 and parts[0] == "session" and parts[2] == "events.json":
+                try:
+                    projected = self.projected_session_events(parts[1])
+                except KeyError:
+                    self.write_error(HTTPStatus.NOT_FOUND, "session not found")
+                    return
+                self.write_json({"events": projected})
+                return
             if (
                 len(parts) == 3
                 and parts[0] == "runs"
@@ -485,6 +497,28 @@ def make_handler(
                     run = manager.create_run(spec)
                     self.write_json(run.to_dict(), status=HTTPStatus.CREATED)
                     return
+                if len(parts) == 1 and parts[0] == "session":
+                    run_id = payload.get("run_id") or payload.get("session_id")
+                    if isinstance(run_id, str) and run_id.strip():
+                        run = manager.get_run(run_id.strip())
+                        if run is None:
+                            self.write_error(HTTPStatus.NOT_FOUND, "session not found")
+                            return
+                    else:
+                        spec = RunSpec.from_payload(payload)
+                        run = manager.create_run(spec)
+                    self.write_json(
+                        {
+                            "session": {
+                                "id": run.run_id,
+                                "run_id": run.run_id,
+                                "events": f"/session/{run.run_id}/events",
+                            },
+                            "run": run.to_dict(),
+                        },
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
                 if len(parts) == 3 and parts[0] == "runs" and parts[2] == "input":
                     prompt = payload.get("prompt")
                     if not isinstance(prompt, str) or not prompt.strip():
@@ -496,10 +530,28 @@ def make_handler(
                         status=HTTPStatus.ACCEPTED,
                     )
                     return
+                if len(parts) == 3 and parts[0] == "session" and parts[2] == "prompt":
+                    prompt = payload.get("prompt") or payload.get("message")
+                    if not isinstance(prompt, str) or not prompt.strip():
+                        self.write_error(HTTPStatus.BAD_REQUEST, "prompt is required")
+                        return
+                    manager.send_input(parts[1], prompt)
+                    self.write_json(
+                        {"accepted": True, "session_id": parts[1], "run_id": parts[1]},
+                        status=HTTPStatus.ACCEPTED,
+                    )
+                    return
                 if len(parts) == 3 and parts[0] == "runs" and parts[2] == "cancel":
                     manager.cancel(parts[1], payload.get("reason"))
                     self.write_json(
                         {"cancelled": True, "run_id": parts[1]},
+                        status=HTTPStatus.ACCEPTED,
+                    )
+                    return
+                if len(parts) == 3 and parts[0] == "session" and parts[2] == "cancel":
+                    manager.cancel(parts[1], payload.get("reason"))
+                    self.write_json(
+                        {"cancelled": True, "session_id": parts[1], "run_id": parts[1]},
                         status=HTTPStatus.ACCEPTED,
                     )
                     return
@@ -525,6 +577,23 @@ def make_handler(
                     manager.resolve_permission(parts[1], parts[3], payload)
                     self.write_json(
                         {"accepted": True, "run_id": parts[1], "permission_id": parts[3]},
+                        status=HTTPStatus.ACCEPTED,
+                    )
+                    return
+                if (
+                    len(parts) == 4
+                    and parts[0] == "session"
+                    and parts[2] == "permission"
+                    and parts[3]
+                ):
+                    manager.resolve_permission(parts[1], parts[3], payload)
+                    self.write_json(
+                        {
+                            "accepted": True,
+                            "session_id": parts[1],
+                            "run_id": parts[1],
+                            "permission_id": parts[3],
+                        },
                         status=HTTPStatus.ACCEPTED,
                     )
                     return
@@ -571,6 +640,66 @@ def make_handler(
                         last_heartbeat = time.monotonic()
             except (BrokenPipeError, ConnectionResetError):
                 return
+
+        def stream_session_events(self, session_id: str) -> None:
+            run = manager.get_run(session_id)
+            if run is None:
+                self.write_error(HTTPStatus.NOT_FOUND, "session not found")
+                return
+
+            last_sequence = parse_last_event_id(self.headers.get("Last-Event-ID"))
+            last_sequence = manager.store.record_gap_if_needed(session_id, last_sequence)
+            self.send_response(HTTPStatus.OK)
+            self.send_header("content-type", "text/event-stream; charset=utf-8")
+            self.send_header("cache-control", "no-cache")
+            self.send_header("connection", "close")
+            self.end_headers()
+            self.close_connection = True
+
+            last_heartbeat = time.monotonic()
+            try:
+                while True:
+                    events = manager.store.wait_for_events(session_id, last_sequence, timeout=1.0)
+                    for event in events:
+                        projected = project_event(event, source_adapter=run.spec.adapter)
+                        self.write_sse(projected["id"], projected["type"], projected)
+                        last_sequence = event.sequence
+                    if manager.store.is_terminal(session_id) and not events:
+                        self.cache_projected_session_events(session_id)
+                        break
+                    if time.monotonic() - last_heartbeat >= 10:
+                        self.wfile.write(b": heartbeat\n\n")
+                        self.wfile.flush()
+                        last_heartbeat = time.monotonic()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+        def projected_session_events(self, session_id: str) -> list[dict[str, Any]]:
+            run = manager.get_run(session_id)
+            if run is None:
+                raise KeyError(session_id)
+            projected = project_events(
+                manager.store.events_since(session_id),
+                source_adapter=run.spec.adapter,
+            )
+            self.write_projected_session_cache(session_id, projected)
+            return projected
+
+        def cache_projected_session_events(self, session_id: str) -> None:
+            try:
+                self.projected_session_events(session_id)
+            except KeyError:
+                return
+
+        def write_projected_session_cache(
+            self, session_id: str, projected: list[dict[str, Any]]
+        ) -> None:
+            lines = "\n".join(
+                json.dumps(event, ensure_ascii=False, sort_keys=True) for event in projected
+            )
+            if lines:
+                lines += "\n"
+            manager.store.write_text(session_id, "ui_daemon_events.jsonl", lines)
 
         def require_auth(self, path: str) -> bool:
             self.current_identity = None
@@ -925,6 +1054,16 @@ def required_scope_for(method: str, path: str) -> str | None:
         return "profiles:read" if method == "GET" else "profiles:write"
     if parts[0] in {"missions", "a2a", "temporal"}:
         return "missions:read" if method == "GET" else "missions:write"
+    if parts[0] == "session":
+        if method == "GET":
+            if len(parts) >= 3 and parts[2] in {"events", "events.json"}:
+                return "events:read"
+            return "runs:read"
+        if len(parts) >= 3 and parts[2] == "cancel":
+            return "runs:cancel"
+        if len(parts) >= 3 and parts[2] == "permission":
+            return "permissions:resolve"
+        return "runs:create"
     if parts[0] == "runs":
         if method == "GET":
             if len(parts) >= 3 and parts[2] == "artifacts":

@@ -349,3 +349,58 @@ flowchart LR
 4. Mission Detail 补 supervisor summary，让多 run 输出形成一个最终任务视角。
 5. 工具调用以可读摘要出现，原始 JSON 保留为排障材料。
 6. 刷新页面后，已提交或已解决的权限请求不会继续显示为常驻待处理按钮。
+
+## 第六轮循环审计：Qwen WebShell 投影闭环
+
+> 日期：2026-07-04
+> 方法：按 `qwen-webshell-chat-rendering.md` 的目标重新审计 Run Detail 实时对话链路，重点检查“是否能拿到完整 SSE 输出、是否保留审计事实源、是否能给后续 WebShell SDK 接入提供稳定后端”。
+
+### 审计结论
+
+本轮发现的核心问题是：产品层面想要的是类似 AI Chat 的实时 transcript，但后端之前只提供 canonical runtime SSE，前端还需要自己理解各种 `message.delta`、tool、permission、shell、status 事件。这样虽然“有事件”，但离可复用的 Chat 渲染协议还差一层稳定 UI contract。
+
+本轮技术判断：
+
+1. 不能把 Qwen `DaemonEvent` 直接作为平台事实源，否则 Codex、Claude Code、OpenCode 和自研 worker 会被 Qwen 私有 schema 绑定。
+2. 必须增加独立 UI Projection Service，把 canonical `RuntimeEvent` 投影成 Qwen-compatible `DaemonEvent`。
+3. Web 管理台和未来的 Qwen WebShell SDK 都应通过 BFF 的 `/session/:id/events` 消费投影事件，而不是浏览器直连 qwen serve。
+4. `ui_daemon_events.jsonl` 只能作为 UI 兼容缓存，审计事实源仍是 `events.jsonl` 和 raw adapter artifact。
+
+### 本轮已完成修复
+
+| 问题 | 修复 | 验收 |
+| --- | --- | --- |
+| 缺少 WebShell-compatible SSE 输出 | 新增 `/session/:id/events`，实时输出 `DaemonEvent` SSE | Runtime 集成测试覆盖创建 session、发送 prompt、读取 session SSE、terminal event |
+| 刷新或重连无法按 WebShell 语义补事件 | `/session/:id/events` 支持 `Last-Event-ID`，复用 canonical event store replay/gap | 测试覆盖 replay 和超前 Last-Event-ID 的 `stream_error` |
+| Qwen raw event 质量无法复用 | `adapter.event.data.raw` 若为合法 `DaemonEvent` 则允许 passthrough | 单测覆盖 raw passthrough 和 malformed raw fallback |
+| 投影事件无法审计 | `GET /session/:id/events.json` 和 terminal stream 会写 `ui_daemon_events.jsonl`；audit bundle 返回 `ui_daemon_events` | 集成测试断言 cache 文件和 audit bundle |
+| 未知事件或坏数据可能打断 UI | 未知事件降级为 `session_update/status`，敏感字段脱敏，坏 timestamp 降级为 0 | 单测覆盖 redaction、long text、bad timestamp、unknown event |
+| capabilities 不暴露 UI contract | `/capabilities` 增加 `daemon_event_projection`、`session_events`、`webshell_compatible_bff` 和 route map | Runtime 测试覆盖 features 与 route |
+
+### 新用户体验判断
+
+这轮修复后，新用户不需要理解平台内部 `RuntimeEvent` 才能接入 Chat renderer：只要按 `/session` 协议创建 session、提交 prompt、订阅 events，就能拿到更接近 Qwen WebShell 的 transcript 事件。
+
+但当前 Web 管理台仍在使用自研 Run Detail renderer 消费 canonical/normalized 数据；这意味着“后端 WebShell-compatible BFF 已 ready”，但“前端完全切换到 Qwen WebShell transcript reducer”还未完成。不能把这两件事混为一个交付。
+
+### 本轮验证结果
+
+1. Runtime 单测与集成测试：92 passed。
+2. Runtime 覆盖率：90.12%。
+3. Runtime style：通过。
+4. Web lint：通过，0 warning。
+5. Web 单测：25 passed。
+6. Web 覆盖率：Statements 95.99%，Branches 90.06%，Functions 91.30%，Lines 95.99%。
+7. Web build：通过。
+
+### 本轮再次审计结论
+
+按文档、方案设计、源码实现、产品设计、产品易用性、新用户视角、产品体验视角复审后，本轮没有发现阻塞当前合并的 P0/P1 缺陷。实现边界清晰：runtime contract 仍是 AgentFlow canonical events，UI contract 增加 Qwen-compatible DaemonEvent。
+
+下一轮应从产品体验继续推进，而不是继续只补后端接口：
+
+1. Run Detail 切换或并行接入 `/session/:id/events`，展示 WebShell transcript blocks。
+2. 固定 Qwen WebUI SDK/vendor 版本，建立前端 conformance fixture。
+3. 将 tool call、shell output、permission request 作为 Chat 时间线主元素，而不是分散到多个面板。
+4. 增加真实 qwen raw event 与 canonical replay 的 UI 差异检测报告。
+5. 对浏览器端事件过多场景增加虚拟列表、分页 replay 或 server compaction。

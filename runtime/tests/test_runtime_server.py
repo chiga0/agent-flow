@@ -42,6 +42,13 @@ class RuntimeServerTest(unittest.TestCase):
             self.assertIn("acp_jsonrpc_poc", capabilities["features"])
             self.assertIn("a2a_gateway_poc", capabilities["features"])
             self.assertIn("temporal_workflow_plan_poc", capabilities["features"])
+            self.assertIn("daemon_event_projection", capabilities["features"])
+            self.assertIn("session_events", capabilities["features"])
+            self.assertIn("webshell_compatible_bff", capabilities["features"])
+            self.assertEqual(
+                capabilities["ui_projection"]["routes"]["events"],
+                "/session/{id}/events",
+            )
             queue = request_json(
                 f"{base_url}/queue",
                 headers={"authorization": "Bearer secret"},
@@ -535,6 +542,67 @@ class RuntimeServerTest(unittest.TestCase):
                         f"{base_url}/runs/{run['run_id']}/artifacts/%2E%2E%2Fruntime.db"
                     )
                 self.assertEqual(bad_artifact.exception.code, HTTPStatus.BAD_REQUEST)
+
+    def test_session_bff_projects_run_events_to_daemon_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with running_runtime(artifact_root=Path(tmp)) as base_url:
+                session = request_json(
+                    f"{base_url}/session",
+                    method="POST",
+                    payload={"adapter": "fake"},
+                )
+                session_id = session["session"]["id"]
+                self.assertEqual(session_id, session["run"]["run_id"])
+                wait_for_run_status(base_url, session_id, "running")
+
+                accepted = request_json(
+                    f"{base_url}/session/{session_id}/prompt",
+                    method="POST",
+                    payload={"prompt": "render daemon transcript"},
+                )
+                self.assertTrue(accepted["accepted"])
+
+                events = read_sse(f"{base_url}/session/{session_id}/events")
+                event_types = [event["event"] for event in events]
+                self.assertIn("session_update", event_types)
+                self.assertIn("turn_complete", event_types)
+                first = events[0]["data"]
+                self.assertEqual(first["v"], 1)
+                self.assertEqual(first["_meta"]["runtimeRunId"], session_id)
+                self.assertIn("runtimeSequence", first["_meta"])
+                self.assertTrue(
+                    any(
+                        event["data"]
+                        .get("data", {})
+                        .get("update", {})
+                        .get("sessionUpdate")
+                        == "agent_message_chunk"
+                        for event in events
+                    )
+                )
+
+                replayed = read_sse(
+                    f"{base_url}/session/{session_id}/events",
+                    headers={"Last-Event-ID": "2"},
+                )
+                self.assertTrue(all(event["data"]["id"] > 2 for event in replayed))
+
+                gap = read_sse(
+                    f"{base_url}/session/{session_id}/events",
+                    headers={"Last-Event-ID": "999"},
+                )
+                self.assertEqual(gap[0]["event"], "stream_error")
+
+                projected = request_json(f"{base_url}/session/{session_id}/events.json")
+                self.assertIn("events", projected)
+                ui_cache = Path(tmp) / session_id / "ui_daemon_events.jsonl"
+                self.assertTrue(ui_cache.exists())
+                self.assertIn("turn_complete", ui_cache.read_text(encoding="utf-8"))
+                audit = request_json(f"{base_url}/runs/{session_id}/audit.json")
+                self.assertIn("ui_daemon_events", audit)
+                self.assertTrue(
+                    any(event["type"] == "turn_complete" for event in audit["ui_daemon_events"])
+                )
 
     def test_profiles_and_missions_http_api(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1083,6 +1151,17 @@ def request_binary(url: str, headers: dict[str, str] | None = None) -> bytes:
     request = urllib.request.Request(url, headers=headers or {})
     with urllib.request.urlopen(request, timeout=5) as response:
         return response.read()
+
+
+def wait_for_run_status(base_url: str, run_id: str, status: str) -> dict[str, Any]:
+    deadline = time.time() + 5
+    last: dict[str, Any] | None = None
+    while time.time() < deadline:
+        last = request_json(f"{base_url}/runs/{run_id}")
+        if last.get("status") == status:
+            return last
+        time.sleep(0.05)
+    raise AssertionError(f"run {run_id} did not reach {status}; last={last}")
 
 
 def read_sse(url: str, headers: dict[str, str] | None = None) -> list[dict[str, Any]]:

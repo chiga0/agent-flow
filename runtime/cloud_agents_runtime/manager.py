@@ -22,6 +22,7 @@ from .notifications import PermissionNotifier
 from .ops import BetaOpsConfig, OperationsManager
 from .resources import ResourceLimitConfig, ResourcePolicyResolver
 from .store import RunStore
+from .ui_projection import project_events
 from .workspace import WorkspaceAllocator
 
 
@@ -175,7 +176,21 @@ class RunManager:
                 "access_project_registry",
                 "api_token_registry",
                 "cost_budget",
+                "daemon_event_projection",
+                "session_events",
+                "webshell_compatible_bff",
             ],
+            "ui_projection": {
+                "protocol": "qwen-daemon-compatible",
+                "version": "agentflow-ui-projection-v1",
+                "routes": {
+                    "create_session": "/session",
+                    "send_prompt": "/session/{id}/prompt",
+                    "events": "/session/{id}/events",
+                    "cancel": "/session/{id}/cancel",
+                    "permission": "/session/{id}/permission/{requestId}",
+                },
+            },
             "resource_limits": self.resource_resolver.config.to_dict(),
             "cleanup_policy": self.cleanup_manager.policy.to_dict(),
             "ops_policy": self.ops.config.to_dict(),
@@ -615,6 +630,10 @@ class RunManager:
             "run": run.to_dict(),
             "events": [event.to_dict() for event in self.store.events_since(run_id)],
             "raw_events": self.store.raw_events(run_id),
+            "ui_daemon_events": project_events(
+                self.store.events_since(run_id),
+                source_adapter=run.spec.adapter,
+            ),
             "permission_notifications": [
                 notification.to_dict()
                 for notification in self.store.list_permission_notifications(run_id=run_id)

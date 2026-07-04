@@ -357,6 +357,95 @@ Browser WebShell
 
 完成后再接 Codex/Claude/OpenCode adapter。这样能最大化复用 Qwen WebShell，又不牺牲执行器可替换性。
 
+## 2026-07-04 实施记录
+
+本轮已按本文方案完成第一条可执行闭环：后端提供 WebShell-compatible BFF 和 `RuntimeEvent -> DaemonEvent` 投影层，前端或外部 WebShell 客户端可以通过 `/session` 系列接口消费同一条运行时事件流。
+
+### 已落地能力
+
+1. 新增 `runtime/cloud_agents_runtime/ui_projection.py`：
+   - 平台内部继续以 `RuntimeEvent` 作为事实源。
+   - 对 UI 输出 Qwen-compatible `DaemonEvent`，字段包含 `id`、`v: 1`、`type`、`data` 和 `_meta`。
+   - `_meta` 固定带上 `serverTimestamp`、`runtimeRunId`、`runtimeEventId`、`runtimeSequence`、`runtimeEventType`、`sourceAdapter`。
+   - `id` 当前使用 canonical event sequence，满足同一 run/session 内单调递增和 `Last-Event-ID` replay。
+   - 对未知事件降级为 `session_update + status`，不丢事件。
+   - 对 UI debug/status 载荷做敏感字段脱敏，覆盖 token、authorization、cookie、password、secret、private_key、api_key 等字段。
+
+2. 新增 WebShell-compatible BFF routes：
+
+| Route | 状态 | 内部映射 |
+| --- | --- | --- |
+| `POST /session` | done | 创建 run，或根据 `run_id/session_id` attach 已存在 run |
+| `POST /session/:id/prompt` | done | `RunManager.send_input` |
+| `GET /session/:id/events` | done | 从 canonical Event Store 读取并实时投影为 DaemonEvent SSE |
+| `GET /session/:id/events.json` | done | 返回当前投影序列，并写入 `ui_daemon_events.jsonl` 缓存 |
+| `POST /session/:id/cancel` | done | `RunManager.cancel` |
+| `POST /session/:id/permission/:requestId` | done | `RunManager.resolve_permission` |
+| `GET /capabilities` | done | 新增 `daemon_event_projection`、`session_events`、`webshell_compatible_bff` 和 `ui_projection.routes` |
+
+3. 已实现事件映射：
+
+| RuntimeEvent | DaemonEvent |
+| --- | --- |
+| `input.accepted` | `session_update/user_message_chunk` |
+| `message.delta` | `session_update/agent_message_chunk` |
+| `reasoning.delta` | `session_update/agent_thought_chunk` |
+| `tool.started` | `session_update/tool_call` |
+| `tool.updated` | `session_update/tool_call_update` |
+| `tool.completed` | `session_update/tool_call_update` + `completed` |
+| `shell.output` | `shell_output` |
+| `permission.requested` | `permission_request` |
+| `permission.resolved` | `permission_resolved` |
+| `run.completed` | `turn_complete` |
+| `run.failed` | `turn_error` |
+| `run.cancelled` | `prompt_cancelled` |
+| `stream.warning`、`event.gap_detected` | `stream_error` |
+| unknown event | `session_update/status` |
+
+4. Qwen raw passthrough：
+   - 当 canonical event 为 `adapter.event` 且 `data.raw` 已经是合法 `DaemonEvent` 形状时，投影层允许透传。
+   - 透传时仍会覆盖 `id`、`v`，并追加平台 `_meta`，保证 UI replay 和审计链仍由 AgentFlow 控制。
+   - raw event 只作为 UI 质量优化，不会替代 canonical event store。
+
+5. 审计产物：
+   - `events.jsonl` 仍是事实源。
+   - `raw_events.jsonl` 仍保存 adapter 原始事件。
+   - `ui_daemon_events.jsonl` 是可重建缓存。
+   - `GET /runs/:id/audit.json` 已包含 `ui_daemon_events`，便于排查 WebShell 兼容问题。
+
+### 多轮审计结论
+
+| 审计视角 | 结论 | 处理 |
+| --- | --- | --- |
+| 架构边界 | 未把 Qwen `DaemonEvent` 反向变成 runtime contract，边界正确 | 保留 `RuntimeEvent` 事实源和独立 projection module |
+| 安全 | 浏览器不需要 qwen daemon token；session route 走现有 auth/scope | BFF route 复用 `required_scope_for`，events/cancel/permission 分别映射到对应 scope |
+| 审计与恢复 | projection 可从 `events.jsonl` 重建；缓存不是事实源 | audit bundle 和 terminal session cache 都包含投影结果 |
+| 实时性 | `/session/:id/events` 支持 SSE 和 `Last-Event-ID` | 复用 canonical event store 的 wait/replay/gap 机制 |
+| 兼容性 | Qwen raw event 可透传，非 Qwen adapter 也可统一投影 | conformance tests 覆盖 raw passthrough 和 canonical replay |
+| 稳定性 | malformed raw event、未知事件、坏 timestamp 不会导致 stream 崩溃 | 降级到 status/0 timestamp，并补单测 |
+| 产品边界 | 本轮完成 BFF/projection，不等同于前端已完全替换为 Qwen WebShell SDK | 下一轮再接 `DaemonSessionProvider` 或 vendor 的 transcript reducer |
+
+### 验证结果
+
+本轮本地验证：
+
+1. Runtime 单测与集成测试：92 passed。
+2. Runtime 覆盖率：90.12%。
+3. Runtime style：通过。
+4. Web lint：通过，0 warning。
+5. Web 单测：25 passed。
+6. Web 覆盖率：Statements 95.99%，Branches 90.06%，Functions 91.30%，Lines 95.99%。
+7. Web build：通过，已重新生成 runtime static assets。
+
+### 当前未完成边界
+
+本轮完成的是“WebShell-compatible BFF 小闭环”，不是完整前端 SDK 替换。仍需在下一轮处理：
+
+1. 前端引入或 vendor 固定版本的 Qwen WebUI transcript reducer / `DaemonSessionProvider`。
+2. 将 Run Detail 的现有 Chat 渲染器切换为消费 `/session/:id/events` 的 DaemonEvent stream。
+3. 增加 WebShell transcript fixture 的浏览器端 E2E，覆盖 user、assistant、tool、shell、permission、error 六类 block。
+4. 对真实 qwen raw event 与 canonical replay 做 block 数量和关键字段差异检测。
+
 ## 最终判断
 
 采用 Qwen WebShell 是推荐方案，但它应该是 UI contract，不是 runtime contract。
