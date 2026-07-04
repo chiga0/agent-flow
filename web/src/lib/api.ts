@@ -39,6 +39,15 @@ export interface RuntimeEvent {
   data: Record<string, unknown>;
 }
 
+export interface DaemonEvent {
+  id: number | string;
+  v: 1;
+  type: string;
+  data: Record<string, unknown>;
+  _meta?: Record<string, unknown>;
+  originatorClientId?: string;
+}
+
 export interface ArtifactInfo {
   name: string;
   size_bytes: number;
@@ -378,6 +387,8 @@ export const runtimeApi = {
   run: (runId: string) => api<RunState>(`runs/${runId}`),
   runEvents: (runId: string) =>
     api<{ events: RuntimeEvent[] }>(`runs/${runId}/events.json`),
+  sessionEvents: (sessionId: string) =>
+    api<{ events: DaemonEvent[] }>(`session/${sessionId}/events.json`),
   runArtifacts: (runId: string) =>
     api<{ artifacts: ArtifactInfo[] }>(`runs/${runId}/artifacts`),
   runAudit: (runId: string) =>
@@ -393,6 +404,14 @@ export const runtimeApi = {
       method: "POST",
       body: JSON.stringify({ prompt }),
     }),
+  submitSessionPrompt: (sessionId: string, prompt: string) =>
+    api<{ accepted: boolean; session_id: string; run_id: string }>(
+      `session/${sessionId}/prompt`,
+      {
+        method: "POST",
+        body: JSON.stringify({ prompt }),
+      },
+    ),
   cancelRun: (runId: string) =>
     api<{ cancelled: boolean }>(`runs/${runId}/cancel`, {
       method: "POST",
@@ -404,6 +423,15 @@ export const runtimeApi = {
     payload: { decision: string; option_id?: string; reason?: string },
   ) =>
     api(`runs/${runId}/permissions/${permissionId}`, {
+      method: "POST",
+      body: JSON.stringify({ decided_by: "web-console", ...payload }),
+    }),
+  resolveSessionPermission: (
+    sessionId: string,
+    permissionId: string,
+    payload: { decision: string; option_id?: string; reason?: string },
+  ) =>
+    api(`session/${sessionId}/permission/${permissionId}`, {
       method: "POST",
       body: JSON.stringify({ decided_by: "web-console", ...payload }),
     }),
@@ -506,6 +534,10 @@ export function auditHref(runId: string) {
 
 export function runEventStreamHref(runId: string) {
   return `${API_BASE}runs/${runId}/events`;
+}
+
+export function sessionEventStreamHref(sessionId: string) {
+  return `${API_BASE}session/${sessionId}/events`;
 }
 
 export function backupHref(name: string) {

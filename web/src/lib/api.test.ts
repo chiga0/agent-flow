@@ -9,6 +9,7 @@ import {
   resolvedPermissionIds,
   runEventStreamHref,
   runtimeApi,
+  sessionEventStreamHref,
   type RuntimeEvent,
 } from "./api";
 
@@ -105,6 +106,16 @@ describe("api helpers", () => {
     await runtimeApi.executors();
     await runtimeApi.costStatus();
     await runtimeApi.runAudit("run_1");
+    await runtimeApi.submitRunInput("run_1", "legacy continue");
+    await runtimeApi.resolvePermission("run_1", "perm_legacy", {
+      decision: "deny",
+    });
+    await runtimeApi.sessionEvents("run_1");
+    await runtimeApi.submitSessionPrompt("run_1", "continue");
+    await runtimeApi.resolveSessionPermission("run_1", "perm_1", {
+      decision: "approve",
+      option_id: "proceed_once",
+    });
     await runtimeApi.permissionNotifications("run_1");
     await runtimeApi.retryPermissionNotifications("run_1", "perm_1");
     await runtimeApi.cancelRun("run_1");
@@ -144,6 +155,11 @@ describe("api helpers", () => {
       "/executors",
       "/cost/status",
       "/runs/run_1/audit.json",
+      "/runs/run_1/input",
+      "/runs/run_1/permissions/perm_legacy",
+      "/session/run_1/events.json",
+      "/session/run_1/prompt",
+      "/session/run_1/permission/perm_1",
       "/runs/run_1/permission-notifications",
       "/runs/run_1/permissions/perm_1/notifications/retry",
       "/runs/run_1/cancel",
@@ -170,6 +186,10 @@ describe("api helpers", () => {
     expect(methods.get("/workers/worker%201/drain")).toBe("POST");
     expect(methods.get("/workers/worker%201/resume")).toBe("POST");
     expect(methods.get("/workers/worker%201/retry")).toBe("POST");
+    expect(methods.get("/runs/run_1/input")).toBe("POST");
+    expect(methods.get("/runs/run_1/permissions/perm_legacy")).toBe("POST");
+    expect(methods.get("/session/run_1/prompt")).toBe("POST");
+    expect(methods.get("/session/run_1/permission/perm_1")).toBe("POST");
     expect(
       methods.get("/runs/run_1/permissions/perm_1/notifications/retry"),
     ).toBe("POST");
@@ -216,6 +236,9 @@ describe("api helpers", () => {
     expect(fresh.runEventStreamHref("run_1")).toBe(
       "/cloud-agents/runs/run_1/events",
     );
+    expect(fresh.sessionEventStreamHref("run_1")).toBe(
+      "/cloud-agents/session/run_1/events",
+    );
     expect(fresh.backupHref("backup.tgz")).toBe(
       "/cloud-agents/ops/backups/backup.tgz",
     );
@@ -236,6 +259,7 @@ describe("api helpers", () => {
     );
     expect(auditHref("run_1")).toBe("/runs/run_1/audit.json");
     expect(runEventStreamHref("run_1")).toBe("/runs/run_1/events");
+    expect(sessionEventStreamHref("run_1")).toBe("/session/run_1/events");
     expect(backupHref("backup.tgz")).toBe("/ops/backups/backup.tgz");
     expect(missionArtifactHref("mission_1", "manifest.json")).toBe(
       "/missions/mission_1/artifacts/manifest.json",

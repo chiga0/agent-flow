@@ -118,6 +118,90 @@ const events = [
   },
 ];
 
+const daemonEvents = [
+  {
+    id: 1,
+    v: 1,
+    type: "session_update",
+    data: {
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: "Inspect runtime" },
+      },
+    },
+    _meta: {
+      serverTimestamp: Date.now(),
+      runtimeRunId: "run_1",
+      runtimeSequence: 1,
+      runtimeEventType: "input.accepted",
+    },
+  },
+  {
+    id: 2,
+    v: 1,
+    type: "permission_request",
+    data: {
+      requestId: "perm_1",
+      prompt: "Allow shell command?",
+      tool: "shell",
+      options: [
+        { id: "proceed_once", label: "Approve" },
+        { id: "cancel", label: "Reject" },
+      ],
+      context: { command: "uname -a", cwd: "/workspace" },
+    },
+    _meta: {
+      serverTimestamp: Date.now(),
+      runtimeRunId: "run_1",
+      runtimeSequence: 2,
+      runtimeEventType: "permission.requested",
+    },
+  },
+  {
+    id: 3,
+    v: 1,
+    type: "session_update",
+    data: {
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: "Inspecting live runner state.",
+        },
+      },
+    },
+    _meta: {
+      serverTimestamp: Date.now(),
+      runtimeRunId: "run_1",
+      runtimeSequence: 3,
+      runtimeEventType: "message.delta",
+    },
+  },
+  {
+    id: 4,
+    v: 1,
+    type: "session_update",
+    data: {
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCall: {
+          id: "tool_1",
+          name: "shell",
+          status: "completed",
+          input: "uname -a",
+          output: "Linux test-host",
+        },
+      },
+    },
+    _meta: {
+      serverTimestamp: Date.now(),
+      runtimeRunId: "run_1",
+      runtimeSequence: 4,
+      runtimeEventType: "tool.completed",
+    },
+  },
+] as const;
+
 let authSessionAuthenticated = true;
 
 const fixtures: Record<string, unknown> = {
@@ -232,6 +316,7 @@ const fixtures: Record<string, unknown> = {
   runs: { runs: [run] },
   "runs/run_1": run,
   "runs/run_1/events.json": { events },
+  "session/run_1/events.json": { events: daemonEvents },
   "runs/run_1/permission-notifications": {
     notifications: [
       {
@@ -606,7 +691,7 @@ describe("AgentFlow console", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
-        "/runs/run_1/input",
+        "/session/run_1/prompt",
         expect.objectContaining({
           method: "POST",
           body: expect.stringContaining("Please continue"),
@@ -627,7 +712,7 @@ describe("AgentFlow console", () => {
 
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
-        "/runs/run_1/permissions/perm_1",
+        "/session/run_1/permission/perm_1",
         expect.objectContaining({
           method: "POST",
           body: expect.stringContaining("approve"),
@@ -635,7 +720,7 @@ describe("AgentFlow console", () => {
       ),
     );
     expect(fetch).toHaveBeenCalledWith(
-      "/runs/run_1/permissions/perm_1",
+      "/session/run_1/permission/perm_1",
       expect.objectContaining({
         method: "POST",
         body: expect.stringContaining("proceed_once"),
@@ -1057,6 +1142,24 @@ describe("AgentFlow console", () => {
         },
         now,
       ),
+      event(
+        "adapter.event",
+        25.1,
+        {
+          adapter: "qwen",
+          raw: {
+            type: "session_update",
+            data: {
+              sessionId: "session_1",
+              update: {
+                sessionUpdate: "agent_thought_chunk",
+                content: { type: "text", text: "another hidden chunk" },
+              },
+            },
+          },
+        },
+        now,
+      ),
     ];
 
     const transcript = __testUtils.runnerTranscript(liveEvents);
@@ -1163,11 +1266,277 @@ describe("AgentFlow console", () => {
       expect.objectContaining({
         messageChunks: 2,
         permissionRequests: 1,
-        progressSignals: 1,
-        rawAdapterEvents: 5,
+        progressSignals: 2,
+        rawAdapterEvents: 6,
         toolCalls: 2,
       }),
     );
+    const daemon = [
+      {
+        id: 1,
+        v: 1,
+        type: "session_update",
+        data: {
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { text: "hello agent" },
+          },
+        },
+        _meta: { serverTimestamp: Date.now(), runtimeSequence: 1 },
+      },
+      {
+        id: "2",
+        v: 1,
+        type: "session_update",
+        data: {
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Hel" },
+          },
+        },
+        _meta: { serverTimestamp: Date.now(), runtimeSequence: 2 },
+      },
+      {
+        id: "3",
+        v: 1,
+        type: "session_update",
+        data: {
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "lo" },
+          },
+        },
+        _meta: { serverTimestamp: Date.now(), runtimeSequence: 3 },
+      },
+      {
+        id: "seq-tool",
+        v: 1,
+        type: "session_update",
+        data: {
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCall: {
+              name: "shell",
+              status: "completed",
+              input: { command: "npm test" },
+              output: { ok: true },
+            },
+          },
+        },
+        _meta: { serverTimestamp: Date.now(), runtimeSequence: 4 },
+      },
+      {
+        id: 5,
+        v: 1,
+        type: "shell_output",
+        data: { stdout: "stdout text", stderr: "" },
+        _meta: { serverTimestamp: Date.now(), runtimeSequence: 5 },
+      },
+      {
+        id: 6,
+        v: 1,
+        type: "permission_request",
+        data: {
+          requestId: "perm_daemon",
+          prompt: "Approve command?",
+          tool: "shell",
+          options: [{ id: "proceed_once", label: "Approve" }],
+        },
+        _meta: { serverTimestamp: Date.now(), runtimeSequence: 6 },
+      },
+      {
+        id: 7,
+        v: 1,
+        type: "permission_resolved",
+        data: { requestId: "perm_daemon", decision: "approve" },
+        _meta: { serverTimestamp: Date.now(), runtimeSequence: 7 },
+      },
+      {
+        id: 8,
+        v: 1,
+        type: "turn_complete",
+        data: {},
+        _meta: { serverTimestamp: Date.now(), runtimeSequence: 8 },
+      },
+    ] as const;
+    const daemonTranscript = __testUtils.daemonRunnerTranscript([...daemon]);
+    expect(daemonTranscript).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "operator", body: "hello agent" }),
+        expect.objectContaining({ role: "agent", body: "Hello" }),
+        expect.objectContaining({
+          title: "shell · completed",
+          body: expect.stringContaining("command: npm test"),
+        }),
+        expect.objectContaining({ title: "Shell output", body: "stdout text" }),
+        expect.objectContaining({ title: "Permission required" }),
+        expect.objectContaining({ title: "Permission resolved" }),
+        expect.objectContaining({ title: "Runner completed" }),
+      ]),
+    );
+    expect(
+      __testUtils.daemonRunnerProcessSummary([...daemon], daemonTranscript),
+    ).toEqual(
+      expect.objectContaining({
+        messageChunks: 2,
+        permissionRequests: 1,
+        toolCalls: 2,
+      }),
+    );
+    expect(__testUtils.daemonResolvedPermissionIds([...daemon])).toEqual(
+      new Set(["perm_daemon"]),
+    );
+    expect(__testUtils.daemonPendingPermissionRequests([...daemon])).toEqual([]);
+    expect(__testUtils.mergeDaemonEvents([], [...daemon])).toHaveLength(8);
+    expect(__testUtils.daemonSequence(daemon[3])).toBe(4);
+    expect(__testUtils.daemonCreatedAt(daemon[0])).toContain("T");
+    expect(__testUtils.isTerminalDaemonEvent("turn_complete")).toBe(true);
+    const daemonEdges = [
+      {
+        id: "thought",
+        v: 1,
+        type: "session_update",
+        data: {
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: [{ content: { text: "hidden" } }],
+          },
+        },
+      },
+      {
+        id: "empty",
+        v: 1,
+        type: "session_update",
+        data: {
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { text: "" },
+          },
+        },
+      },
+      {
+        id: "status",
+        v: 1,
+        type: "session_update",
+        data: {
+          update: {
+            sessionUpdate: "status",
+            status: { eventType: "custom.event", message: "custom status" },
+          },
+        },
+      },
+      {
+        id: "failed-tool",
+        v: 1,
+        type: "session_update",
+        data: {
+          update: {
+            sessionUpdate: "tool_call_update",
+            status: "failed",
+            title: "Run shell",
+            rawInput: "npm lint",
+            rawOutput: "lint failed",
+          },
+        },
+      },
+      {
+        id: "title-tool",
+        v: 1,
+        type: "session_update",
+        data: {
+          update: {
+            sessionUpdate: "tool_call",
+            status: "running",
+            title: "Custom title",
+            content: [{ text: "content array text" }],
+          },
+        },
+      },
+      {
+        id: "fallback-tool",
+        v: 1,
+        type: "session_update",
+        data: {
+          update: {
+            sessionUpdate: "tool_call",
+            rawInput: { path: "/tmp" },
+          },
+        },
+      },
+      {
+        id: "stderr",
+        v: 1,
+        type: "shell_output",
+        data: { stderr: "permission denied" },
+      },
+      {
+        id: "pending-permission",
+        v: 1,
+        type: "permission_request",
+        data: { requestId: "perm_pending", options: [{}] },
+      },
+      {
+        id: "error",
+        v: 1,
+        type: "turn_error",
+        data: {},
+      },
+      {
+        id: "cancel",
+        v: 1,
+        type: "prompt_cancelled",
+        data: {},
+      },
+      {
+        id: "stream",
+        v: 1,
+        type: "stream_error",
+        data: {},
+      },
+      {
+        id: "unknown",
+        v: 1,
+        type: "unknown_event",
+        data: { ok: true },
+      },
+    ] as const;
+    const edgeTranscript = __testUtils.daemonRunnerTranscript([
+      ...daemonEdges,
+    ]);
+    expect(edgeTranscript).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ title: "Agent progress" }),
+        expect.objectContaining({ title: "custom.event", body: "custom status" }),
+        expect.objectContaining({ role: "error", title: "Run shell · failed" }),
+        expect.objectContaining({
+          title: "Custom title · running",
+          body: expect.stringContaining("content: content array text"),
+        }),
+        expect.objectContaining({ title: "Tool call" }),
+        expect.objectContaining({
+          role: "warning",
+          title: "Shell output",
+          body: "permission denied",
+        }),
+        expect.objectContaining({ title: "Runner error" }),
+        expect.objectContaining({ title: "Prompt cancelled" }),
+        expect.objectContaining({ title: "Stream recovered" }),
+        expect.objectContaining({ title: "unknown_event" }),
+      ]),
+    );
+    expect(
+      edgeTranscript.find((item) => item.role === "agent" && !item.body.trim()),
+    ).toBeUndefined();
+    expect(
+      __testUtils.daemonPendingPermissionRequests([...daemonEdges]),
+    ).toEqual([
+      expect.objectContaining({
+        permission_id: "perm_pending",
+        options: [{ id: "approve" }],
+      }),
+    ]);
+    expect(__testUtils.daemonSequence(daemonEdges[0])).toBe(0);
+    expect(__testUtils.daemonCreatedAt(daemonEdges[0])).toContain("T");
     expect(__testUtils.copyProfile(plannerProfile).id).toBe("planner-copy");
     expect(
       __testUtils.pendingPermissionRequests([
@@ -2195,6 +2564,16 @@ async function fetchMock(input: RequestInfo | URL, init?: RequestInit) {
   }
   if (init?.method === "POST" && path.endsWith("/input")) {
     return jsonResponse({ accepted: true, run_id: path.split("/")[1] }, 202);
+  }
+  if (init?.method === "POST" && path.endsWith("/prompt")) {
+    const sessionId = path.split("/")[1];
+    return jsonResponse(
+      { accepted: true, session_id: sessionId, run_id: sessionId },
+      202,
+    );
+  }
+  if (init?.method === "POST" && path.includes("/permission/")) {
+    return jsonResponse({ accepted: true });
   }
   if (init?.method === "POST" && path.includes("/permissions/")) {
     return jsonResponse({ accepted: true });

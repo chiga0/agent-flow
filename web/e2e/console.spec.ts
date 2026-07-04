@@ -43,13 +43,11 @@ test("manages runs, permissions, profiles, and operations", async ({
   await expect(page.getByText("webhook:failed")).toBeVisible();
   await expect(page.getByText("Agent Chat")).toBeVisible();
   await expect(page.getByText("Human approval required")).toBeVisible();
-  await expect(page.getByText("Agent output #1")).toBeVisible();
+  await expect(page.getByText("Agent output")).toBeVisible();
   await expect(
-    page
-      .locator("main")
-      .getByText("Live runner output from the mocked SSE stream.", {
-        exact: true,
-      }),
+    page.getByText(
+      "Live runner output from the mocked SSE stream. SSE daemon chunk.",
+    ),
   ).toBeVisible();
   await page.getByLabel("Continue chat").fill("Please continue");
   await page.getByRole("button", { name: "Send" }).click();
@@ -274,6 +272,83 @@ async function mockRuntime(
         },
       ],
     },
+    "session/run_1/events.json": {
+      events: [
+        {
+          id: 1,
+          v: 1,
+          type: "session_update",
+          data: {
+            update: {
+              sessionUpdate: "user_message_chunk",
+              content: { type: "text", text: "Inspect runtime" },
+            },
+          },
+          _meta: {
+            serverTimestamp: Date.now(),
+            runtimeRunId: "run_1",
+            runtimeSequence: 1,
+          },
+        },
+        {
+          id: 2,
+          v: 1,
+          type: "permission_request",
+          data: {
+            requestId: "perm_1",
+            prompt: "Allow shell command?",
+            tool: "shell",
+            options: [{ id: "approve", label: "Approve" }],
+            context: { command: "uname -a", cwd: "/workspace" },
+          },
+          _meta: {
+            serverTimestamp: Date.now(),
+            runtimeRunId: "run_1",
+            runtimeSequence: 2,
+          },
+        },
+        {
+          id: 3,
+          v: 1,
+          type: "session_update",
+          data: {
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: {
+                type: "text",
+                text: "Live runner output from the mocked SSE stream.",
+              },
+            },
+          },
+          _meta: {
+            serverTimestamp: Date.now(),
+            runtimeRunId: "run_1",
+            runtimeSequence: 3,
+          },
+        },
+        {
+          id: 4,
+          v: 1,
+          type: "session_update",
+          data: {
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCall: {
+                name: "shell",
+                status: "completed",
+                input: "uname -a",
+                output: "Linux test-host",
+              },
+            },
+          },
+          _meta: {
+            serverTimestamp: Date.now(),
+            runtimeRunId: "run_1",
+            runtimeSequence: 4,
+          },
+        },
+      ],
+    },
     "runs/run_1/permission-notifications": {
       notifications: [
         {
@@ -487,6 +562,30 @@ async function mockRuntime(
     if (request.method() === "POST" && path.includes("/retry")) {
       await route.fulfill({
         json: { worker_id: workers[0].worker_id, requeued_run_ids: ["run_1"] },
+      });
+      return;
+    }
+    if (request.method() === "POST" && path.includes("/permission/")) {
+      await route.fulfill({ json: { accepted: true } });
+      return;
+    }
+    if (request.method() === "POST" && path.endsWith("/prompt")) {
+      await route.fulfill({
+        status: 202,
+        json: {
+          accepted: true,
+          session_id: path.split("/")[1],
+          run_id: path.split("/")[1],
+        },
+      });
+      return;
+    }
+    if (path === "session/run_1/events") {
+      await route.fulfill({
+        body:
+          "event: session_update\nid: 5\ndata: {\"id\":5,\"v\":1,\"type\":\"session_update\",\"data\":{\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\" SSE daemon chunk.\"}}},\"_meta\":{\"serverTimestamp\":1780000000000,\"runtimeRunId\":\"run_1\",\"runtimeSequence\":5}}\n\n",
+        contentType: "text/event-stream",
+        status: 200,
       });
       return;
     }

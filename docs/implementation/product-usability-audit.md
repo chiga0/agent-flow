@@ -14,7 +14,7 @@ AgentFlow 当前已经具备 run、mission、worker、artifact、audit、permiss
 | 优先级 | 问题                                       | 影响                                                | 处理                                                       |
 | ------ | ------------------------------------------ | --------------------------------------------------- | ---------------------------------------------------------- |
 | P0     | 运行详情页首屏先展示状态卡，再展示实时对话 | 用户发起任务后第一眼看不到模型流式输出              | 已调整：Agent Chat 作为左侧主视图首屏                      |
-| P0     | 页面缺少继续追加输入的 composer            | 用户无法像 AI Chat 一样继续给 run 补充上下文        | 已接入 `POST /runs/{run_id}/input`                         |
+| P0     | 页面缺少继续追加输入的 composer            | 用户无法像 AI Chat 一样继续给 run 补充上下文        | 已接入 composer；第七轮已替换为 `POST /session/{run_id}/prompt` |
 | P1     | 权限请求与聊天主线割裂                     | 用户容易误判为 runner 卡住                          | 已完成：Chat action bubble 可直接审批，右侧保留汇总        |
 | P1     | 原始事件流过于突出                         | 非工程用户会被 event schema 干扰                    | 已降低层级，保留在 Chat 下方作为审计视图                   |
 | P1     | 小 VPS 资源打满时页面表现像“空白”          | 用户难以判断是前端、Nginx、runtime 还是 runner 问题 | 已补 Units 资源水位与低配风险提示；仍建议控制面/执行面分离 |
@@ -29,13 +29,13 @@ AgentFlow 当前已经具备 run、mission、worker、artifact、audit、permiss
 
 2. Agent Chat 增加继续输入：
    - 输入框固定在 Chat 卡片底部。
-   - 提交调用 `POST /runs/{run_id}/input`。
+   - 初版提交调用 `POST /runs/{run_id}/input`；第七轮已替换为 `POST /session/{run_id}/prompt`。
    - 成功后刷新 run、run list 和事件列表。
    - terminal run 禁止继续输入，并给出明确提示。
 
 3. 测试覆盖：
    - 单测覆盖创建 run 后跳转详情页并看到 Agent Chat。
-   - 单测覆盖 run detail 追加输入到 `/runs/{id}/input`。
+   - 单测覆盖 run detail 追加输入；第七轮已改为断言 `/session/{id}/prompt`。
    - E2E 覆盖 Agent Chat 可见和继续输入。
 
 4. 第二轮产品可用性补强：
@@ -404,3 +404,68 @@ flowchart LR
 3. 将 tool call、shell output、permission request 作为 Chat 时间线主元素，而不是分散到多个面板。
 4. 增加真实 qwen raw event 与 canonical replay 的 UI 差异检测报告。
 5. 对浏览器端事件过多场景增加虚拟列表、分页 replay 或 server compaction。
+
+## 第七轮循环审计：Run Detail 完全切换到 Session BFF
+
+> 日期：2026-07-04
+> 方法：针对“为什么不完全替换”的反馈，复查浏览器端数据流、API wrapper、权限按钮、继续对话、SSE E2E 和审计保留边界。
+
+### 审计结论
+
+上一轮完成的是后端 WebShell-compatible BFF，但前端 Run Detail 仍有一部分主体验依赖 canonical RuntimeEvent reducer。这个状态会造成用户感知上的割裂：后端已经有 `/session/:id/events`，但页面看起来仍像旧事件面板。
+
+本轮已完成完整替换：
+
+1. Run Detail 主 Chat 使用 `/session/:id/events.json` 作为初始事件源。
+2. 实时连接使用 `/session/:id/events` SSE。
+3. 继续对话使用 `POST /session/:id/prompt`。
+4. 权限按钮使用 `POST /session/:id/permission/:permissionId`。
+5. Chat transcript 使用 DaemonEvent reducer 渲染 Agent 输出、工具调用、shell 输出、权限卡片和终态。
+6. canonical `/runs/:id/events.json` 仍保留在事件流和下载区，作为审计事实源，不再驱动主 Chat。
+
+### 本轮发现与修复
+
+| 视角 | 发现 | 风险 | 本轮处理 |
+| --- | --- | --- | --- |
+| 产品体验 | 主 Chat 未完全使用 session BFF | 用户看到“有 BFF 但页面还是旧逻辑” | LiveRunnerPanel 改为 `daemonEvents` 驱动 |
+| 实时性 | E2E 未覆盖 session SSE chunk | 回归时可能退回旧 `/runs` SSE | Playwright mock 新增 `/session/run_1/events` 并断言 SSE chunk 出现在 Chat |
+| 继续对话 | UI 仍可能调用旧 input endpoint | WebShell BFF 语义不完整 | submit input 改为 `submitSessionPrompt` |
+| 权限处理 | 权限按钮仍可能调用旧 permission endpoint | 用户点击后和 session worker 控制面脱节 | InlinePermissionPanel 和 Chat 权限卡改为 `resolveSessionPermission` |
+| 审计边界 | 旧事件接口看起来像残留 | 容易误删事实源 | 文档明确 `/runs` 是 audit source，`/session` 是 UI contract |
+| 测试定位 | E2E 文本同时出现在 Chat 和 JSON 审计面板 | strict mode 多匹配导致不稳定 | E2E 改为断言 session SSE 合并后的 Chat 文本 |
+
+### 当前产品判断
+
+从用户视角，单个 Run 页面现在已经更接近“AI Chat 工作台”：
+
+1. 用户能看到当前任务目标和状态。
+2. Agent 输出通过 session DaemonEvent 连续显示。
+3. 工具调用和 shell 输出进入同一条执行时间线。
+4. 权限请求直接出现在 Chat 和首屏权限区，按钮提交后不会继续依赖旧 endpoint。
+5. 审计 JSON、artifact、诊断包仍可下载或预览。
+
+这轮修复后，“实时消息流在哪里”和“权限按钮为什么没反应”这两个 P1 体验问题已降级为后续增强问题：接下来要优化的是 block 视觉、长日志压缩、tool details 展开和真实 qwen raw fixture 覆盖，而不是基础链路缺失。
+
+### 本轮验证结果
+
+1. Web lint：通过，0 warning。
+2. Web 单测：25 passed。
+3. Web 覆盖率：Statements 96.12%，Branches 90.26%，Functions 91.79%，Lines 96.12%。
+4. Web build：通过，已重新生成 runtime 静态资源。
+5. Playwright E2E：chromium/mobile 共 4 passed，2 skipped。
+6. Runtime style：通过。
+7. Runtime 单测与集成测试：92 passed。
+8. Runtime 覆盖率：90.12%。
+
+### 剩余风险
+
+| 优先级 | 风险 | 后续建议 |
+| --- | --- | --- |
+| P1 | 真实 qwen `agent_thought_chunk` 当前只显示进度，不展示隐藏思考内容 | 这是安全边界，若要展示需确认 qwen 输出字段不是模型私密思考 |
+| P1 | 长 run 的 DaemonEvent 过多时，Chat DOM 会变重 | 引入虚拟列表、服务端分页 replay 或 transcript compaction |
+| P1 | tool call 目前是文本摘要，复杂 JSON 可读性一般 | 增加可折叠结构化 tool block |
+| P2 | `/runs/:id/events` 和 `/session/:id/events` 双接口需要文档持续解释 | 在操作手册和架构文档中保持“事实源 vs UI contract”的术语一致性 |
+
+### 再审结论
+
+按文档、方案设计、源码实现、产品设计、产品易用性、新用户视角、产品体验视角复审，本轮没有发现阻塞部署的 P0/P1 缺陷。当前可以进入云端部署验证。

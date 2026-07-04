@@ -71,13 +71,14 @@ import {
   extractPermissionRequest,
   missionArtifactHref,
   resolvedPermissionIds,
-  runEventStreamHref,
   runtimeApi,
+  sessionEventStreamHref,
   type AccessProject,
   type ArtifactInfo,
   type ApiToken,
   type AuthUser,
   type CostStatus,
+  type DaemonEvent,
   type DrillCheck,
   type AgentProfile,
   type ExecutorLease,
@@ -1266,13 +1267,17 @@ function RunDetailPage() {
     queryKey: ["runs", runId, "events"],
     queryFn: () => runtimeApi.runEvents(runId),
   });
+  const sessionEvents = useQuery({
+    queryKey: ["session", runId, "events"],
+    queryFn: () => runtimeApi.sessionEvents(runId),
+  });
   const artifacts = useQuery({
     queryKey: ["runs", runId, "artifacts"],
     queryFn: () => runtimeApi.runArtifacts(runId),
   });
-  const live = useRunLiveEvents(
+  const live = useRunLiveDaemonEvents(
     runId,
-    events.data?.events ?? [],
+    sessionEvents.data?.events ?? [],
     run.data?.status,
   );
   const cancel = useMutation({
@@ -1288,13 +1293,14 @@ function RunDetailPage() {
         <div className="grid gap-4">
           <LiveRunnerPanel
             connectionStatus={live.status}
-            events={live.events}
+            daemonEvents={live.events}
             artifacts={artifacts.data?.artifacts ?? []}
+            runtimeEvents={events.data?.events ?? []}
             run={run.data}
             runId={runId}
             runStatus={run.data?.status}
           />
-          <EventList events={live.events} />
+          <EventList events={events.data?.events ?? []} />
         </div>
         <div className="grid content-start gap-4">
           <Card>
@@ -1368,50 +1374,27 @@ function RunDetailPage() {
 type LiveConnectionStatus =
   "connecting" | "live" | "reconnecting" | "closed" | "fallback";
 
-const liveEventTypes = [
-  "run.created",
-  "workspace.prepared",
-  "resources.resolved",
-  "run.queued",
-  "lease.claimed",
-  "run.started",
-  "input.accepted",
-  "step.started",
-  "step.submitted",
-  "message.delta",
-  "adapter.event",
-  "stream.warning",
-  "permission.requested",
-  "permission.notification.queued",
-  "permission.notification.sent",
-  "permission.notification.failed",
-  "permission.resolve_requested",
-  "permission.resolve_failed",
-  "permission.resolved",
-  "permission.stalled",
-  "step.completed",
-  "cost.quoted",
-  "executor.failed",
-  "event.gap_detected",
-  "run.cancel_requested",
-  "run.completed",
-  "run.failed",
-  "run.cancelled",
-  "cancel.warning",
-  "input.rejected",
-  "adapter.not_configured",
+const daemonLiveEventTypes = [
+  "session_update",
+  "shell_output",
+  "permission_request",
+  "permission_resolved",
+  "turn_complete",
+  "turn_error",
+  "prompt_cancelled",
+  "stream_error",
 ];
 
-function useRunLiveEvents(
+function useRunLiveDaemonEvents(
   runId: string,
-  initialEvents: RuntimeEvent[],
+  initialEvents: DaemonEvent[],
   runStatus?: string,
 ) {
-  const [events, setEvents] = useState<RuntimeEvent[]>(initialEvents);
+  const [events, setEvents] = useState<DaemonEvent[]>(initialEvents);
   const [status, setStatus] = useState<LiveConnectionStatus>("connecting");
 
   useEffect(() => {
-    setEvents((current) => mergeEvents(current, initialEvents));
+    setEvents((current) => mergeDaemonEvents(current, initialEvents));
   }, [initialEvents]);
 
   useEffect(() => {
@@ -1425,12 +1408,12 @@ function useRunLiveEvents(
     }
 
     setStatus("connecting");
-    const source = new EventSource(runEventStreamHref(runId));
+    const source = new EventSource(sessionEventStreamHref(runId));
     const handleEvent = (message: MessageEvent) => {
       try {
-        const event = JSON.parse(message.data) as RuntimeEvent;
-        setEvents((current) => mergeEvents(current, [event]));
-        if (isTerminalEvent(event.type)) {
+        const event = JSON.parse(message.data) as DaemonEvent;
+        setEvents((current) => mergeDaemonEvents(current, [event]));
+        if (isTerminalDaemonEvent(event.type)) {
           setStatus("closed");
           source.close();
         }
@@ -1438,7 +1421,7 @@ function useRunLiveEvents(
         setStatus("reconnecting");
       }
     };
-    for (const eventType of liveEventTypes) {
+    for (const eventType of daemonLiveEventTypes) {
       source.addEventListener(eventType, handleEvent);
     }
     source.onopen = () => setStatus("live");
@@ -1448,7 +1431,7 @@ function useRunLiveEvents(
       );
 
     return () => {
-      for (const eventType of liveEventTypes) {
+      for (const eventType of daemonLiveEventTypes) {
         source.removeEventListener(eventType, handleEvent);
       }
       source.close();
@@ -1461,24 +1444,29 @@ function useRunLiveEvents(
 function LiveRunnerPanel({
   artifacts,
   connectionStatus,
-  events,
+  daemonEvents,
+  runtimeEvents,
   run,
   runId,
   runStatus,
 }: {
   artifacts: ArtifactInfo[];
   connectionStatus: LiveConnectionStatus;
-  events: RuntimeEvent[];
+  daemonEvents: DaemonEvent[];
+  runtimeEvents: RuntimeEvent[];
   run?: RunState;
   runId: string;
   runStatus?: string;
 }) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
-  const transcript = useMemo(() => runnerTranscript(events), [events]);
+  const transcript = useMemo(
+    () => daemonRunnerTranscript(daemonEvents),
+    [daemonEvents],
+  );
   const processSummary = useMemo(
-    () => runnerProcessSummary(events, transcript),
-    [events, transcript],
+    () => daemonRunnerProcessSummary(daemonEvents, transcript),
+    [daemonEvents, transcript],
   );
   const [filter, setFilter] = useState<RunnerFilter>("all");
   const [prompt, setPrompt] = useState("");
@@ -1487,7 +1475,7 @@ function LiveRunnerPanel({
     () => filterTranscript(transcript, filter),
     [filter, transcript],
   );
-  const latest = events.at(-1);
+  const latest = daemonEvents.at(-1);
   const signal = runnerSignal(latest, runStatus);
   const workers = useQuery({
     queryKey: ["workers"],
@@ -1495,19 +1483,19 @@ function LiveRunnerPanel({
     enabled:
       signal.tone === "warn" ||
       runStatus === "queued" ||
-      latest?.type === "run.queued",
+      runtimeEvents.at(-1)?.type === "run.queued",
   });
   const stallReason = runnerStallExplanation(
-    events,
+    runtimeEvents,
     runStatus,
     workers.data?.workers ?? [],
   );
-  const resolvedPermissions = resolvedPermissionIds(events);
-  const submittedPermissions = permissionResolveRequestedIds(events);
-  const pendingPermissions = pendingPermissionRequests(events);
+  const resolvedPermissions = daemonResolvedPermissionIds(daemonEvents);
+  const submittedPermissions = permissionResolveRequestedIds(runtimeEvents);
+  const pendingPermissions = daemonPendingPermissionRequests(daemonEvents);
   const taskProgress = runTaskProgress(
     run,
-    events,
+    runtimeEvents,
     artifacts,
     workers.data?.workers ?? [],
   );
@@ -1515,7 +1503,7 @@ function LiveRunnerPanel({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const submitInput = useMutation({
     mutationFn: (nextPrompt: string) =>
-      runtimeApi.submitRunInput(runId, nextPrompt),
+      runtimeApi.submitSessionPrompt(runId, nextPrompt),
     onSuccess: async () => {
       setPrompt("");
       setInputError(null);
@@ -1523,6 +1511,9 @@ function LiveRunnerPanel({
       await queryClient.invalidateQueries({ queryKey: ["runs", runId] });
       await queryClient.invalidateQueries({
         queryKey: ["runs", runId, "events"],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["session", runId, "events"],
       });
     },
     onError: (error) => setInputError(String(error)),
@@ -1549,7 +1540,7 @@ function LiveRunnerPanel({
       return;
     }
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [filteredTranscript.length, latest?.sequence]);
+  }, [filteredTranscript.length, latest?.id]);
 
   return (
     <Card>
@@ -1576,9 +1567,9 @@ function LiveRunnerPanel({
           <Metric
             label={t("live.runnerSignal")}
             value={signal.label}
-            detail={latest ? `seq ${latest.sequence}` : undefined}
+            detail={latest ? `id ${latest.id}` : undefined}
           />
-          <Metric label={t("common.events")} value={events.length} />
+          <Metric label={t("common.events")} value={daemonEvents.length} />
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap gap-2">
@@ -1616,8 +1607,8 @@ function LiveRunnerPanel({
               size="sm"
               onClick={() =>
                 downloadText(
-                  `run-${latest?.run_id ?? "runner"}-report.md`,
-                  runnerReadableReport(transcript, events),
+                  `run-${runId}-report.md`,
+                  runnerReadableReport(transcript, runtimeEvents),
                 )
               }
             >
@@ -1854,7 +1845,7 @@ function RunnerBubble({
       if (!runId) {
         throw new Error("run id is required");
       }
-      return runtimeApi.resolvePermission(
+      return runtimeApi.resolveSessionPermission(
         runId,
         id,
         permissionDecisionPayload(option, "resolved from Agent Chat"),
@@ -1867,6 +1858,9 @@ function RunnerBubble({
       }
       await queryClient.invalidateQueries({
         queryKey: ["runs", runId, "events"],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["session", runId, "events"],
       });
       await queryClient.invalidateQueries({
         queryKey: ["runs", runId, "permission-notifications"],
@@ -1998,7 +1992,7 @@ function InlinePermissionPanel({
       id: string;
       option: NonNullable<PermissionRequest["options"]>[number];
     }) =>
-      runtimeApi.resolvePermission(
+      runtimeApi.resolveSessionPermission(
         runId,
         id,
         permissionDecisionPayload(option, "resolved from web console"),
@@ -2007,6 +2001,9 @@ function InlinePermissionPanel({
       setSubmittedIds((current) => new Set(current).add(variables.id));
       await queryClient.invalidateQueries({
         queryKey: ["runs", runId, "events"],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["session", runId, "events"],
       });
       await queryClient.invalidateQueries({
         queryKey: ["runs", runId, "permission-notifications"],
@@ -4057,6 +4054,26 @@ function mergeEvents(current: RuntimeEvent[], incoming: RuntimeEvent[]) {
   return merged;
 }
 
+function mergeDaemonEvents(current: DaemonEvent[], incoming: DaemonEvent[]) {
+  if (!incoming.length) {
+    return current;
+  }
+  const byId = new Map<string, DaemonEvent>();
+  for (const event of [...current, ...incoming]) {
+    byId.set(String(event.id), event);
+  }
+  const merged = [...byId.values()].sort(
+    (left, right) => daemonSequence(left) - daemonSequence(right),
+  );
+  if (
+    merged.length === current.length &&
+    merged.every((event, index) => String(event.id) === String(current[index]?.id))
+  ) {
+    return current;
+  }
+  return merged;
+}
+
 function pendingPermissionRequests(events: RuntimeEvent[]) {
   const resolved = resolvedPermissionIds(events);
   const submitted = permissionResolveRequestedIds(events);
@@ -4234,6 +4251,332 @@ function runTaskProgress(
     nextAction: "关注下方实时对话；出现权限卡片时及时处理。",
     tone: "ok",
     evidence,
+  };
+}
+
+function daemonRunnerTranscript(events: DaemonEvent[]): RunnerTranscriptItem[] {
+  const items: RunnerTranscriptItem[] = [];
+  const agentMessages = new Map<string, RunnerTranscriptItem>();
+  const progressMessages = new Map<string, RunnerTranscriptItem>();
+
+  for (const event of events) {
+    const update = daemonSessionUpdate(event);
+    const sessionUpdate = stringValue(update?.sessionUpdate);
+    const base = daemonBaseTranscriptItem(event);
+
+    if (event.type === "session_update" && sessionUpdate === "agent_message_chunk") {
+      const text = daemonContentText(update) ?? "";
+      if (!text.trim()) {
+        continue;
+      }
+      const key = "daemon-agent-current";
+      const existing = agentMessages.get(key);
+      if (existing) {
+        existing.body = `${existing.body}${text}`;
+        existing.sequence = base.sequence;
+        existing.created_at = base.created_at;
+      } else {
+        const item: RunnerTranscriptItem = {
+          ...base,
+          id: key,
+          role: "agent",
+          title: "Agent output",
+          body: text,
+        };
+        agentMessages.set(key, item);
+        items.push(item);
+      }
+      continue;
+    }
+
+    if (event.type === "session_update" && sessionUpdate === "agent_thought_chunk") {
+      const key = "daemon-agent-progress";
+      const existing = progressMessages.get(key);
+      if (existing) {
+        existing.sequence = base.sequence;
+        existing.created_at = base.created_at;
+      } else {
+        const item: RunnerTranscriptItem = {
+          ...base,
+          id: key,
+          role: "system",
+          title: "Agent progress",
+          body: "Model is analyzing the request and preparing the next action.",
+        };
+        progressMessages.set(key, item);
+        items.push(item);
+      }
+      continue;
+    }
+
+    const item = daemonTranscriptItemForEvent(event);
+    if (item) {
+      items.push(item);
+    }
+  }
+
+  return items.sort((left, right) => left.sequence - right.sequence);
+}
+
+function daemonTranscriptItemForEvent(
+  event: DaemonEvent,
+): RunnerTranscriptItem | null {
+  const base = daemonBaseTranscriptItem(event);
+  const update = daemonSessionUpdate(event);
+  const sessionUpdate = stringValue(update?.sessionUpdate);
+  if (event.type === "session_update") {
+    if (sessionUpdate === "user_message_chunk") {
+      return {
+        ...base,
+        role: "operator",
+        title: "Prompt submitted",
+        body: daemonContentText(update) ?? "User input was accepted.",
+      };
+    }
+    if (sessionUpdate === "tool_call" || sessionUpdate === "tool_call_update") {
+      return {
+        ...base,
+        role: daemonToolRole(update),
+        title: daemonToolTitle(update),
+        body: daemonToolBody(update),
+      };
+    }
+    if (sessionUpdate === "status") {
+      const status = recordValue(update?.status);
+      return {
+        ...base,
+        role: "system",
+        title: stringValue(status?.eventType) ?? "Status",
+        body: stringValue(status?.message) ?? compactJson(update),
+      };
+    }
+    return null;
+  }
+  if (event.type === "shell_output") {
+    const stdout = stringValue(event.data.stdout);
+    const stderr = stringValue(event.data.stderr);
+    return {
+      ...base,
+      role: stderr ? "warning" : "system",
+      title: "Shell output",
+      body: [stdout, stderr].filter(Boolean).join("\n") || compactJson(event.data),
+    };
+  }
+  if (event.type === "permission_request") {
+    const permission = daemonPermissionRequest(event);
+    return {
+      ...base,
+      role: "warning",
+      title: "Permission required",
+      body: permission?.prompt ?? permission?.tool ?? compactJson(event.data),
+      permissionRequest: permission ?? undefined,
+    };
+  }
+  if (event.type === "permission_resolved") {
+    return {
+      ...base,
+      role: "success",
+      title: "Permission resolved",
+      body: `Decision: ${stringValue(event.data.decision) ?? "recorded"}`,
+    };
+  }
+  if (event.type === "turn_complete") {
+    return {
+      ...base,
+      role: "success",
+      title: "Runner completed",
+      body: "Runner completed this turn.",
+    };
+  }
+  if (event.type === "turn_error") {
+    return {
+      ...base,
+      role: "error",
+      title: "Runner error",
+      body: stringValue(event.data.message) ?? compactJson(event.data),
+    };
+  }
+  if (event.type === "prompt_cancelled") {
+    return {
+      ...base,
+      role: "warning",
+      title: "Prompt cancelled",
+      body: stringValue(event.data.reason) ?? "Prompt was cancelled.",
+    };
+  }
+  if (event.type === "stream_error") {
+    return {
+      ...base,
+      role: "warning",
+      title: "Stream recovered",
+      body: stringValue(event.data.message) ?? compactJson(event.data),
+    };
+  }
+  return {
+    ...base,
+    role: "system",
+    title: event.type,
+    body: compactJson(event.data),
+  };
+}
+
+function daemonBaseTranscriptItem(event: DaemonEvent) {
+  return {
+    id: String(event.id),
+    created_at: daemonCreatedAt(event),
+    event_type: event.type,
+    sequence: daemonSequence(event),
+  };
+}
+
+function daemonSessionUpdate(event: DaemonEvent) {
+  return recordValue(event.data.update) ?? recordValue(event.data);
+}
+
+function daemonContentText(update: Record<string, unknown> | null) {
+  if (!update) {
+    return null;
+  }
+  const content = update.content;
+  const contentRecord = recordValue(content);
+  if (contentRecord) {
+    return stringValue(contentRecord.text);
+  }
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  return content
+    .map((item) => {
+      const itemRecord = recordValue(item);
+      const nested = recordValue(itemRecord?.content);
+      return stringValue(nested?.text) ?? stringValue(itemRecord?.text);
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function daemonToolPayload(update: Record<string, unknown> | null) {
+  return recordValue(update?.toolCall) ?? update;
+}
+
+function daemonToolTitle(update: Record<string, unknown> | null) {
+  const tool = daemonToolPayload(update);
+  const status = stringValue(tool?.status) ?? stringValue(update?.status);
+  const name =
+    stringValue(tool?.name) ??
+    stringValue(tool?.title) ??
+    stringValue(update?.title) ??
+    "Tool call";
+  return status ? `${name} · ${status}` : name;
+}
+
+function daemonToolBody(update: Record<string, unknown> | null) {
+  const tool = daemonToolPayload(update);
+  const input = tool?.input ?? tool?.rawInput;
+  const output = tool?.output ?? tool?.rawOutput;
+  const command =
+    typeof input === "string"
+      ? input
+      : stringValue(recordValue(input)?.command) ?? stringValue(recordValue(input)?.cmd);
+  return [
+    stringValue(tool?.name) ?? stringValue(update?.title) ?? "tool event",
+    stringValue(tool?.status) ? `status: ${stringValue(tool?.status)}` : undefined,
+    command ? `command: ${command}` : undefined,
+    input && !command ? `input: ${compactJson(input)}` : undefined,
+    output ? `output: ${typeof output === "string" ? output : compactJson(output)}` : undefined,
+    daemonContentText(update) ? `content: ${daemonContentText(update)}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function daemonToolRole(update: Record<string, unknown> | null) {
+  const tool = daemonToolPayload(update);
+  const status = stringValue(tool?.status) ?? stringValue(update?.status);
+  return status === "failed" || status === "error" ? "error" : "system";
+}
+
+function daemonPermissionRequest(event: DaemonEvent): PermissionRequest | null {
+  const requestId = stringValue(event.data.requestId);
+  if (!requestId) {
+    return null;
+  }
+  const options = Array.isArray(event.data.options) ? event.data.options : [];
+  return {
+    permission_id: requestId,
+    prompt: stringValue(event.data.prompt),
+    tool: stringValue(event.data.tool),
+    options: options
+      .map((option) => recordValue(option))
+      .filter((option): option is Record<string, unknown> => Boolean(option))
+      .map((option) => ({
+        id: stringValue(option.id) ?? "approve",
+        label: stringValue(option.label),
+        description: stringValue(option.description),
+      })),
+    raw: recordValue(event.data.context) ?? event.data,
+  };
+}
+
+function daemonResolvedPermissionIds(events: DaemonEvent[]) {
+  const resolved = new Set<string>();
+  for (const event of events) {
+    if (event.type !== "permission_resolved") {
+      continue;
+    }
+    const id = stringValue(event.data.requestId);
+    if (id) {
+      resolved.add(id);
+    }
+  }
+  return resolved;
+}
+
+function daemonPendingPermissionRequests(events: DaemonEvent[]) {
+  const resolved = daemonResolvedPermissionIds(events);
+  const seen = new Set<string>();
+  return events
+    .map(daemonPermissionRequest)
+    .filter((request): request is PermissionRequest => Boolean(request))
+    .filter((request) => {
+      if (seen.has(request.permission_id) || resolved.has(request.permission_id)) {
+        return false;
+      }
+      seen.add(request.permission_id);
+      return true;
+    });
+}
+
+function daemonRunnerProcessSummary(
+  events: DaemonEvent[],
+  transcript: RunnerTranscriptItem[],
+): RunnerProcessSummary {
+  const messageChunks = events.filter((event) => {
+    const update = daemonSessionUpdate(event);
+    return (
+      event.type === "session_update" &&
+      stringValue(update?.sessionUpdate) === "agent_message_chunk" &&
+      Boolean(daemonContentText(update))
+    );
+  }).length;
+  const progressSignals = events.filter((event) => {
+    const update = daemonSessionUpdate(event);
+    return stringValue(update?.sessionUpdate) === "agent_thought_chunk";
+  }).length;
+  const toolItems = transcript.filter((item) =>
+    item.event_type === "shell_output" ||
+    item.title.toLowerCase().includes("tool") ||
+    item.title.toLowerCase().includes("shell") ||
+    item.body.toLowerCase().includes("command:"),
+  );
+  return {
+    messageChunks,
+    progressSignals,
+    toolCalls: toolItems.length,
+    permissionRequests: events.filter((event) => event.type === "permission_request")
+      .length,
+    rawAdapterEvents: 0,
+    lastTool: toolItems.at(-1),
   };
 }
 
@@ -4752,8 +5095,11 @@ function filterTranscript(
   if (filter === "tools") {
     return transcript.filter(
       (item) =>
-        item.event_type === "adapter.event" &&
+        (item.event_type === "adapter.event" ||
+          item.event_type === "session_update" ||
+          item.event_type === "shell_output") &&
         (item.title.toLowerCase().includes("tool") ||
+          item.title.toLowerCase().includes("shell") ||
           item.body.toLowerCase().includes("command:") ||
           item.body.toLowerCase().includes("exit code")),
     );
@@ -4811,14 +5157,16 @@ function runnerProcessSummary(
   };
 }
 
-function runnerSignal(latest?: RuntimeEvent, runStatus?: string) {
+function runnerSignal(latest?: RuntimeEvent | DaemonEvent, runStatus?: string) {
   if (isTerminal(runStatus)) {
     return { label: "terminal", tone: "neutral" as const };
   }
   if (!latest) {
     return { label: "waiting", tone: "neutral" as const };
   }
-  const ageMs = Date.now() - new Date(latest.created_at).getTime();
+  const createdAt =
+    "created_at" in latest ? latest.created_at : daemonCreatedAt(latest);
+  const ageMs = Date.now() - new Date(createdAt).getTime();
   if (Number.isFinite(ageMs) && ageMs > 120_000) {
     return { label: "stalled", tone: "warn" as const };
   }
@@ -5262,6 +5610,30 @@ function isTerminalEvent(eventType: string) {
   return ["run.completed", "run.failed", "run.cancelled"].includes(eventType);
 }
 
+function isTerminalDaemonEvent(eventType: string) {
+  return ["turn_complete", "turn_error", "prompt_cancelled"].includes(eventType);
+}
+
+function daemonSequence(event: DaemonEvent) {
+  if (typeof event.id === "number") {
+    return event.id;
+  }
+  const parsed = Number(event.id);
+  if (Number.isFinite(parsed)) {
+    return parsed;
+  }
+  const metaSequence = Number(recordValue(event._meta)?.runtimeSequence);
+  return Number.isFinite(metaSequence) ? metaSequence : 0;
+}
+
+function daemonCreatedAt(event: DaemonEvent) {
+  const timestamp = Number(recordValue(event._meta)?.serverTimestamp);
+  if (Number.isFinite(timestamp) && timestamp > 0) {
+    return new Date(timestamp).toISOString();
+  }
+  return new Date().toISOString();
+}
+
 function isTerminal(status?: string) {
   return Boolean(
     status && ["completed", "failed", "cancelled"].includes(status),
@@ -5285,7 +5657,9 @@ export const __testUtils = {
   formatBytes,
   fetchTextArtifact,
   isTerminalEvent,
+  isTerminalDaemonEvent,
   mergeEvents,
+  mergeDaemonEvents,
   money,
   objectValue,
   parseJsonObject,
@@ -5296,6 +5670,12 @@ export const __testUtils = {
   runnerProcessSummary,
   runnerSignal,
   runnerTranscript,
+  daemonRunnerTranscript,
+  daemonRunnerProcessSummary,
+  daemonPendingPermissionRequests,
+  daemonResolvedPermissionIds,
+  daemonCreatedAt,
+  daemonSequence,
   runTaskProgress,
   shellSingleQuote,
   stringValue,

@@ -460,3 +460,71 @@ Audit source: Event Store + raw adapter artifacts
 ```
 
 只要坚持这条边界，未来无论执行 Agent 是 Qwen Code、Codex、Claude Code、OpenCode 还是自研 worker，前端 Chat 都可以共享同一套渲染组件。
+
+## 2026-07-04 前端替换记录
+
+本轮已完成 Run Detail 的前端替换：管理台的主 Chat 工作台不再从 `/runs/:id/events` 推导实时 transcript，而是消费 WebShell-compatible BFF 的 `/session/:id/events.json` 和 `/session/:id/events`。
+
+### 已替换链路
+
+| 场景 | 替换前 | 替换后 |
+| --- | --- | --- |
+| 初始 transcript | `/runs/:id/events.json` | `/session/:id/events.json` |
+| 实时 SSE | `/runs/:id/events` | `/session/:id/events` |
+| 继续对话 | `POST /runs/:id/input` | `POST /session/:id/prompt` |
+| 权限处理 | `POST /runs/:id/permissions/:permissionId` | `POST /session/:id/permission/:permissionId` |
+| Chat reducer | RuntimeEvent reducer | DaemonEvent reducer |
+| 审计事件列表 | RuntimeEvent | 保留 RuntimeEvent 事实源 |
+
+这意味着用户在运行详情页看到的 Agent 输出、工具调用、shell 输出、权限卡片和 runner 状态，已经来自 DaemonEvent UI contract。`/runs/:id/events` 仍然保留，但用途收敛为 canonical audit、事件列表、历史兼容和自动化排障，不再承担主 Chat 渲染职责。
+
+### 前端 DaemonEvent reducer
+
+本轮新增前端 DaemonEvent reducer，当前支持：
+
+1. `session_update/user_message_chunk`：渲染用户输入。
+2. `session_update/agent_message_chunk`：连续合并为 Agent output。
+3. `session_update/agent_thought_chunk`：只显示进度信号，不暴露内部思考文本。
+4. `session_update/tool_call` 和 `tool_call_update`：渲染工具名称、状态、输入和输出摘要。
+5. `shell_output`：渲染 stdout/stderr。
+6. `permission_request`：渲染可操作权限卡片。
+7. `permission_resolved`：隐藏已解决权限并记录结果。
+8. `turn_complete`、`turn_error`、`prompt_cancelled`、`stream_error`：渲染终态或恢复提示。
+
+### 边界说明
+
+本轮不是把平台事实源替换为 Qwen schema。正确边界仍然是：
+
+```text
+Runtime contract: AgentFlow canonical RuntimeEvent
+UI contract: Qwen-compatible DaemonEvent
+Run Detail Chat: /session/:id/events
+Audit and replay source: /runs/:id/events.json + artifacts/events.jsonl
+```
+
+这样可以同时满足两个目标：
+
+1. 管理台具备类似 AI Chat/WebShell 的实时体验。
+2. 后端仍能兼容 Codex、Claude Code、Qwen Code、OpenCode 和远程 worker。
+
+### 验证结果
+
+本轮本地验证已完成：
+
+1. Web lint：通过，0 warning。
+2. Web 单测：25 passed。
+3. Web 覆盖率：Statements 96.12%，Branches 90.26%，Functions 91.79%，Lines 96.12%。
+4. Web build：通过，已重新生成 runtime static assets。
+5. Playwright E2E：chromium/mobile 共 4 passed，2 skipped；覆盖 Run Detail 读取 session JSON、接收 session SSE chunk、发送 session prompt、提交 session permission。
+6. Runtime style：通过。
+7. Runtime 单测与集成测试：92 passed。
+8. Runtime 覆盖率：90.12%。
+
+### 后续建议
+
+下一步不再是“是否切换到 session BFF”，而是继续提升 WebShell 渲染质量：
+
+1. 将 DaemonEvent transcript block 抽成独立组件，降低 Run Detail 复杂度。
+2. 对长输出启用虚拟列表或服务端 compaction。
+3. 增加 tool call 的结构化展开/收起。
+4. 接入更多真实 qwen raw event fixture，持续做前端 conformance 检测。
