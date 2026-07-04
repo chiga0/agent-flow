@@ -14,6 +14,7 @@ ROLE_DEFINITIONS = [
         "description": "Can administer runtime, profiles, missions, runs, and backups.",
         "permissions": [
             "runs:*",
+            "tasks:*",
             "missions:*",
             "events:*",
             "artifacts:*",
@@ -33,6 +34,7 @@ ROLE_DEFINITIONS = [
             "runs:create",
             "runs:read",
             "runs:cancel",
+            "tasks:*",
             "events:read",
             "missions:create",
             "missions:read",
@@ -45,10 +47,25 @@ ROLE_DEFINITIONS = [
         ],
     },
     {
+        "id": "member",
+        "description": "Can use the task workspace and operate their own tasks.",
+        "permissions": [
+            "tasks:create",
+            "tasks:read",
+            "tasks:write",
+            "tasks:cancel",
+            "events:read",
+            "artifacts:read",
+            "permissions:read",
+            "permissions:resolve",
+        ],
+    },
+    {
         "id": "auditor",
         "description": "Can read events, artifacts, metrics, and audit bundles.",
         "permissions": [
             "runs:read",
+            "tasks:read",
             "missions:read",
             "events:read",
             "permissions:read",

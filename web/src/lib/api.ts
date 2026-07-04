@@ -72,6 +72,11 @@ export interface TaskState {
   agent_summary: Record<string, unknown>;
   needs_attention: boolean;
   pending_permission_count: number;
+  access?: {
+    created_by?: string;
+    project_id?: string;
+    visibility?: string;
+  };
   source: { run_id?: string | null; mission_id?: string | null };
   result_summary?: string | null;
   links: Record<string, string>;

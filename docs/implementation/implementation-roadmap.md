@@ -41,6 +41,7 @@ V2 的目标不再是把 AgentFlow 首先呈现为 Run Manager / Worker / Execut
 设计产物：
 
 - [AgentFlow V2 产品与架构整体方案](v2-product-architecture.md)
+- [AgentFlow V2 实施 Roadmap](v2-implementation-roadmap.md)
 - [AgentFlow V2 多轮审计记录](v2-product-architecture-audit.md)
 - [DeerFlow 深度调研与 AgentFlow 对比](deer-flow-comparative-research.md)
 
@@ -50,7 +51,7 @@ V2 实施阶段：
 | --- | --- | --- | --- |
 | V2-P0 | 方案定稿与审计 | `design_ready_for_review` | owner review 通过，明确 V2 MVP 范围 |
 | V2-P1 | 用户端 Task Workspace | `foundation_done` | 首页工作台可创建 task、查看列表、实时进展、结果和产物；后台 run/mission 细节被隐藏 |
-| V2-P2 | 正式认证与用户隔离 | `not_started` | `/setup`、CSRF、改密码、token_version、task/run 用户隔离可用 |
+| V2-P2 | 正式认证与用户隔离 | `in_progress` | `/setup`、CSRF、改密码、token_version、task/run 用户隔离可用 |
 | V2-P3 | 默认 Agent 编排 | `not_started` | 复杂 task 自动生成 plan 并创建 mission；简单 task 退化为 single run |
 | V2-P4 | 文件、Skills 与结果页 | `not_started` | 文件上传成为 task input；结果页可消费；基础 `SKILL.md` registry 可用 |
 | V2-P5 | IM / 移动端入口 | `not_started` | IM 可发起 task、接收通知、处理 permission |
@@ -68,6 +69,11 @@ V2-P1 尚未包含：
 - 真正的任务 owner/project 隔离，仍依赖当前单租户 RBAC foundation。
 - 自动任务规划器，复杂任务需要用户显式选择多 Agent 编排。
 - 文件上传、Skills registry、IM/移动端入口。
+
+V2-P2 当前推进：
+
+- P2a：`/tasks` 写入并读取 `created_by`、`project_id`、`visibility`，普通 session 用户只能看到自己的任务，owner 可看全部。
+- P2b-P2e：用户管理 UI、CSRF/改密码/token_version、project membership、artifact/result/permission 全链路隔离仍在后续切片中。
 
 ## P0：设计与审计
 

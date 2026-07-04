@@ -47,6 +47,95 @@ Go for implementation after owner review.
 No-Go for public multi-user exposure until V2-P2 is complete.
 ```
 
+## 2026-07-04 P2a 实施后审计
+
+### 实施内容
+
+本轮开始进入 V2-P2，先完成用户侧 Workspace 的最小数据隔离：
+
+- `/tasks` 创建时写入 `created_by`、`project_id`、`visibility` 元数据。
+- `/tasks` 列表、详情、事件、结果、artifact、追加消息、取消都接收同一访问上下文。
+- session 用户默认只能看到自己创建的 task。
+- owner 可查看全部 task。
+- API token 身份进入同一 `current_identity` 流程，为后续 project-scoped token 做准备。
+- 新增 `member` 角色，用于普通用户的 Workspace 主流程；`member` 不持有直接 `/runs` 后台读取权限。
+- 前端导航按角色隐藏后台入口，member 默认只看到 Workspace。
+- 新增 V2 独立实施 Roadmap，明确每阶段必须有审计和 E2E 门禁。
+
+### Design Review
+
+通过。
+
+本轮没有新建 Task 表，而是先使用 Run/Mission metadata 建立产品层访问边界。这样可以最快保护用户端 Workspace，又不破坏现有 Run/Mission/Worker/Executor 事实源。
+
+约束：
+
+- Task projection 仍不是审计事实源。
+- created_by/project_id/visibility 是产品访问元数据，后续可迁移为正式 task 表。
+- 后台 Runs/Missions 仍是治理视图，P2a 只承诺 `/tasks` 用户入口隔离。
+
+### Security Review
+
+条件通过。
+
+已修复：
+
+- 普通 session 用户不能通过 `/tasks/{id}`、`/tasks/{id}/messages` 查看或操作他人任务。
+- member 用户不能直接读取 `/runs` 后台列表。
+- owner 仍可审计全部任务。
+- API token identity 被写入 request context，不再只有 session 能进入访问上下文。
+
+仍需后续 P2b-P2e 修复：
+
+- Runs/Missions/Artifacts 的后台 API 仍按角色 scope 管控，不按 task owner 过滤。
+- Project membership 还没有正式表结构。
+- CSRF、改密码、token_version、session revoke-all 还没完成。
+- Permission decision 的 `decided_by` 仍需强制以后端 session principal 为准。
+
+### Product Review
+
+通过。
+
+本轮把“普通用户默认只在 Workspace 使用”推进了一步：
+
+- 新增 `member` 角色。
+- member 导航隐藏 Overview/Runs/Executors/Access/Operations 等后台页面。
+- Workspace 创建任务和 Task Detail 仍保持用户任务语言。
+
+产品风险：
+
+- 当前管理员创建用户时仍需手动选择角色，缺少邀请/禁用/重置密码等完整账户生命周期。
+- Task Detail 对 owner/operator/auditor 仍保留后台源链接，这是后台角色的必要排障入口；member 默认看不到后台导航，但后续还应对后台源链接做更细粒度角色判断。
+
+### Architecture Review
+
+通过。
+
+本轮符合 V2 分层：
+
+```text
+Workspace Task projection -> Run/Mission metadata -> canonical event/audit source
+```
+
+没有把权限过滤散落到前端，而是在后端 manager 层集中判断，HTTP 层只负责传入当前身份。
+
+### Test Review
+
+已补充：
+
+- Runtime integration test：owner 创建 Alice/Bob，Alice/Bob 分别创建任务，Alice 只能看到自己的任务，owner 可看全部。
+- E2E：Workspace 创建 task 并进入 Task Detail。
+- E2E：member 用户看不到后台导航。
+
+本轮本地验收项：
+
+- `python3 -m unittest discover -s runtime/tests -p 'test_runtime_server.py'`
+- `python3 scripts/check_style.py`
+- `npm run lint`
+- `npm run test`
+- `npm run build`
+- `npm run test:e2e`
+
 ## 第一轮：产品目标审计
 
 ### 审计问题

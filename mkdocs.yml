@@ -25,10 +25,12 @@ nav:
       - 方案审计与 Review 记录: implementation/review-and-audit-record.md
       - 本地或 NAS 主控部署教程: implementation/local-nas-control-plane-deployment.md
       - 实施 Roadmap: implementation/implementation-roadmap.md
+      - V2 实施 Roadmap: implementation/v2-implementation-roadmap.md
   - 架构设计:
       - 架构总览: implementation/index.md
       - AgentFlow 架构与术语: architecture.md
       - AgentFlow V2 产品与架构整体方案: implementation/v2-product-architecture.md
+      - AgentFlow V2 实施 Roadmap: implementation/v2-implementation-roadmap.md
       - AgentFlow V2 多轮审计记录: implementation/v2-product-architecture-audit.md
       - 稳定单 Agent 执行单元: implementation/stable-agent-execution-unit.md
       - SubAgent 与独立执行单元边界: implementation/subagent-vs-execution-unit.md

@@ -612,6 +612,94 @@ class RuntimeServerTest(unittest.TestCase):
                 )
                 self.assertEqual(cancelled["status"], "cancelled")
 
+    def test_task_workspace_filters_by_session_principal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with running_runtime(
+                artifact_root=Path(tmp),
+                token="secret",
+                login_user="cloudagents",
+                login_password="password",
+                bootstrap_email="owner@example.com",
+                worker_capacity=0,
+            ) as base_url:
+                owner_cookie = request_raw(
+                    f"{base_url}/auth/login",
+                    method="POST",
+                    payload={"email": "owner@example.com", "password": "password"},
+                ).headers["set-cookie"]
+                for email in ("alice@example.com", "bob@example.com"):
+                    created = request_json(
+                        f"{base_url}/auth/users",
+                        method="POST",
+                        headers={"cookie": owner_cookie},
+                        payload={
+                            "email": email,
+                            "display_name": email.split("@", 1)[0].title(),
+                            "password": "password",
+                            "roles": ["member"],
+                            "email_verified": True,
+                        },
+                    )
+                    self.assertEqual(created["email"], email)
+
+                alice_cookie = request_raw(
+                    f"{base_url}/auth/login",
+                    method="POST",
+                    payload={"email": "alice@example.com", "password": "password"},
+                ).headers["set-cookie"]
+                bob_cookie = request_raw(
+                    f"{base_url}/auth/login",
+                    method="POST",
+                    payload={"email": "bob@example.com", "password": "password"},
+                ).headers["set-cookie"]
+
+                alice_task = request_json(
+                    f"{base_url}/tasks",
+                    method="POST",
+                    headers={"cookie": alice_cookie},
+                    payload={"goal": "alice private workspace task", "adapter": "fake"},
+                )
+                bob_task = request_json(
+                    f"{base_url}/tasks",
+                    method="POST",
+                    headers={"cookie": bob_cookie},
+                    payload={"goal": "bob private workspace task", "adapter": "fake"},
+                )
+                self.assertEqual(alice_task["access"]["created_by"], "alice@example.com")
+                self.assertEqual(bob_task["access"]["created_by"], "bob@example.com")
+
+                alice_tasks = request_json(
+                    f"{base_url}/tasks",
+                    headers={"cookie": alice_cookie},
+                )["tasks"]
+                self.assertEqual({task["task_id"] for task in alice_tasks}, {alice_task["task_id"]})
+                with self.assertRaises(urllib.error.HTTPError) as hidden_runs:
+                    request_json(f"{base_url}/runs", headers={"cookie": alice_cookie})
+                self.assertEqual(hidden_runs.exception.code, HTTPStatus.FORBIDDEN)
+                with self.assertRaises(urllib.error.HTTPError) as hidden_detail:
+                    request_json(
+                        f"{base_url}/tasks/{bob_task['task_id']}",
+                        headers={"cookie": alice_cookie},
+                    )
+                self.assertEqual(hidden_detail.exception.code, HTTPStatus.NOT_FOUND)
+                with self.assertRaises(urllib.error.HTTPError) as hidden_message:
+                    request_json(
+                        f"{base_url}/tasks/{bob_task['task_id']}/messages",
+                        method="POST",
+                        headers={"cookie": alice_cookie},
+                        payload={"message": "peek"},
+                    )
+                self.assertEqual(hidden_message.exception.code, HTTPStatus.NOT_FOUND)
+
+                owner_tasks = request_json(
+                    f"{base_url}/tasks",
+                    headers={"cookie": owner_cookie},
+                )["tasks"]
+                self.assertEqual(
+                    {alice_task["task_id"], bob_task["task_id"]},
+                    {task["task_id"] for task in owner_tasks},
+                )
+
     def test_task_workspace_bff_wraps_missions_and_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with running_runtime(artifact_root=Path(tmp), worker_capacity=0) as base_url:

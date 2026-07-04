@@ -38,6 +38,8 @@ Workspace 是默认首页，也是普通用户的主要入口。
 
 Workspace 背后的 API 是 `/tasks`。它会把底层 run 或 mission 投影为统一的用户任务，所以普通用户不需要先理解 run、worker、executor、lease 等技术参数。
 
+当前 Workspace 已开始按登录用户隔离：普通 `member` 只能看到自己创建的 task；`owner` 可查看全部 task；后台 operator/auditor 仍通过后台入口做排障和审计。项目成员级共享属于后续 V2-P2 子阶段。
+
 ## Task Detail
 
 Task Detail 是用户查看单个任务的主页面。
@@ -184,6 +186,7 @@ Access 用来管理 API token 和基础访问能力。
 建议：
 
 - 只有 `owner` 可以在页面内创建登录用户、项目和 API token。
+- `member` 用于普通用户的 Workspace 主流程，只能看到自己创建的 task。
 - `operator` 用于日常创建/取消 run、mission 和处理权限请求。
 - `auditor` 用于只读查看事件、artifact、审计材料和状态。
 - worker token 使用 `workers:*` scope。

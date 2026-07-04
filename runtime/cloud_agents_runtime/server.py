@@ -174,10 +174,13 @@ def make_handler(
                 self.write_json({"missions": manager.list_missions()})
                 return
             if len(parts) == 1 and parts[0] == "tasks":
-                self.write_json({"tasks": manager.list_tasks()})
+                self.write_json({"tasks": manager.list_tasks(self.access_context())})
                 return
             if len(parts) == 2 and parts[0] == "tasks":
-                task = manager.get_task(unquote(parts[1]))
+                task = manager.get_task(
+                    unquote(parts[1]),
+                    access_context=self.access_context(),
+                )
                 if task is None:
                     self.write_error(HTTPStatus.NOT_FOUND, "task not found")
                     return
@@ -185,19 +188,38 @@ def make_handler(
                 return
             if len(parts) == 3 and parts[0] == "tasks" and parts[2] == "events.json":
                 try:
-                    self.write_json({"events": manager.task_events(unquote(parts[1]))})
+                    self.write_json(
+                        {
+                            "events": manager.task_events(
+                                unquote(parts[1]),
+                                access_context=self.access_context(),
+                            )
+                        }
+                    )
                 except KeyError:
                     self.write_error(HTTPStatus.NOT_FOUND, "task not found")
                 return
             if len(parts) == 3 and parts[0] == "tasks" and parts[2] == "artifacts":
                 try:
-                    self.write_json({"artifacts": manager.task_artifacts(unquote(parts[1]))})
+                    self.write_json(
+                        {
+                            "artifacts": manager.task_artifacts(
+                                unquote(parts[1]),
+                                access_context=self.access_context(),
+                            )
+                        }
+                    )
                 except KeyError:
                     self.write_error(HTTPStatus.NOT_FOUND, "task not found")
                 return
             if len(parts) == 3 and parts[0] == "tasks" and parts[2] == "result":
                 try:
-                    self.write_json(manager.task_result(unquote(parts[1])))
+                    self.write_json(
+                        manager.task_result(
+                            unquote(parts[1]),
+                            access_context=self.access_context(),
+                        )
+                    )
                 except KeyError:
                     self.write_error(HTTPStatus.NOT_FOUND, "task not found")
                 return
@@ -496,12 +518,16 @@ def make_handler(
                     self.write_json(mission, status=HTTPStatus.CREATED)
                     return
                 if len(parts) == 1 and parts[0] == "tasks":
-                    task = manager.create_task(payload)
+                    task = manager.create_task(payload, access_context=self.access_context())
                     self.write_json(task, status=HTTPStatus.CREATED)
                     return
                 if len(parts) == 3 and parts[0] == "tasks" and parts[2] == "cancel":
                     try:
-                        task = manager.cancel_task(unquote(parts[1]), payload.get("reason"))
+                        task = manager.cancel_task(
+                            unquote(parts[1]),
+                            payload.get("reason"),
+                            access_context=self.access_context(),
+                        )
                     except KeyError:
                         self.write_error(HTTPStatus.NOT_FOUND, "task not found")
                         return
@@ -513,7 +539,11 @@ def make_handler(
                         self.write_error(HTTPStatus.BAD_REQUEST, "message is required")
                         return
                     try:
-                        accepted = manager.send_task_message(unquote(parts[1]), message)
+                        accepted = manager.send_task_message(
+                            unquote(parts[1]),
+                            message,
+                            access_context=self.access_context(),
+                        )
                     except KeyError:
                         self.write_error(HTTPStatus.NOT_FOUND, "task not found")
                         return
@@ -780,6 +810,7 @@ def make_handler(
                     self.headers.get("authorization")
                 )
             if identity:
+                self.current_identity = identity
                 required_scope = required_scope_for(self.command, path)
                 if required_scope is None or scopes_allow(identity["scopes"], required_scope):
                     return True
@@ -864,9 +895,9 @@ def make_handler(
             roles = payload.get("roles") or ["operator"]
             if not isinstance(roles, list) or not all(isinstance(role, str) for role in roles):
                 raise ValueError("roles must be a list of strings")
-            allowed_roles = {"owner", "operator", "auditor"}
+            allowed_roles = {"owner", "operator", "auditor", "member"}
             if any(role not in allowed_roles for role in roles):
-                raise ValueError("roles may only contain owner, operator, or auditor")
+                raise ValueError("roles may only contain owner, operator, auditor, or member")
             user = manager.store.create_auth_user(
                 email=email,
                 display_name=str(payload.get("display_name") or email),
@@ -889,6 +920,14 @@ def make_handler(
             if not isinstance(roles, list):
                 return None
             return [role for role in roles if isinstance(role, str)]
+
+        def access_context(self) -> dict[str, Any] | None:
+            if not self.current_identity:
+                return None
+            context = dict(self.current_identity)
+            if "principal_id" not in context and context.get("email"):
+                context["principal_id"] = context["email"]
+            return context
 
         def cookie_path(self) -> str:
             prefix = self.headers.get("x-forwarded-prefix", "").strip().rstrip("/")
@@ -1116,10 +1155,12 @@ def required_scope_for(method: str, path: str) -> str | None:
                 return "artifacts:read"
             if len(parts) >= 3 and parts[2] in {"events.json", "result"}:
                 return "events:read"
-            return "runs:read"
+            return "tasks:read"
         if len(parts) >= 3 and parts[2] == "cancel":
-            return "runs:cancel"
-        return "runs:create"
+            return "tasks:cancel"
+        if len(parts) >= 3 and parts[2] == "messages":
+            return "tasks:write"
+        return "tasks:create"
     if parts[0] == "session":
         if method == "GET":
             if len(parts) >= 3 and parts[2] in {"events", "events.json"}:

@@ -16,6 +16,34 @@ test("signs in from the responsive login page", async ({ page, isMobile }) => {
   await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
 });
 
+test("creates a task from the user workspace", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByLabel("你想完成什么？").fill("整理 V2 交付审计清单");
+  await page.getByRole("button", { name: "开始任务" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "整理 V2 交付审计清单" }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "实时进展" })).toBeVisible();
+  await expect(page.getByText("Task accepted")).toBeVisible();
+  await expect(page.getByText("V2 checklist started").first()).toBeVisible();
+  await expect(page.getByText("workspace-result.md")).toBeVisible();
+});
+
+test("hides backend navigation for a member user", async ({ page, isMobile }) => {
+  await mockRuntime(page, { roles: ["member"] });
+  await page.goto("/");
+
+  if (isMobile) {
+    await page.getByLabel("打开导航").click();
+  }
+  await expect(page.getByRole("link", { name: /工作台/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /运行/ })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /执行器/ })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /访问控制/ })).toHaveCount(0);
+});
+
 test("manages runs, permissions, profiles, and operations", async ({
   page,
 }) => {
@@ -120,10 +148,11 @@ test("keeps navigation usable on mobile", async ({ page, isMobile }) => {
 
 async function mockRuntime(
   page: Page,
-  options: { authenticated?: boolean } = {},
+  options: { authenticated?: boolean; roles?: string[] } = {},
 ) {
   const now = new Date().toISOString();
   let authenticated = options.authenticated ?? true;
+  const principalRoles = options.roles ?? ["owner"];
   const run = {
     run_id: "run_1",
     status: "running",
@@ -166,6 +195,30 @@ async function mockRuntime(
     },
   ];
   const runs = [run];
+  const createdWorkspaceTask = {
+    task_id: "run_workspace_created",
+    kind: "run",
+    title: "整理 V2 交付审计清单",
+    goal: "整理 V2 交付审计清单",
+    status: "running",
+    created_at: now,
+    updated_at: now,
+    progress: { completed_steps: 0, total_steps: 1, percent: 50 },
+    agent_summary: { adapter: "fake", active_agent: "Smoke Test Agent" },
+    needs_attention: false,
+    pending_permission_count: 0,
+    access: {
+      created_by: "owner@example.com",
+      project_id: "default",
+      visibility: "project",
+    },
+    source: { run_id: "run_workspace_created", mission_id: null },
+    result_summary: "V2 checklist started",
+    links: {
+      detail: "/tasks/run_workspace_created",
+      source: "/runs/run_workspace_created",
+    },
+  };
   const task = {
     task_id: "run_1",
     kind: "run",
@@ -223,7 +276,7 @@ async function mockRuntime(
             id: "owner@example.com",
             email: "owner@example.com",
             display_name: "Owner",
-            roles: ["owner"],
+            roles: principalRoles,
           }
         : null,
     },
@@ -252,6 +305,38 @@ async function mockRuntime(
       latency_seconds: { count: 0, avg: null, p95: null },
     },
     tasks: { tasks: [task] },
+    "tasks/run_workspace_created": createdWorkspaceTask,
+    "tasks/run_workspace_created/events.json": {
+      events: [
+        {
+          id: "tevt_workspace_1",
+          task_id: "run_workspace_created",
+          sequence: 1,
+          type: "task.accepted",
+          title: "Task accepted",
+          body: "V2 checklist started",
+          status: "queued",
+          created_at: now,
+          source_event_type: "run.created",
+          source: { kind: "run" },
+        },
+      ],
+    },
+    "tasks/run_workspace_created/artifacts": {
+      artifacts: [
+        { name: "workspace-result.md", size_bytes: 64, updated_at: now },
+      ],
+    },
+    "tasks/run_workspace_created/result": {
+      task_id: "run_workspace_created",
+      status: "running",
+      summary: "V2 checklist started",
+      artifacts: [
+        { name: "workspace-result.md", size_bytes: 64, updated_at: now },
+      ],
+      completed: false,
+      generated_at: now,
+    },
     "tasks/run_1": task,
     "tasks/run_1/events.json": {
       events: [
@@ -526,7 +611,7 @@ async function mockRuntime(
           id: "owner@example.com",
           email: "owner@example.com",
           display_name: "Owner",
-          roles: ["owner"],
+          roles: principalRoles,
         },
       };
       await route.fulfill({ json: fixtures["auth/session"] });
@@ -546,6 +631,14 @@ async function mockRuntime(
       const created = { ...run, run_id: "run_created", status: "queued" };
       runs.unshift(created);
       await route.fulfill({ json: created });
+      return;
+    }
+    if (request.method() === "POST" && path === "tasks") {
+      fixtures.tasks = { tasks: [createdWorkspaceTask, task] };
+      await route.fulfill({
+        status: 201,
+        json: createdWorkspaceTask,
+      });
       return;
     }
     if (request.method() === "POST" && path === "profiles") {

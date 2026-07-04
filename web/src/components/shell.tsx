@@ -35,14 +35,49 @@ import { cn } from "../lib/utils";
 
 const navItems = [
   { to: "/", labelKey: "nav.workspace", icon: MessageSquare },
-  { to: "/overview", labelKey: "nav.overview", icon: Activity },
-  { to: "/runs", labelKey: "nav.runs", icon: ClipboardList },
-  { to: "/units", labelKey: "nav.units", icon: Network },
-  { to: "/executors", labelKey: "nav.executors", icon: Server },
-  { to: "/missions", labelKey: "nav.missions", icon: Boxes },
-  { to: "/profiles", labelKey: "nav.profiles", icon: UserCog },
-  { to: "/access", labelKey: "nav.access", icon: Users },
-  { to: "/operations", labelKey: "nav.operations", icon: ShieldCheck },
+  {
+    to: "/overview",
+    labelKey: "nav.overview",
+    icon: Activity,
+    roles: ["owner", "operator", "auditor"],
+  },
+  {
+    to: "/runs",
+    labelKey: "nav.runs",
+    icon: ClipboardList,
+    roles: ["owner", "operator", "auditor"],
+  },
+  {
+    to: "/units",
+    labelKey: "nav.units",
+    icon: Network,
+    roles: ["owner", "operator", "auditor"],
+  },
+  {
+    to: "/executors",
+    labelKey: "nav.executors",
+    icon: Server,
+    roles: ["owner", "operator", "auditor"],
+  },
+  {
+    to: "/missions",
+    labelKey: "nav.missions",
+    icon: Boxes,
+    roles: ["owner", "operator", "auditor"],
+  },
+  {
+    to: "/profiles",
+    labelKey: "nav.profiles",
+    icon: UserCog,
+    roles: ["owner", "operator"],
+  },
+  { to: "/access", labelKey: "nav.access", icon: Users, roles: ["owner"] },
+  {
+    to: "/operations",
+    labelKey: "nav.operations",
+    icon: ShieldCheck,
+    roles: ["owner", "operator"],
+  },
 ] as const;
 
 export function Shell() {
@@ -113,12 +148,23 @@ export function Shell() {
 
 function Navigation({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useI18n();
+  const session = useQuery({
+    queryKey: ["auth", "session"],
+    queryFn: runtimeApi.session,
+  });
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
+  const roles = session.data?.principal?.roles ?? [];
+  const visibleItems = navItems.filter((item) => {
+    if (!("roles" in item)) {
+      return true;
+    }
+    return item.roles.some((role) => roles.includes(role));
+  });
   return (
     <nav className="grid gap-1 p-3">
-      {navItems.map((item) => {
+      {visibleItems.map((item) => {
         const Icon = item.icon;
         const active =
           item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);

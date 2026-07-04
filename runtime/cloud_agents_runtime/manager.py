@@ -240,26 +240,49 @@ class RunManager:
         self._drain_queue()
         return self.store.get_run(run.run_id) or run
 
-    def list_tasks(self) -> list[dict[str, Any]]:
+    def list_tasks(
+        self,
+        access_context: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         tasks = [
             self._task_from_mission_snapshot(mission)
             for mission in self.list_missions()
         ]
         tasks.extend(self._task_from_run(run) for run in self.store.list_runs())
+        tasks = [
+            task
+            for task in tasks
+            if task_access_allowed(task.get("access"), access_context)
+        ]
         return sorted(tasks, key=lambda task: task["updated_at"], reverse=True)
 
-    def get_task(self, task_id: str) -> dict[str, Any] | None:
+    def get_task(
+        self,
+        task_id: str,
+        access_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         if task_id.startswith("mission_"):
             mission = self.get_mission(task_id)
-            return self._task_from_mission_snapshot(mission) if mission else None
+            task = self._task_from_mission_snapshot(mission) if mission else None
+            if task and task_access_allowed(task.get("access"), access_context):
+                return task
+            return None
         run = self.get_run(task_id)
-        return self._task_from_run(run) if run else None
+        task = self._task_from_run(run) if run else None
+        if task and task_access_allowed(task.get("access"), access_context):
+            return task
+        return None
 
-    def create_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def create_task(
+        self,
+        payload: dict[str, Any],
+        access_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         goal = payload.get("goal") or payload.get("prompt")
         if not isinstance(goal, str) or not goal.strip():
             raise ValueError("goal is required")
         mode = str(payload.get("mode") or payload.get("task_type") or "single").lower()
+        task_metadata = task_access_metadata(payload, access_context)
         if mode in {"mission", "orchestrated", "plan"}:
             mission = self.create_mission(
                 {
@@ -273,6 +296,7 @@ class RunManager:
                     "timeout_seconds": payload.get("timeout_seconds"),
                     "metadata": {
                         **dict(payload.get("metadata") or {}),
+                        **task_metadata,
                         "created_from": "task_workspace",
                     },
                     "tasks": payload.get("tasks") or [],
@@ -290,6 +314,7 @@ class RunManager:
             "timeout_seconds": payload.get("timeout_seconds"),
             "metadata": {
                 **dict(payload.get("metadata") or {}),
+                **task_metadata,
                 "created_from": "task_workspace",
                 "task_title": payload.get("title") or first_line(goal),
             },
@@ -297,23 +322,43 @@ class RunManager:
         run = self.create_run(RunSpec.from_payload(run_payload))
         return self._task_from_run(run)
 
-    def cancel_task(self, task_id: str, reason: str | None = None) -> dict[str, Any]:
+    def cancel_task(
+        self,
+        task_id: str,
+        reason: str | None = None,
+        access_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        task = self.get_task(task_id, access_context=access_context)
+        if task is None:
+            raise KeyError(task_id)
         if task_id.startswith("mission_"):
             return self._task_from_mission_snapshot(self.cancel_mission(task_id, reason))
         self.cancel(task_id, reason)
         run = self._require_run(task_id)
         return self._task_from_run(run)
 
-    def send_task_message(self, task_id: str, message: str) -> dict[str, Any]:
+    def send_task_message(
+        self,
+        task_id: str,
+        message: str,
+        access_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        task = self.get_task(task_id, access_context=access_context)
+        if task is None:
+            raise KeyError(task_id)
         if task_id.startswith("mission_"):
             raise ValueError("mission tasks do not accept direct follow-up messages yet")
         self.send_input(task_id, message)
         return {"accepted": True, "task_id": task_id, "run_id": task_id}
 
-    def task_events(self, task_id: str) -> list[dict[str, Any]]:
+    def task_events(
+        self,
+        task_id: str,
+        access_context: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        if self.get_task(task_id, access_context=access_context) is None:
+            raise KeyError(task_id)
         if task_id.startswith("mission_"):
-            if self.get_mission(task_id) is None:
-                raise KeyError(task_id)
             return [
                 project_task_event(
                     event.to_dict(),
@@ -333,20 +378,28 @@ class RunManager:
             for event in self.store.events_since(task_id)
         ]
 
-    def task_artifacts(self, task_id: str) -> list[dict[str, Any]]:
+    def task_artifacts(
+        self,
+        task_id: str,
+        access_context: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        if self.get_task(task_id, access_context=access_context) is None:
+            raise KeyError(task_id)
         if task_id.startswith("mission_"):
-            if self.get_mission(task_id) is None:
-                raise KeyError(task_id)
             return self.store.list_mission_artifacts(task_id)
         self._require_run(task_id)
         return self.store.list_artifacts(task_id)
 
-    def task_result(self, task_id: str) -> dict[str, Any]:
-        task = self.get_task(task_id)
+    def task_result(
+        self,
+        task_id: str,
+        access_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        task = self.get_task(task_id, access_context=access_context)
         if task is None:
             raise KeyError(task_id)
-        artifacts = self.task_artifacts(task_id)
-        events = self.task_events(task_id)
+        artifacts = self.task_artifacts(task_id, access_context=access_context)
+        events = self.task_events(task_id, access_context=access_context)
         summary = latest_task_summary(events)
         if not summary and artifacts:
             summary = "Artifacts are ready: " + ", ".join(
@@ -911,6 +964,7 @@ class RunManager:
             },
             "needs_attention": permission_count > 0,
             "pending_permission_count": permission_count,
+            "access": task_access_from_metadata(metadata),
             "source": {"run_id": run.run_id, "mission_id": None},
             "result_summary": result_summary,
             "links": {
@@ -957,6 +1011,7 @@ class RunManager:
             },
             "needs_attention": status in {"review_blocked", "blocked"},
             "pending_permission_count": 0,
+            "access": task_access_from_metadata(spec.get("metadata")),
             "source": {"run_id": None, "mission_id": mission["mission_id"]},
             "result_summary": mission_result_summary(mission),
             "links": {
@@ -1560,6 +1615,74 @@ def event_text(data: dict[str, Any]) -> str | None:
     if isinstance(task_title, str) and task_title.strip():
         return task_title.strip()
     return None
+
+
+def task_access_metadata(
+    payload: dict[str, Any],
+    access_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    metadata = dict_value(payload.get("metadata"))
+    project_id = payload.get("project_id") or metadata.get("project_id")
+    created_by = metadata.get("created_by")
+    if access_context:
+        created_by = access_context.get("principal_id") or created_by
+        project_id = project_id or access_context.get("project_id")
+    visibility = str(
+        payload.get("visibility") or metadata.get("visibility") or "project"
+    ).strip().lower()
+    if visibility not in {"private", "project"}:
+        visibility = "project"
+    access: dict[str, Any] = {"visibility": visibility}
+    if isinstance(created_by, str) and created_by.strip():
+        access["created_by"] = created_by.strip()
+    if isinstance(project_id, str) and project_id.strip():
+        access["project_id"] = project_id.strip()
+    elif access_context and access_context.get("principal_id"):
+        access["project_id"] = "default"
+    return access
+
+
+def task_access_from_metadata(metadata: Any) -> dict[str, Any]:
+    data = dict_value(metadata)
+    visibility = str(data.get("visibility") or "project").strip().lower()
+    if visibility not in {"private", "project"}:
+        visibility = "project"
+    access = {"visibility": visibility}
+    created_by = data.get("created_by")
+    project_id = data.get("project_id")
+    if isinstance(created_by, str) and created_by.strip():
+        access["created_by"] = created_by.strip()
+    if isinstance(project_id, str) and project_id.strip():
+        access["project_id"] = project_id.strip()
+    return access
+
+
+def task_access_allowed(
+    task_access: Any,
+    access_context: dict[str, Any] | None,
+) -> bool:
+    if not access_context:
+        return True
+    roles = access_context.get("roles")
+    if isinstance(roles, list) and "owner" in roles:
+        return True
+    scopes = access_context.get("scopes")
+    if isinstance(scopes, list) and any(scope in {"*", "*:*"} for scope in scopes):
+        return True
+    access = dict_value(task_access)
+    created_by = access.get("created_by")
+    principal_id = access_context.get("principal_id")
+    if principal_id and created_by == principal_id:
+        return True
+    visibility = str(access.get("visibility") or "project")
+    project_id = access.get("project_id")
+    context_project_id = access_context.get("project_id")
+    return bool(
+        visibility == "project"
+        and project_id
+        and context_project_id
+        and project_id == context_project_id
+    )
 
 
 def latest_permission_request(
