@@ -106,14 +106,15 @@ def project_event(
             source_adapter=source_adapter,
         )
     if event.type == "permission.requested":
+        request = permission_request_payload(data)
         return daemon_event(
             event,
             "permission_request",
             {
-                "requestId": permission_id(data),
-                "prompt": text_from(data, "prompt", "message"),
-                "tool": string_value(data.get("tool")),
-                "options": data.get("options") if isinstance(data.get("options"), list) else [],
+                "requestId": request["requestId"],
+                "prompt": request["prompt"],
+                "tool": request["tool"],
+                "options": request["options"],
                 "context": sanitize_for_ui(data),
             },
             source_adapter=source_adapter,
@@ -293,9 +294,57 @@ def permission_id(data: dict[str, Any]) -> str:
     return (
         string_value(data.get("permission_id"))
         or string_value(data.get("requestId"))
+        or string_value(nested_get(data, "raw", "data", "requestId"))
         or string_value(data.get("id"))
         or "permission"
     )
+
+
+def permission_request_payload(data: dict[str, Any]) -> dict[str, Any]:
+    raw_data = nested_record(data, "raw", "data")
+    tool_call = nested_record(data, "raw", "data", "toolCall")
+    options = data.get("options")
+    if not isinstance(options, list):
+        options = raw_data.get("options") if raw_data else []
+    if not isinstance(options, list):
+        options = []
+
+    prompt = text_from(data, "prompt", "message")
+    if not prompt and tool_call:
+        prompt = string_value(tool_call.get("title"))
+    if not prompt and raw_data:
+        prompt = string_value(raw_data.get("prompt"))
+
+    tool = string_value(data.get("tool"))
+    if not tool and tool_call:
+        tool = (
+            string_value(nested_get(tool_call, "_meta", "toolName"))
+            or string_value(tool_call.get("kind"))
+            or string_value(tool_call.get("title"))
+        )
+
+    return {
+        "requestId": permission_id(data),
+        "prompt": prompt,
+        "tool": tool,
+        "options": [permission_option(option) for option in options],
+    }
+
+
+def permission_option(option: Any) -> dict[str, str]:
+    if not isinstance(option, dict):
+        return {"id": "approve"}
+    option_id = (
+        string_value(option.get("id"))
+        or string_value(option.get("optionId"))
+        or string_value(option.get("name"))
+        or "approve"
+    )
+    return {
+        "id": option_id,
+        "label": string_value(option.get("label") or option.get("name")),
+        "description": string_value(option.get("description") or option.get("kind")),
+    }
 
 
 def text_from(data: dict[str, Any], *keys: str) -> str:
@@ -312,6 +361,20 @@ def text_from(data: dict[str, Any], *keys: str) -> str:
                 if text:
                     return text
     return ""
+
+
+def nested_get(data: dict[str, Any], *keys: str) -> Any:
+    current: Any = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def nested_record(data: dict[str, Any], *keys: str) -> dict[str, Any]:
+    value = nested_get(data, *keys)
+    return value if isinstance(value, dict) else {}
 
 
 def string_value(value: Any) -> str:

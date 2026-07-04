@@ -15,6 +15,8 @@ ROLE_DEFINITIONS = [
         "permissions": [
             "runs:*",
             "missions:*",
+            "events:*",
+            "artifacts:*",
             "profiles:*",
             "permissions:*",
             "executors:*",
@@ -31,6 +33,7 @@ ROLE_DEFINITIONS = [
             "runs:create",
             "runs:read",
             "runs:cancel",
+            "events:read",
             "missions:create",
             "missions:read",
             "missions:cancel",

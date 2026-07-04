@@ -263,6 +263,21 @@ class RuntimeServerTest(unittest.TestCase):
                 headers={"cookie": operator_cookie},
             )
             self.assertTrue(operator_run["run_id"].startswith("run_"))
+            operator_events = request_json(
+                f"{base_url}/runs/{operator_run['run_id']}/events.json",
+                headers={"cookie": operator_cookie},
+            )
+            self.assertIn("events", operator_events)
+            operator_session_events = request_json(
+                f"{base_url}/session/{operator_run['run_id']}/events.json",
+                headers={"cookie": operator_cookie},
+            )
+            self.assertIn("events", operator_session_events)
+            operator_artifacts = request_json(
+                f"{base_url}/runs/{operator_run['run_id']}/artifacts",
+                headers={"cookie": operator_cookie},
+            )
+            self.assertIn("artifacts", operator_artifacts)
             with self.assertRaises(urllib.error.HTTPError) as operator_user_create:
                 request_json(
                     f"{base_url}/auth/users",

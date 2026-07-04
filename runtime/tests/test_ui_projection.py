@@ -102,6 +102,53 @@ class UIProjectionTest(unittest.TestCase):
         self.assertEqual(projected["_meta"]["runtimeSequence"], 7)
         self.assertEqual(projected["_meta"]["sourceAdapter"], "qwen")
 
+    def test_qwen_permission_request_extracts_nested_raw_fields(self) -> None:
+        projected = project_event(
+            runtime_event(
+                "permission.requested",
+                8,
+                {
+                    "raw": {
+                        "type": "permission_request",
+                        "data": {
+                            "requestId": "perm-qwen",
+                            "options": [
+                                {
+                                    "optionId": "proceed_once",
+                                    "name": "Allow",
+                                    "kind": "allow_once",
+                                }
+                            ],
+                            "toolCall": {
+                                "_meta": {"toolName": "web_fetch"},
+                                "kind": "fetch",
+                                "title": "Fetch weather data",
+                                "rawInput": {
+                                    "url": "https://wttr.in/Hangzhou?format=4",
+                                },
+                            },
+                        },
+                    }
+                },
+            ),
+            source_adapter="qwen",
+        )
+
+        self.assertEqual(projected["type"], "permission_request")
+        self.assertEqual(projected["data"]["requestId"], "perm-qwen")
+        self.assertEqual(projected["data"]["tool"], "web_fetch")
+        self.assertEqual(projected["data"]["prompt"], "Fetch weather data")
+        self.assertEqual(
+            projected["data"]["options"],
+            [
+                {
+                    "id": "proceed_once",
+                    "label": "Allow",
+                    "description": "allow_once",
+                }
+            ],
+        )
+
     def test_projection_defensive_edges(self) -> None:
         invalid_raw = project_event(runtime_event("adapter.event", 1, {"raw": "bad"}))
         self.assertEqual(invalid_raw["data"]["update"]["sessionUpdate"], "status")
