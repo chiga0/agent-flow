@@ -976,6 +976,12 @@ describe("AgentFlow console", () => {
     expect(
       (await screen.findAllByText("new@example.com")).length,
     ).toBeGreaterThan(0);
+    expect(screen.getAllByText("member").length).toBeGreaterThan(0);
+    await user.selectOptions(screen.getAllByLabelText("Role")[1], "auditor");
+    await user.click(screen.getAllByRole("button", { name: "Save role" })[0]);
+    await user.type(screen.getAllByLabelText("New password")[0], "reset-12345");
+    await user.click(screen.getAllByRole("button", { name: "Reset password" })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Disable" })[0]);
     expect(await screen.findByText("cat_created_secret")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Revoke" }));
     await waitFor(() =>
@@ -990,6 +996,33 @@ describe("AgentFlow console", () => {
         expect.objectContaining({
           method: "POST",
           body: expect.stringContaining("new@example.com"),
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/auth/users/owner%40example.com/roles",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining("auditor"),
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/auth/users/owner%40example.com/password",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining("reset-12345"),
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/auth/users/owner%40example.com/status",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining("disabled"),
         }),
       ),
     );
@@ -1571,6 +1604,27 @@ describe("AgentFlow console", () => {
         },
       },
       {
+        id: "empty-user",
+        v: 1,
+        type: "session_update",
+        data: {
+          update: {
+            sessionUpdate: "user_message_chunk",
+          },
+        },
+      },
+      {
+        id: "array-user",
+        v: 1,
+        type: "session_update",
+        data: {
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: [{ content: { text: "array prompt" } }],
+          },
+        },
+      },
+      {
         id: "status",
         v: 1,
         type: "session_update",
@@ -1671,6 +1725,14 @@ describe("AgentFlow console", () => {
     expect(edgeTranscript).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ title: "Agent progress" }),
+        expect.objectContaining({
+          title: "Prompt submitted",
+          body: "User input was accepted.",
+        }),
+        expect.objectContaining({
+          title: "Prompt submitted",
+          body: "array prompt",
+        }),
         expect.objectContaining({
           title: "custom.event",
           body: "custom status",
@@ -1991,6 +2053,13 @@ describe("AgentFlow console", () => {
         ],
       ).phase,
     ).toBe("已完成");
+    expect(
+      __testUtils.runTaskProgress(
+        { ...run, status: "completed" },
+        [event("run.completed", 38.1, {}, now)],
+        [],
+      ).nextAction,
+    ).toBe("下载事件和审计包完成复盘。");
     expect(
       __testUtils.runTaskProgress(
         { ...run, status: "failed" },
@@ -2701,10 +2770,13 @@ async function fetchMock(input: RequestInfo | URL, init?: RequestInit) {
     });
   }
   if (init?.method === "POST" && path === "auth/users") {
+    const body = JSON.parse(String(init.body ?? "{}")) as {
+      roles?: string[];
+    };
     const created = {
       email: "new@example.com",
       display_name: "new@example.com",
-      roles: ["operator"],
+      roles: body.roles ?? ["member"],
       status: "active",
       email_verified_at: new Date().toISOString(),
       created_at: new Date().toISOString(),
@@ -2716,6 +2788,27 @@ async function fetchMock(input: RequestInfo | URL, init?: RequestInit) {
       fixtures["auth/users"] as { users: Array<Record<string, unknown>> }
     ).users.push(created);
     return jsonResponse(created);
+  }
+  const authUserMatch = path.match(/^auth\/users\/([^/]+)\/(roles|status|password)$/);
+  if (init?.method === "POST" && authUserMatch) {
+    const email = decodeURIComponent(authUserMatch[1]);
+    const action = authUserMatch[2];
+    const body = JSON.parse(String(init.body ?? "{}")) as {
+      roles?: string[];
+      status?: string;
+    };
+    const usersFixture = fixtures["auth/users"] as {
+      users: Array<Record<string, unknown>>;
+    };
+    const existing = usersFixture.users.find((item) => item.email === email);
+    const updated = {
+      ...(existing ?? usersFixture.users[0]),
+      email,
+      roles: action === "roles" ? body.roles : existing?.roles,
+      status: action === "status" ? body.status : existing?.status,
+      updated_at: new Date().toISOString(),
+    };
+    return jsonResponse(updated);
   }
   if (init?.method === "POST" && path === "auth/login") {
     return jsonResponse(fixtures["auth/session"]);

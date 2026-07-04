@@ -13,8 +13,9 @@
 - 2026-07-04：新增 `/tasks` BFF，把底层 run/mission 投影成统一的用户任务模型，支持创建、列表、详情、事件、结果、产物、追加消息和取消。
 - 2026-07-04：保留 `/overview`、`/runs`、`/missions`、`/units`、`/executors`、`/access`、`/operations` 作为后台 Admin/Ops/Audit 入口。
 - 2026-07-04：启动 V2-P2a，`/tasks` 写入 `created_by/project_id/visibility`，普通 session 用户只能看到自己的任务，`member` 角色默认隐藏后台导航。
+- 2026-07-04：完成 V2-P2b foundation，owner 可在 Access 页面创建默认 `member` 用户、改角色、禁用/启用用户、重置密码。
 
-当前边界：V2-P1 解决“用户默认入口”和“任务投影”问题；V2-P2a 开始保护用户端 task 访问边界。完整项目成员关系、CSRF、改密码、token_version、自动规划器、文件上传、Skills registry、IM/移动端入口仍属于后续 V2 阶段。
+当前边界：V2-P1 解决“用户默认入口”和“任务投影”问题；V2-P2a/P2b 开始保护用户端 task 访问边界并补齐 owner 用户管理闭环。完整项目成员关系、CSRF、用户自助改密码、token_version、自动规划器、文件上传、Skills registry、IM/移动端入口仍属于后续 V2 阶段。
 
 ## 0. 一句话定义
 

@@ -62,6 +62,63 @@ No-Go for public multi-user exposure until V2-P2 is complete.
 - 前端导航按角色隐藏后台入口，member 默认只看到 Workspace。
 - 新增 V2 独立实施 Roadmap，明确每阶段必须有审计和 E2E 门禁。
 
+## 2026-07-04 P2b 实施后审计
+
+P2b 在 P2a 用户 task 隔离基础上补齐 owner 页面内用户管理闭环：
+
+- Access -> Users 创建用户默认角色从 `operator` 调整为 `member`。
+- owner 可在用户行内改角色、禁用/启用、重置密码。
+- 后端新增 `/auth/users/{email}/roles`、`/status`、`/password` 管理端点，统一受 `access:write` scope 保护。
+- 后端统一校验角色，只允许 owner/operator/auditor/member。
+- 禁用用户会撤销该用户现有 session；重置密码会更新密码并撤销该用户现有 session。
+- 安全护栏：不允许当前用户禁用自己，不允许当前 owner 从自己身上移除 owner 角色。
+
+### P2b Design Review
+
+通过。
+
+本轮继续沿用本地邮箱账户体系，没有引入外部 IdP 或 SMTP 邀请流。原因是当前目标是先让 owner 可以管理成员生命周期，并支撑小团队自部署；公开注册、邮件验证、忘记密码和 SSO 属于后续版本。
+
+### P2b Security Review
+
+条件通过。
+
+已修复：
+
+- 页面内创建普通用户不再默认授予 operator 后台能力，而是默认授予 `member`。
+- 禁用用户和重置密码都会撤销该用户已存在 session。
+- 当前 owner 不能在页面内误禁用自己。
+- 当前 owner 不能移除自己的 owner 角色。
+
+仍需 P2c 修复：
+
+- 还没有 CSRF token，session 写操作仍依赖 SameSite cookie 与来源边界。
+- 还没有用户自助改密码。
+- 还没有 token_version/session_version 字段，因此“全量踢下线”的模型仍偏操作级，而不是版本化身份模型。
+- API token 与用户 session 的生命周期仍未完全合并。
+
+### P2b Product Review
+
+通过。
+
+管理员可以在同一 Access 页面完成“创建成员 -> 成员登录 Workspace -> 管理员调整/禁用”的闭环。普通用户仍不会看到后台入口。
+
+### P2b Architecture Review
+
+通过。
+
+本轮只扩展 `auth_users` 现有事实源和 `auth_sessions` 撤销能力，没有新增用户表或迁移租户模型。Project membership 仍留给 P2d，避免在 P2b 中引入半成品项目成员语义。
+
+### P2b Test Review
+
+通过。
+
+覆盖项：
+
+- runtime integration：默认 member、改角色、重置密码旧密码失效、新密码可用、禁用后不能登录、不能禁用当前 owner。
+- Web unit：Access 页面创建用户、改角色、重置密码、禁用，以及 API client 路径覆盖。
+- Web E2E：管理员从 Access 页面创建成员并执行重置密码/禁用操作。
+
 ### Design Review
 
 通过。

@@ -149,6 +149,9 @@ describe("api helpers", () => {
       password: "secret-12345",
       roles: ["operator"],
     });
+    await runtimeApi.updateAuthUserRoles("new@example.com", ["member"]);
+    await runtimeApi.updateAuthUserStatus("new@example.com", "disabled");
+    await runtimeApi.resetAuthUserPassword("new@example.com", "secret-67890");
     await runtimeApi.createMission({ goal: "ship", strategy: "sequential" });
 
     expect(calls.map(([path]) => path)).toEqual([
@@ -194,6 +197,9 @@ describe("api helpers", () => {
       "/access/tokens/token_1/revoke",
       "/auth/users",
       "/auth/users",
+      "/auth/users/new%40example.com/roles",
+      "/auth/users/new%40example.com/status",
+      "/auth/users/new%40example.com/password",
       "/missions",
     ]);
     const methods = new Map(calls.map(([path, init]) => [path, init?.method]));
@@ -222,6 +228,9 @@ describe("api helpers", () => {
     expect(methods.get("/access/tokens")).toBe("POST");
     expect(methods.get("/access/tokens/token_1/revoke")).toBe("POST");
     expect(methods.get("/auth/users")).toBe("POST");
+    expect(methods.get("/auth/users/new%40example.com/roles")).toBe("POST");
+    expect(methods.get("/auth/users/new%40example.com/status")).toBe("POST");
+    expect(methods.get("/auth/users/new%40example.com/password")).toBe("POST");
     expect(methods.get("/missions")).toBe("POST");
   });
 

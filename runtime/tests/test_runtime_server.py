@@ -251,6 +251,75 @@ class RuntimeServerTest(unittest.TestCase):
                     headers={"cookie": cookie},
                 )
             self.assertEqual(duplicate_user.exception.code, HTTPStatus.BAD_REQUEST)
+            member = request_json(
+                f"{base_url}/auth/users",
+                method="POST",
+                payload={
+                    "email": "member@example.com",
+                    "display_name": "Member",
+                    "password": "member-password",
+                },
+                headers={"cookie": cookie},
+            )
+            self.assertEqual(member["roles"], ["member"])
+            role_update = request_json(
+                f"{base_url}/auth/users/member@example.com/roles",
+                method="POST",
+                payload={"roles": ["auditor"]},
+                headers={"cookie": cookie},
+            )
+            self.assertEqual(role_update["roles"], ["auditor"])
+            password_update = request_json(
+                f"{base_url}/auth/users/member@example.com/password",
+                method="POST",
+                payload={"password": "member-password-2"},
+                headers={"cookie": cookie},
+            )
+            self.assertEqual(password_update["email"], "member@example.com")
+            with self.assertRaises(urllib.error.HTTPError) as old_member_login:
+                request_json(
+                    f"{base_url}/auth/login",
+                    method="POST",
+                    payload={
+                        "email": "member@example.com",
+                        "password": "member-password",
+                    },
+                )
+            self.assertEqual(old_member_login.exception.code, HTTPStatus.UNAUTHORIZED)
+            member_login = request_raw(
+                f"{base_url}/auth/login",
+                method="POST",
+                payload={
+                    "email": "member@example.com",
+                    "password": "member-password-2",
+                },
+            )
+            self.assertIn("HttpOnly", member_login.headers["set-cookie"])
+            status_update = request_json(
+                f"{base_url}/auth/users/member@example.com/status",
+                method="POST",
+                payload={"status": "disabled"},
+                headers={"cookie": cookie},
+            )
+            self.assertEqual(status_update["status"], "disabled")
+            with self.assertRaises(urllib.error.HTTPError) as disabled_member_login:
+                request_json(
+                    f"{base_url}/auth/login",
+                    method="POST",
+                    payload={
+                        "email": "member@example.com",
+                        "password": "member-password-2",
+                    },
+                )
+            self.assertEqual(disabled_member_login.exception.code, HTTPStatus.UNAUTHORIZED)
+            with self.assertRaises(urllib.error.HTTPError) as disable_self:
+                request_json(
+                    f"{base_url}/auth/users/owner@example.com/status",
+                    method="POST",
+                    payload={"status": "disabled"},
+                    headers={"cookie": cookie},
+                )
+            self.assertEqual(disable_self.exception.code, HTTPStatus.BAD_REQUEST)
             operator_login = request_raw(
                 f"{base_url}/auth/login",
                 method="POST",

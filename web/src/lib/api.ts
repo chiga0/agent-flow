@@ -601,6 +601,21 @@ export const runtimeApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  updateAuthUserRoles: (email: string, roles: string[]) =>
+    api<AuthUser>(`auth/users/${encodeURIComponent(email)}/roles`, {
+      method: "POST",
+      body: JSON.stringify({ roles }),
+    }),
+  updateAuthUserStatus: (email: string, status: string) =>
+    api<AuthUser>(`auth/users/${encodeURIComponent(email)}/status`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
+    }),
+  resetAuthUserPassword: (email: string, password: string) =>
+    api<AuthUser>(`auth/users/${encodeURIComponent(email)}/password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
   opsStatus: () => api<Record<string, unknown>>("ops/status"),
   drills: () => api<Record<string, unknown>>("ops/drills"),
   runDrills: () =>

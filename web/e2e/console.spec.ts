@@ -107,6 +107,13 @@ test("manages runs, permissions, profiles, and operations", async ({
   await navigate(page, /Access/);
   await expect(page.getByText("Role Matrix")).toBeVisible();
   await expect(page.getByText("runs:*").first()).toBeVisible();
+  await page.getByLabel("User email").fill("teammate@example.com");
+  await page.getByLabel("Initial password").fill("secret-12345");
+  await page.getByRole("button", { name: "Create" }).first().click();
+  await expect(page.getByText("teammate@example.com").first()).toBeVisible();
+  await page.getByLabel("New password").first().fill("secret-67890");
+  await page.getByRole("button", { name: "Reset password" }).first().click();
+  await page.getByRole("button", { name: "Disable" }).first().click();
 
   await navigate(page, /Units/);
   await expect(
@@ -548,11 +555,33 @@ async function mockRuntime(
           description: "Can administer runtime",
           permissions: ["runs:*", "missions:*", "profiles:*"],
         },
+        {
+          id: "member",
+          description: "Can use the task workspace",
+          permissions: ["tasks:create", "tasks:read"],
+        },
       ],
       scopes: ["runs:*", "missions:*", "profiles:*"],
       audit: {
         auth_boundary: "runtime session cookie plus bearer token or API token",
       },
+    },
+    "access/projects": { projects: [] },
+    "access/tokens": { tokens: [] },
+    "auth/users": {
+      users: [
+        {
+          email: "owner@example.com",
+          display_name: "Owner",
+          roles: ["owner"],
+          status: "active",
+          email_verified_at: now,
+          created_at: now,
+          updated_at: now,
+          last_login_at: null,
+          metadata: {},
+        },
+      ],
     },
     "ops/status": { database: { exists: true } },
     "ops/drills": {
@@ -615,6 +644,51 @@ async function mockRuntime(
         },
       };
       await route.fulfill({ json: fixtures["auth/session"] });
+      return;
+    }
+    if (request.method() === "POST" && path === "auth/users") {
+      const body = request.postDataJSON() as {
+        email?: string;
+        display_name?: string;
+        roles?: string[];
+      };
+      const created = {
+        email: body.email ?? "teammate@example.com",
+        display_name: body.display_name || body.email || "Teammate",
+        roles: body.roles ?? ["member"],
+        status: "active",
+        email_verified_at: now,
+        created_at: now,
+        updated_at: now,
+        last_login_at: null,
+        metadata: {},
+      };
+      (fixtures["auth/users"] as { users: Array<typeof created> }).users.push(
+        created,
+      );
+      await route.fulfill({ json: created, status: 201 });
+      return;
+    }
+    const authUserMatch = path.match(/^auth\/users\/([^/]+)\/(roles|status|password)$/);
+    if (request.method() === "POST" && authUserMatch) {
+      const email = decodeURIComponent(authUserMatch[1]);
+      const action = authUserMatch[2];
+      const body = request.postDataJSON() as {
+        roles?: string[];
+        status?: string;
+      };
+      const usersFixture = fixtures["auth/users"] as {
+        users: Array<Record<string, unknown>>;
+      };
+      const existing = usersFixture.users.find((user) => user.email === email);
+      const updated = {
+        ...(existing ?? usersFixture.users[0]),
+        email,
+        roles: action === "roles" ? body.roles : existing?.roles,
+        status: action === "status" ? body.status : existing?.status,
+        updated_at: now,
+      };
+      await route.fulfill({ json: updated, status: 202 });
       return;
     }
     if (request.method() === "POST" && path === "auth/logout") {

@@ -3137,7 +3137,7 @@ function AccessPage() {
   const [userEmail, setUserEmail] = useState("");
   const [userDisplayName, setUserDisplayName] = useState("");
   const [userPassword, setUserPassword] = useState("");
-  const [userRole, setUserRole] = useState("operator");
+  const [userRole, setUserRole] = useState("member");
   const [userVerified, setUserVerified] = useState(true);
   const policy = useQuery({
     queryKey: ["access", "policy"],
@@ -3181,8 +3181,29 @@ function AccessPage() {
       setUserEmail("");
       setUserDisplayName("");
       setUserPassword("");
-      setUserRole("operator");
+      setUserRole("member");
       setUserVerified(true);
+      await queryClient.invalidateQueries({ queryKey: ["auth", "users"] });
+    },
+  });
+  const updateUserRoles = useMutation({
+    mutationFn: (payload: { email: string; roles: string[] }) =>
+      runtimeApi.updateAuthUserRoles(payload.email, payload.roles),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["auth", "users"] });
+    },
+  });
+  const updateUserStatus = useMutation({
+    mutationFn: (payload: { email: string; status: string }) =>
+      runtimeApi.updateAuthUserStatus(payload.email, payload.status),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["auth", "users"] });
+    },
+  });
+  const resetUserPassword = useMutation({
+    mutationFn: (payload: { email: string; password: string }) =>
+      runtimeApi.resetAuthUserPassword(payload.email, payload.password),
+    onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["auth", "users"] });
     },
   });
@@ -3312,6 +3333,7 @@ function AccessPage() {
                 value={userRole}
                 onChange={(event) => setUserRole(event.target.value)}
               >
+                <option value="member">member</option>
                 <option value="operator">operator</option>
                 <option value="auditor">auditor</option>
                 <option value="owner">owner</option>
@@ -3358,7 +3380,18 @@ function AccessPage() {
               {String(createUser.error)}
             </div>
           ) : null}
-          <AccessUserList users={users.data?.users ?? []} />
+          <AccessUserList
+            canManage={isOwner}
+            currentPrincipalId={principal?.id}
+            users={users.data?.users ?? []}
+            onResetPassword={(email, password) =>
+              resetUserPassword.mutate({ email, password })
+            }
+            onRoles={(email, roles) => updateUserRoles.mutate({ email, roles })}
+            onStatus={(email, status) =>
+              updateUserStatus.mutate({ email, status })
+            }
+          />
         </CardBody>
       </Card>
       <div className="grid gap-4 xl:grid-cols-2">
@@ -3461,8 +3494,35 @@ function AccessPage() {
   );
 }
 
-function AccessUserList({ users }: { users: AuthUser[] }) {
+function AccessUserList({
+  canManage,
+  currentPrincipalId,
+  users,
+  onResetPassword,
+  onRoles,
+  onStatus,
+}: {
+  canManage: boolean;
+  currentPrincipalId?: string;
+  users: AuthUser[];
+  onResetPassword: (email: string, password: string) => void;
+  onRoles: (email: string, roles: string[]) => void;
+  onStatus: (email: string, status: string) => void;
+}) {
   const { t } = useI18n();
+  const [roleByEmail, setRoleByEmail] = useState<Record<string, string>>({});
+  const [passwordByEmail, setPasswordByEmail] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setRoleByEmail((current) => {
+      const next = { ...current };
+      for (const user of users) {
+        if (!next[user.email]) {
+          next[user.email] = user.roles[0] ?? "member";
+        }
+      }
+      return next;
+    });
+  }, [users]);
   if (!users.length) {
     return <EmptyState title={t("access.noUsers")} />;
   }
@@ -3471,7 +3531,7 @@ function AccessUserList({ users }: { users: AuthUser[] }) {
       {users.map((user) => (
         <div
           key={user.email}
-          className="grid gap-3 rounded-md border border-border p-3 md:grid-cols-[minmax(0,1fr)_auto]"
+          className="grid gap-3 rounded-md border border-border p-3 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]"
         >
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -3495,15 +3555,97 @@ function AccessUserList({ users }: { users: AuthUser[] }) {
                 </Badge>
               ))}
             </div>
+            <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
+              <span>
+                {t("access.createdAt")}: {timeAgo(user.created_at)}
+              </span>
+              <span>
+                {t("access.lastLogin")}:{" "}
+                {user.last_login_at ? timeAgo(user.last_login_at) : "-"}
+              </span>
+            </div>
           </div>
-          <div className="grid gap-1 text-right text-xs text-muted-foreground">
-            <span>
-              {t("access.createdAt")}: {timeAgo(user.created_at)}
-            </span>
-            <span>
-              {t("access.lastLogin")}:{" "}
-              {user.last_login_at ? timeAgo(user.last_login_at) : "-"}
-            </span>
+          <div className="grid gap-3">
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+              <Field label={t("access.userRole")}>
+                <Select
+                  disabled={!canManage}
+                  value={roleByEmail[user.email] ?? user.roles[0] ?? "member"}
+                  onChange={(event) =>
+                    setRoleByEmail((current) => ({
+                      ...current,
+                      [user.email]: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="member">member</option>
+                  <option value="operator">operator</option>
+                  <option value="auditor">auditor</option>
+                  <option value="owner">owner</option>
+                </Select>
+              </Field>
+              <Button
+                className="self-end"
+                disabled={!canManage}
+                onClick={() =>
+                  onRoles(user.email, [
+                    roleByEmail[user.email] ?? user.roles[0] ?? "member",
+                  ])
+                }
+              >
+                <Save className="h-4 w-4" />
+                {t("access.saveRole")}
+              </Button>
+              <Button
+                className="self-end"
+                disabled={!canManage || user.email === currentPrincipalId}
+                onClick={() =>
+                  onStatus(
+                    user.email,
+                    user.status === "active" ? "disabled" : "active",
+                  )
+                }
+              >
+                {user.status === "active" ? (
+                  <PauseCircle className="h-4 w-4" />
+                ) : (
+                  <Play className="h-4 w-4" />
+                )}
+                {user.status === "active"
+                  ? t("access.disableUser")
+                  : t("access.enableUser")}
+              </Button>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+              <Field label={t("access.newPassword")}>
+                <Input
+                  autoComplete="new-password"
+                  disabled={!canManage}
+                  type="password"
+                  value={passwordByEmail[user.email] ?? ""}
+                  onChange={(event) =>
+                    setPasswordByEmail((current) => ({
+                      ...current,
+                      [user.email]: event.target.value,
+                    }))
+                  }
+                />
+              </Field>
+              <Button
+                className="self-end"
+                disabled={!canManage || !passwordByEmail[user.email]}
+                onClick={() => {
+                  onResetPassword(user.email, passwordByEmail[user.email] ?? "");
+                  setPasswordByEmail((current) => ({
+                    ...current,
+                    [user.email]: "",
+                  }));
+                }}
+              >
+                <KeyRound className="h-4 w-4" />
+                {t("access.resetPassword")}
+              </Button>
+            </div>
           </div>
         </div>
       ))}

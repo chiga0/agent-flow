@@ -790,6 +790,46 @@ class RunStore:
             self._persist_auth_user(user)
             return user
 
+    def update_auth_user(
+        self,
+        email: str,
+        *,
+        roles: list[str] | None = None,
+        status: str | None = None,
+        display_name: str | None = None,
+        email_verified: bool | None = None,
+    ) -> AuthUser:
+        with self._lock:
+            normalized_email = normalize_email(email)
+            user = self._auth_users.get(normalized_email)
+            if user is None:
+                raise KeyError(normalized_email)
+            now = utc_now()
+            if roles is not None:
+                user.roles = roles
+            if status is not None:
+                user.status = status
+            if display_name is not None:
+                user.display_name = display_name or user.email
+            if email_verified is True and not user.email_verified_at:
+                user.email_verified_at = now
+            if email_verified is False:
+                user.email_verified_at = None
+            user.updated_at = now
+            self._persist_auth_user(user)
+            return user
+
+    def reset_auth_user_password(self, email: str, password_hash: str) -> AuthUser:
+        with self._lock:
+            normalized_email = normalize_email(email)
+            user = self._auth_users.get(normalized_email)
+            if user is None:
+                raise KeyError(normalized_email)
+            user.password_hash = password_hash
+            user.updated_at = utc_now()
+            self._persist_auth_user(user)
+            return user
+
     def create_auth_session(
         self,
         *,
@@ -875,6 +915,20 @@ class RunStore:
             )
             self._db.commit()
             return cursor.rowcount > 0
+
+    def revoke_auth_user_sessions(self, email: str) -> int:
+        with self._lock:
+            normalized_email = normalize_email(email)
+            cursor = self._db.execute(
+                """
+                update auth_sessions
+                set revoked_at = ?
+                where user_email = ? and revoked_at is null
+                """,
+                (utc_now(), normalized_email),
+            )
+            self._db.commit()
+            return cursor.rowcount
 
     def create_permission_notification(
         self,

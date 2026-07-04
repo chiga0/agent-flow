@@ -73,7 +73,8 @@ V2-P1 尚未包含：
 V2-P2 当前推进：
 
 - P2a：`/tasks` 写入并读取 `created_by`、`project_id`、`visibility`，普通 session 用户只能看到自己的任务，owner 可看全部。
-- P2b-P2e：用户管理 UI、CSRF/改密码/token_version、project membership、artifact/result/permission 全链路隔离仍在后续切片中。
+- P2b：owner 可在 Access 页面内创建默认 `member` 用户、改角色、禁用/启用用户、重置密码；后端同步提供受 `access:write` 保护的用户管理端点。
+- P2c-P2e：CSRF/改密码/token_version、project membership、artifact/result/permission 全链路隔离仍在后续切片中。
 
 ## P0：设计与审计
 

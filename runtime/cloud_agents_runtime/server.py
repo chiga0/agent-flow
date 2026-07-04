@@ -450,6 +450,14 @@ def make_handler(
                     user = self.create_auth_user(payload)
                     self.write_json(user, status=HTTPStatus.CREATED)
                     return
+                if len(parts) == 4 and parts[0] == "auth" and parts[1] == "users":
+                    try:
+                        user = self.manage_auth_user(unquote(parts[2]), parts[3], payload)
+                    except KeyError:
+                        self.write_error(HTTPStatus.NOT_FOUND, "user not found")
+                        return
+                    self.write_json(user, status=HTTPStatus.ACCEPTED)
+                    return
                 if len(parts) == 2 and parts[0] == "workers" and parts[1] == "registrations":
                     registration = manager.create_worker_registration(payload)
                     self.write_json(registration, status=HTTPStatus.CREATED)
@@ -892,12 +900,7 @@ def make_handler(
             password = payload.get("password")
             if not isinstance(email, str) or not isinstance(password, str) or not password:
                 raise ValueError("email and password are required")
-            roles = payload.get("roles") or ["operator"]
-            if not isinstance(roles, list) or not all(isinstance(role, str) for role in roles):
-                raise ValueError("roles must be a list of strings")
-            allowed_roles = {"owner", "operator", "auditor", "member"}
-            if any(role not in allowed_roles for role in roles):
-                raise ValueError("roles may only contain owner, operator, auditor, or member")
+            roles = validate_auth_roles(payload.get("roles") or ["member"])
             user = manager.store.create_auth_user(
                 email=email,
                 display_name=str(payload.get("display_name") or email),
@@ -906,6 +909,36 @@ def make_handler(
                 email_verified=bool(payload.get("email_verified")),
             )
             return user.to_dict()
+
+        def manage_auth_user(
+            self,
+            email: str,
+            action: str,
+            payload: dict[str, Any],
+        ) -> dict[str, Any]:
+            if action == "roles":
+                roles = validate_auth_roles(payload.get("roles"))
+                if email == self.principal_id() and "owner" not in roles:
+                    raise ValueError("cannot remove owner from current user")
+                return manager.store.update_auth_user(email, roles=list(roles)).to_dict()
+            if action == "status":
+                status = payload.get("status")
+                if status not in {"active", "disabled"}:
+                    raise ValueError("status must be active or disabled")
+                if email == self.principal_id() and status != "active":
+                    raise ValueError("cannot disable current user")
+                user = manager.store.update_auth_user(email, status=str(status))
+                if status != "active":
+                    manager.store.revoke_auth_user_sessions(email)
+                return user.to_dict()
+            if action == "password":
+                password = payload.get("password")
+                if not isinstance(password, str) or not password:
+                    raise ValueError("password is required")
+                user = manager.store.reset_auth_user_password(email, hash_password(password))
+                manager.store.revoke_auth_user_sessions(email)
+                return user.to_dict()
+            raise KeyError(action)
 
         def principal_id(self) -> str | None:
             if self.current_identity:
@@ -1188,6 +1221,22 @@ def required_scope_for(method: str, path: str) -> str | None:
     if parts[0] == "p5":
         return "ops:read"
     return None
+
+
+def validate_auth_roles(roles: Any) -> list[str]:
+    if not isinstance(roles, list) or not roles:
+        raise ValueError("roles must be a non-empty list of strings")
+    if not all(isinstance(role, str) for role in roles):
+        raise ValueError("roles must be a non-empty list of strings")
+    allowed_roles = {"owner", "operator", "auditor", "member"}
+    normalized_roles: list[str] = []
+    for role in roles:
+        normalized_role = role.strip()
+        if normalized_role not in allowed_roles:
+            raise ValueError("roles may only contain owner, operator, auditor, or member")
+        if normalized_role not in normalized_roles:
+            normalized_roles.append(normalized_role)
+    return normalized_roles
 
 
 def load_index_html() -> str:
