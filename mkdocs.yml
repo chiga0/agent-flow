@@ -28,6 +28,7 @@ nav:
   - 架构设计:
       - 架构总览: implementation/index.md
       - AgentFlow 架构与术语: architecture.md
+      - AgentFlow V2 产品与架构整体方案: implementation/v2-product-architecture.md
       - 稳定单 Agent 执行单元: implementation/stable-agent-execution-unit.md
       - SubAgent 与独立执行单元边界: implementation/subagent-vs-execution-unit.md
       - 基于 qwen-code serve 的云端单 Agent 单元方案: implementation/qwen-serve-single-agent-cloud-unit.md

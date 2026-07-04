@@ -21,6 +21,7 @@
 本方案拆成以下专题，便于后续持续补充：
 
 - [稳定单 Agent 执行单元](stable-agent-execution-unit.md)：定义外部编排和调度的基础原子，并说明 `qwen serve` 与 SAEU 的关系。
+- [AgentFlow V2 产品与架构整体方案](v2-product-architecture.md)：把产品目标重定位为面向最终用户的云端长期运行 Agent 工作台，并设计用户端 Workspace、后台 Admin/Ops/Audit 和 runtime 底座的分层方案。
 - [基于 qwen-code serve 的云端单 Agent 单元方案](qwen-serve-single-agent-cloud-unit.md)：完整设计单 Agent 云端部署、审计、重放、恢复和排障。
 - [基于 Qwen WebShell 的 Chat 渲染方案](qwen-webshell-chat-rendering.md)：评估直接复用 Qwen WebShell / daemon WebUI transcript 层，并设计 `RuntimeEvent -> DaemonEvent` 的可执行投影方案。
 - [沙箱与隔离方案](sandbox-isolation.md)：回答 Docker、多 VPS、资源限制、网络和密钥隔离。

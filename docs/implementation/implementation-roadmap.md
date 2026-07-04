@@ -27,6 +27,34 @@
 | P6 | Beta 稳定化 | `beta_ready` | 故障演练、回放、监控、备份、部署脚本、产品级 Web 管理台和 CI/E2E 门禁完成 |
 | P7 | 产品化控制台与企业基础 | `in_progress` | Mission Detail/DAG、Runner Chat v2、Profile Editor、Access/RBAC foundation、真实 qwen mission 验收脚本和 executor isolation 路线可用 |
 
+## V2 产品重定位
+
+状态：`design_ready_for_review`
+
+V2 的目标不再是把 AgentFlow 首先呈现为 Run Manager / Worker / Executor 控制台，而是把它呈现为面向最终用户的云端长期运行 Agent 工作台：
+
+- 用户通过 Web、移动端、App 或 IM 发起任务。
+- 系统自动承接需求、规划任务、分配 Agent、初始化隔离环境并排队执行。
+- 用户实时查看任务进展、处理权限、消费最终结果。
+- 后台保留 worker、executor、queue、audit、cost、access、doctor 等治理能力。
+
+设计产物：
+
+- [AgentFlow V2 产品与架构整体方案](v2-product-architecture.md)
+- [DeerFlow 深度调研与 AgentFlow 对比](deer-flow-comparative-research.md)
+
+V2 实施阶段：
+
+| 阶段 | 目标 | 状态 | 退出标准 |
+| --- | --- | --- | --- |
+| V2-P0 | 方案定稿与审计 | `design_ready_for_review` | owner review 通过，明确 V2 MVP 范围 |
+| V2-P1 | 用户端 Task Workspace | `not_started` | `/workspace` 可创建 task、查看列表、进度、权限和结果 |
+| V2-P2 | 正式认证与用户隔离 | `not_started` | `/setup`、CSRF、改密码、token_version、task/run 用户隔离可用 |
+| V2-P3 | 默认 Agent 编排 | `not_started` | 复杂 task 自动生成 plan 并创建 mission；简单 task 退化为 single run |
+| V2-P4 | 文件、Skills 与结果页 | `not_started` | 文件上传成为 task input；结果页可消费；基础 `SKILL.md` registry 可用 |
+| V2-P5 | IM / 移动端入口 | `not_started` | IM 可发起 task、接收通知、处理 permission |
+| V2-P6 | 后台端 Admin/Ops/Audit 重构 | `not_started` | 现有 console 收敛为后台治理入口，普通用户默认不接触 runtime 参数 |
+
 ## P0：设计与审计
 
 状态：`done`
