@@ -636,15 +636,16 @@ describe("AgentFlow console", () => {
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: "工作台" }),
+      await screen.findByRole("heading", {
+        name: "把需求交给 AgentFlow，剩下的进展在这里跟踪。",
+      }),
     ).toBeInTheDocument();
-    expect(await screen.findByText("发起任务")).toBeInTheDocument();
-    expect(screen.getAllByText("Inspect runtime").length).toBeGreaterThan(0);
-    expect(screen.getByText("待处理")).toBeInTheDocument();
-    expect(await screen.findByText("活跃运行")).toBeInTheDocument();
-    expect(screen.getByText("回到对话")).toBeInTheDocument();
+    expect(screen.getByLabelText("你想完成什么？")).toBeInTheDocument();
+    expect(await screen.findByText("最近任务")).toBeInTheDocument();
+    expect(screen.getAllByText("待处理").length).toBeGreaterThan(0);
+    expect(screen.queryByText("活跃运行")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("link", { name: "概览" }));
+    await user.click(screen.getByRole("link", { name: "管理后台" }));
     expect(
       await screen.findByRole("heading", { name: "概览" }),
     ).toBeInTheDocument();
@@ -674,7 +675,9 @@ describe("AgentFlow console", () => {
     await user.click(screen.getByRole("button", { name: "登录" }));
 
     expect(
-      await screen.findByRole("heading", { name: "工作台" }),
+      await screen.findByRole("heading", {
+        name: "把需求交给 AgentFlow，剩下的进展在这里跟踪。",
+      }),
     ).toBeInTheDocument();
   });
 
@@ -684,14 +687,14 @@ describe("AgentFlow console", () => {
     await switchToEnglish(user);
 
     expect(
-      await screen.findByRole("heading", { name: "Workspace" }),
+      await screen.findByRole("heading", {
+        name: "Give AgentFlow a request and track the work here.",
+      }),
     ).toBeInTheDocument();
     await user.type(
       screen.getByLabelText("What do you want done?"),
       "Prepare a customer report",
     );
-    await user.selectOptions(screen.getByLabelText("Mode"), "single");
-    await user.selectOptions(screen.getByLabelText("Adapter"), "fake");
     await user.click(screen.getByRole("button", { name: "Start Task" }));
 
     await waitFor(() =>
@@ -743,6 +746,7 @@ describe("AgentFlow console", () => {
     const user = userEvent.setup();
     render(<App />);
     await switchToEnglish(user);
+    await user.click(await screen.findByRole("link", { name: "Admin" }));
     await user.click(await screen.findByRole("link", { name: "Runs" }));
 
     expect(

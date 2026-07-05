@@ -25,7 +25,6 @@ import {
   Copy,
   Cpu,
   Download,
-  ExternalLink,
   FileText,
   Filter,
   GitBranch,
@@ -123,9 +122,24 @@ const overviewRoute = createRoute({
   path: "/overview",
   component: OverviewPage,
 });
+const adminOverviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin",
+  component: OverviewPage,
+});
+const adminOverviewAliasRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/overview",
+  component: OverviewPage,
+});
 const runsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/runs",
+  component: RunsPage,
+});
+const adminRunsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/runs",
   component: RunsPage,
 });
 const runDetailRoute = createRoute({
@@ -133,9 +147,19 @@ const runDetailRoute = createRoute({
   path: "/runs/$runId",
   component: RunDetailPage,
 });
+const adminRunDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/runs/$runId",
+  component: RunDetailPage,
+});
 const unitsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/units",
+  component: UnitsPage,
+});
+const adminUnitsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/units",
   component: UnitsPage,
 });
 const executorsRoute = createRoute({
@@ -143,14 +167,29 @@ const executorsRoute = createRoute({
   path: "/executors",
   component: ExecutorsPage,
 });
+const adminExecutorsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/executors",
+  component: ExecutorsPage,
+});
 const missionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/missions",
   component: MissionsPage,
 });
+const adminMissionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/missions",
+  component: MissionsPage,
+});
 const missionDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/missions/$missionId",
+  component: MissionDetailPage,
+});
+const adminMissionDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/missions/$missionId",
   component: MissionDetailPage,
 });
 const taskDetailRoute = createRoute({
@@ -163,9 +202,19 @@ const profilesRoute = createRoute({
   path: "/profiles",
   component: ProfilesPage,
 });
+const adminProfilesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/profiles",
+  component: ProfilesPage,
+});
 const accessRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/access",
+  component: AccessPage,
+});
+const adminAccessRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/access",
   component: AccessPage,
 });
 const operationsRoute = createRoute({
@@ -173,9 +222,26 @@ const operationsRoute = createRoute({
   path: "/operations",
   component: OperationsPage,
 });
+const adminOperationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/operations",
+  component: OperationsPage,
+});
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
+  taskDetailRoute,
+  adminOverviewRoute,
+  adminOverviewAliasRoute,
+  adminRunsRoute,
+  adminRunDetailRoute,
+  adminUnitsRoute,
+  adminExecutorsRoute,
+  adminMissionsRoute,
+  adminMissionDetailRoute,
+  adminProfilesRoute,
+  adminAccessRoute,
+  adminOperationsRoute,
   overviewRoute,
   runsRoute,
   runDetailRoute,
@@ -183,7 +249,6 @@ const routeTree = rootRoute.addChildren([
   executorsRoute,
   missionsRoute,
   missionDetailRoute,
-  taskDetailRoute,
   profilesRoute,
   accessRoute,
   operationsRoute,
@@ -339,11 +404,16 @@ function LoginPage() {
 
 function WorkspacePage() {
   const { t } = useI18n();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const tasks = useQuery({ queryKey: ["tasks"], queryFn: runtimeApi.tasks });
   const capabilities = useQuery({
     queryKey: ["capabilities"],
     queryFn: runtimeApi.capabilities,
   });
+  const adapters = Object.keys(capabilities.data?.adapters ?? { fake: {} });
+  const [goal, setGoal] = useState("");
+  const [promptSeed, setPromptSeed] = useState(0);
   const running = (tasks.data?.tasks ?? []).filter((task) =>
     ["queued", "running", "blocked"].includes(task.status),
   ).length;
@@ -353,65 +423,12 @@ function WorkspacePage() {
   const completed = (tasks.data?.tasks ?? []).filter(
     (task) => task.status === "completed",
   ).length;
-
-  return (
-    <Page title={t("workspace.title")} subtitle={t("workspace.subtitle")}>
-      <div className="grid gap-4 md:grid-cols-3">
-        <Metric
-          label={t("workspace.activeTasks")}
-          value={running}
-          detail={t("workspace.activeTasksDetail")}
-        />
-        <Metric
-          label={t("workspace.needsAttention")}
-          value={attention}
-          detail={t("workspace.needsAttentionDetail")}
-        />
-        <Metric
-          label={t("workspace.completedTasks")}
-          value={completed}
-          detail={t("workspace.completedTasksDetail")}
-        />
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-[440px_minmax(0,1fr)]">
-        <CreateTaskPanel
-          adapters={Object.keys(capabilities.data?.adapters ?? { fake: {} })}
-        />
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <MessageSquare className="h-4 w-4 text-primary" />
-              <CardTitle>{t("workspace.recentTasks")}</CardTitle>
-            </div>
-            <Button size="sm" variant="ghost" onClick={() => tasks.refetch()}>
-              <RefreshCw className="h-4 w-4" />
-              {t("common.refresh")}
-            </Button>
-          </CardHeader>
-          <CardBody>
-            <TaskList tasks={tasks.data?.tasks ?? []} />
-          </CardBody>
-        </Card>
-      </div>
-    </Page>
+  const attentionTasks = (tasks.data?.tasks ?? []).filter(
+    (task) => task.needs_attention,
   );
-}
-
-function CreateTaskPanel({ adapters }: { adapters: string[] }) {
-  const { t } = useI18n();
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const [goal, setGoal] = useState("");
-  const [adapter, setAdapter] = useState(adapters[0] ?? "fake");
-  const [mode, setMode] = useState("single");
-  const [workspace, setWorkspace] = useState("");
-  useEffect(() => {
-    if (!adapters.length || adapters.includes(adapter)) {
-      return;
-    }
-    setAdapter(adapters[0] ?? "fake");
-  }, [adapter, adapters]);
+  const activeTasks = (tasks.data?.tasks ?? []).filter((task) =>
+    ["queued", "running", "blocked"].includes(task.status),
+  );
   const createTask = useMutation({
     mutationFn: runtimeApi.createTask,
     onSuccess: async (task) => {
@@ -425,89 +442,168 @@ function CreateTaskPanel({ adapters }: { adapters: string[] }) {
   });
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!goal.trim()) {
+    const trimmed = goal.trim();
+    if (!trimmed) {
       return;
     }
     createTask.mutate({
-      goal: goal.trim(),
-      mode,
-      adapter,
-      workspace: workspace.trim() || undefined,
-      strategy: mode === "mission" ? "sequential" : undefined,
+      goal: trimmed,
+      mode: "mission",
+      adapter: preferredTaskAdapter(adapters),
+      strategy: "sequential",
     });
   };
+  const quickPrompts = [
+    t("workspace.quickResearch"),
+    t("workspace.quickPlan"),
+    t("workspace.quickReview"),
+  ];
+
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center gap-2">
-          <Send className="h-4 w-4 text-primary" />
-          <CardTitle>{t("workspace.newTask")}</CardTitle>
-        </div>
-        <Badge tone="info">{t("workspace.userMode")}</Badge>
-      </CardHeader>
-      <CardBody>
-        <form className="grid gap-4" onSubmit={submit}>
-          <Field label={t("workspace.goal")}>
+    <div className="mx-auto grid w-full max-w-7xl gap-5">
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="grid min-h-[calc(100vh-9rem)] content-center gap-5">
+          <div className="grid gap-3">
+            <div className="text-sm font-medium text-primary">
+              {t("workspace.userMode")}
+            </div>
+            <h1 className="max-w-3xl text-3xl font-semibold tracking-normal sm:text-5xl">
+              {t("workspace.chatTitle")}
+            </h1>
+          </div>
+          <form
+            className="grid gap-3 rounded-lg border border-border bg-card p-3 shadow-sm"
+            onSubmit={submit}
+          >
+            <label className="sr-only" htmlFor="consumer-task-input">
+              {t("workspace.goal")}
+            </label>
             <Textarea
-              className="min-h-36"
-              placeholder={t("workspace.goalPlaceholder")}
+              key={promptSeed}
+              className="min-h-36 resize-y border-0 bg-transparent text-base shadow-none focus-visible:ring-0"
+              id="consumer-task-input"
+              placeholder={t("workspace.chatPlaceholder")}
               value={goal}
               onChange={(event) => setGoal(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || event.shiftKey) {
+                  return;
+                }
+                event.preventDefault();
+                const form = event.currentTarget.form;
+                form?.requestSubmit();
+              }}
             />
-          </Field>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label={t("workspace.mode")}>
-              <Select
-                value={mode}
-                onChange={(event) => setMode(event.target.value)}
-              >
-                <option value="single">{t("workspace.modeSingle")}</option>
-                <option value="mission">{t("workspace.modeMission")}</option>
-              </Select>
-            </Field>
-            <Field label={t("common.adapter")}>
-              <Select
-                value={adapter}
-                onChange={(event) => setAdapter(event.target.value)}
-              >
-                {adapters.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+              <div className="flex flex-wrap gap-2">
+                {quickPrompts.map((prompt) => (
+                  <Button
+                    key={prompt}
+                    size="sm"
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setGoal(prompt);
+                      setPromptSeed((value) => value + 1);
+                    }}
+                  >
+                    {prompt}
+                  </Button>
                 ))}
-              </Select>
-            </Field>
-          </div>
-          <Field label={t("common.workspace")}>
-            <Input
-              placeholder={t("workspace.workspacePlaceholder")}
-              value={workspace}
-              onChange={(event) => setWorkspace(event.target.value)}
-            />
-          </Field>
+              </div>
+              <Button
+                className="w-full sm:w-auto"
+                disabled={createTask.isPending || !goal.trim()}
+                type="submit"
+                variant="primary"
+              >
+                <Send className="h-4 w-4" />
+                {createTask.isPending
+                  ? t("workspace.creating")
+                  : t("workspace.startTask")}
+              </Button>
+            </div>
+          </form>
           {createTask.isError ? (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
               {String(createTask.error)}
             </div>
           ) : null}
-          <Button
-            className="h-11"
-            disabled={createTask.isPending || !goal.trim()}
-            type="submit"
-            variant="primary"
-          >
-            <Send className="h-4 w-4" />
-            {createTask.isPending
-              ? t("workspace.creating")
-              : t("workspace.startTask")}
-          </Button>
-        </form>
+        </div>
+
+        <aside className="grid content-start gap-4">
+          <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+            <Metric
+              label={t("workspace.activeTasks")}
+              value={running}
+              detail={t("workspace.activeTasksDetail")}
+            />
+            <Metric
+              label={t("workspace.needsAttention")}
+              value={attention}
+              detail={t("workspace.needsAttentionDetail")}
+            />
+            <Metric
+              label={t("workspace.completedTasks")}
+              value={completed}
+              detail={t("workspace.completedTasksDetail")}
+            />
+          </div>
+          {attentionTasks.length ? (
+            <TaskSection
+              tasks={attentionTasks}
+              title={t("workspace.needsAttention")}
+            />
+          ) : null}
+          {activeTasks.length ? (
+            <TaskSection tasks={activeTasks} title={t("workspace.activeTasks")} />
+          ) : null}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 text-primary" />
+                <CardTitle>{t("workspace.recentTasks")}</CardTitle>
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => tasks.refetch()}>
+                <RefreshCw className="h-4 w-4" />
+                {t("common.refresh")}
+              </Button>
+            </CardHeader>
+            <CardBody>
+              <TaskList tasks={(tasks.data?.tasks ?? []).slice(0, 6)} compact />
+            </CardBody>
+          </Card>
+        </aside>
+      </section>
+    </div>
+  );
+}
+
+function preferredTaskAdapter(adapters: string[]) {
+  return adapters.includes("qwen") ? "qwen" : adapters[0] || "fake";
+}
+
+function TaskSection({ title, tasks }: { title: string; tasks: TaskState[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <Badge tone="neutral">{tasks.length}</Badge>
+      </CardHeader>
+      <CardBody>
+        <TaskList tasks={tasks.slice(0, 4)} compact />
       </CardBody>
     </Card>
   );
 }
 
-function TaskList({ tasks }: { tasks: TaskState[] }) {
+function TaskList({
+  compact = false,
+  tasks,
+}: {
+  compact?: boolean;
+  tasks: TaskState[];
+}) {
   const { t } = useI18n();
   if (!tasks.length) {
     return (
@@ -543,10 +639,10 @@ function TaskList({ tasks }: { tasks: TaskState[] }) {
           <div className="line-clamp-2 text-sm text-muted-foreground">
             {task.goal}
           </div>
-          <TaskProgressBar task={task} />
+          {compact ? null : <TaskProgressBar task={task} />}
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span>{taskAgentLabel(task)}</span>
-            <span>{timeAgo(task.updated_at)}</span>
+            <span>{compact ? timeAgo(task.updated_at) : taskAgentLabel(task)}</span>
+            {!compact ? <span>{timeAgo(task.updated_at)}</span> : null}
           </div>
         </Link>
       ))}
@@ -555,7 +651,7 @@ function TaskList({ tasks }: { tasks: TaskState[] }) {
 }
 
 function TaskDetailPage() {
-  const { taskId } = useParams({ from: "/tasks/$taskId" });
+  const { taskId } = useParams({ strict: false }) as { taskId: string };
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const task = useQuery({
@@ -621,32 +717,14 @@ function TaskDetailPage() {
           <CardBody className="grid gap-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="font-mono text-xs text-muted-foreground">
-                  {current.task_id}
-                </div>
+                {current.result_summary ? (
+                  <div className="text-sm text-muted-foreground">
+                    {current.result_summary}
+                  </div>
+                ) : null}
                 <TaskProgressBar task={current} />
               </div>
               <div className="flex flex-wrap gap-2">
-                {current.source.run_id ? (
-                  <LinkButton
-                    href={`#/runs/${current.source.run_id}`}
-                    size="sm"
-                    variant="secondary"
-                  >
-                    <ExternalLink className="h-4 w-4" />
-                    {t("workspace.sourceRun")}
-                  </LinkButton>
-                ) : null}
-                {current.source.mission_id ? (
-                  <LinkButton
-                    href={`#/missions/${current.source.mission_id}`}
-                    size="sm"
-                    variant="secondary"
-                  >
-                    <GitBranch className="h-4 w-4" />
-                    {t("workspace.sourceMission")}
-                  </LinkButton>
-                ) : null}
                 <Button
                   disabled={
                     cancelTask.isPending ||
@@ -1844,7 +1922,7 @@ function adapterTip(adapter: string, t: (key: I18nKey) => string) {
 
 function RunDetailPage() {
   const { t } = useI18n();
-  const { runId } = useParams({ from: "/runs/$runId" });
+  const { runId } = useParams({ strict: false }) as { runId: string };
   const queryClient = useQueryClient();
   const run = useQuery({
     queryKey: ["runs", runId],
@@ -2815,7 +2893,7 @@ function MissionsPage() {
 
 function MissionDetailPage() {
   const { t } = useI18n();
-  const { missionId } = useParams({ from: "/missions/$missionId" });
+  const { missionId } = useParams({ strict: false }) as { missionId: string };
   const queryClient = useQueryClient();
   const mission = useQuery({
     queryKey: ["missions", missionId],

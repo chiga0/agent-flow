@@ -10,7 +10,6 @@ import {
   Languages,
   LogOut,
   Menu,
-  MessageSquare,
   Moon,
   Network,
   Server,
@@ -35,7 +34,57 @@ import { useI18n, type I18nKey } from "../lib/i18n";
 import { cn } from "../lib/utils";
 
 const navItems = [
-  { to: "/", labelKey: "nav.workspace", icon: MessageSquare },
+  {
+    to: "/admin",
+    labelKey: "nav.overview",
+    icon: Activity,
+    roles: ["owner", "operator", "auditor"],
+  },
+  {
+    to: "/admin/runs",
+    labelKey: "nav.runs",
+    icon: ClipboardList,
+    roles: ["owner", "operator", "auditor"],
+  },
+  {
+    to: "/admin/units",
+    labelKey: "nav.units",
+    icon: Network,
+    roles: ["owner", "operator", "auditor"],
+  },
+  {
+    to: "/admin/executors",
+    labelKey: "nav.executors",
+    icon: Server,
+    roles: ["owner", "operator", "auditor"],
+  },
+  {
+    to: "/admin/missions",
+    labelKey: "nav.missions",
+    icon: Boxes,
+    roles: ["owner", "operator", "auditor"],
+  },
+  {
+    to: "/admin/profiles",
+    labelKey: "nav.profiles",
+    icon: UserCog,
+    roles: ["owner", "operator"],
+  },
+  {
+    to: "/admin/access",
+    labelKey: "nav.access",
+    icon: Users,
+    roles: ["owner"],
+  },
+  {
+    to: "/admin/operations",
+    labelKey: "nav.operations",
+    icon: ShieldCheck,
+    roles: ["owner", "operator"],
+  },
+] as const;
+
+const legacyAdminItems = [
   {
     to: "/overview",
     labelKey: "nav.overview",
@@ -84,6 +133,18 @@ const navItems = [
 export function Shell() {
   const [open, setOpen] = useState(false);
   const { t } = useI18n();
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
+  const session = useQuery({
+    queryKey: ["auth", "session"],
+    queryFn: runtimeApi.session,
+  });
+  const roles = session.data?.principal?.roles ?? [];
+  const isAdmin = isAdminPath(pathname);
+  const canUseAdmin = roles.some((role) =>
+    ["owner", "operator", "auditor"].includes(role),
+  );
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-30 border-b border-border bg-card/95 backdrop-blur">
@@ -91,7 +152,7 @@ export function Shell() {
           <div className="flex min-w-0 items-center gap-3">
             <Button
               aria-label={t("nav.open")}
-              className="lg:hidden"
+              className={isAdmin ? "lg:hidden" : "hidden"}
               size="icon"
               variant="ghost"
               onClick={() => setOpen(true)}
@@ -100,14 +161,19 @@ export function Shell() {
             </Button>
             <div className="grid min-w-0">
               <div className="truncate text-sm font-semibold">
-                {t("nav.title")}
+                {isAdmin ? t("nav.adminTitle") : t("nav.title")}
               </div>
               <div className="truncate text-xs text-muted-foreground">
-                {t("nav.subtitle")}
+                {isAdmin ? t("nav.adminSubtitle") : t("nav.consumerSubtitle")}
               </div>
             </div>
           </div>
           <div className="flex items-center gap-1">
+            {isAdmin ? (
+              <LinkButton to="/" label={t("nav.userApp")} />
+            ) : canUseAdmin ? (
+              <LinkButton to="/admin" label={t("nav.admin")} />
+            ) : null}
             <DocsLink />
             <LanguageToggle />
             <ThemeToggle />
@@ -116,10 +182,16 @@ export function Shell() {
         </div>
       </header>
 
-      <div className="grid lg:grid-cols-[240px_minmax(0,1fr)]">
-        <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] border-r border-border bg-card lg:block">
-          <Navigation />
-        </aside>
+      <div
+        className={
+          isAdmin ? "grid lg:grid-cols-[240px_minmax(0,1fr)]" : "grid"
+        }
+      >
+        {isAdmin ? (
+          <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] border-r border-border bg-card lg:block">
+            <Navigation />
+          </aside>
+        ) : null}
         {open ? (
           <div className="fixed inset-0 z-40 bg-background/80 backdrop-blur lg:hidden">
             <div className="h-full w-72 border-r border-border bg-card">
@@ -138,12 +210,29 @@ export function Shell() {
             </div>
           </div>
         ) : null}
-        <main className="min-w-0 p-4 pb-36 lg:p-6 lg:pb-36">
+        <main
+          className={
+            isAdmin
+              ? "min-w-0 p-4 pb-36 lg:p-6 lg:pb-36"
+              : "min-w-0 px-4 py-5 pb-24 sm:px-6 lg:px-8"
+          }
+        >
           <Outlet />
         </main>
       </div>
-      <ActiveRunDock />
+      {isAdmin ? <ActiveRunDock /> : null}
     </div>
+  );
+}
+
+function LinkButton({ to, label }: { to: string; label: string }) {
+  return (
+    <Link
+      className="inline-flex h-9 items-center justify-center rounded-md border border-border px-3 text-sm font-medium hover:bg-muted"
+      to={to}
+    >
+      {label}
+    </Link>
   );
 }
 
@@ -157,7 +246,10 @@ function Navigation({ onNavigate }: { onNavigate?: () => void }) {
     select: (state) => state.location.pathname,
   });
   const roles = session.data?.principal?.roles ?? [];
-  const visibleItems = navItems.filter((item) => {
+  const sourceItems = pathname.startsWith("/admin")
+    ? navItems
+    : legacyAdminItems;
+  const visibleItems = sourceItems.filter((item) => {
     if (!("roles" in item)) {
       return true;
     }
@@ -168,7 +260,8 @@ function Navigation({ onNavigate }: { onNavigate?: () => void }) {
       {visibleItems.map((item) => {
         const Icon = item.icon;
         const active =
-          item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
+          pathname === item.to ||
+          (item.to !== "/admin" && pathname.startsWith(item.to));
         return (
           <Link
             key={item.to}
@@ -186,6 +279,12 @@ function Navigation({ onNavigate }: { onNavigate?: () => void }) {
       })}
     </nav>
   );
+}
+
+function isAdminPath(pathname: string) {
+  return pathname.startsWith("/admin") && pathname !== "/admin-login"
+    ? true
+    : pathname !== "/" && !pathname.startsWith("/tasks");
 }
 
 function DocsLink() {

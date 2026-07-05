@@ -13,7 +13,11 @@ test("signs in from the responsive login page", async ({ page, isMobile }) => {
   await page.getByLabel("邮箱").fill("owner@example.com");
   await page.getByLabel("密码").fill("secret");
   await page.getByRole("button", { name: "登录" }).click();
-  await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "把需求交给 AgentFlow，剩下的进展在这里跟踪。",
+    }),
+  ).toBeVisible();
 });
 
 test("creates a task from the user workspace", async ({ page }) => {
@@ -31,14 +35,16 @@ test("creates a task from the user workspace", async ({ page }) => {
   await expect(page.getByText("workspace-result.md")).toBeVisible();
 });
 
-test("hides backend navigation for a member user", async ({ page, isMobile }) => {
+test("hides backend navigation for a member user", async ({ page }) => {
   await mockRuntime(page, { roles: ["member"] });
   await page.goto("/");
 
-  if (isMobile) {
-    await page.getByLabel("打开导航").click();
-  }
-  await expect(page.getByRole("link", { name: /工作台/ })).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "把需求交给 AgentFlow，剩下的进展在这里跟踪。",
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: /管理后台/ })).toHaveCount(0);
   await expect(page.getByRole("link", { name: /运行/ })).toHaveCount(0);
   await expect(page.getByRole("link", { name: /执行器/ })).toHaveCount(0);
   await expect(page.getByRole("link", { name: /访问控制/ })).toHaveCount(0);
@@ -49,10 +55,19 @@ test("manages runs, permissions, profiles, and operations", async ({
 }) => {
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
-  await expect(page.getByText("发起任务")).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "把需求交给 AgentFlow，剩下的进展在这里跟踪。",
+    }),
+  ).toBeVisible();
   await page.getByLabel("切换语言").click();
-  await expect(page.getByRole("heading", { name: "Workspace" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "Give AgentFlow a request and track the work here.",
+    }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "Admin" }).click();
+  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
   await navigate(page, /Runs/);
   await page.getByLabel("Prompt").fill("Browser smoke run");
   await page.getByRole("button", { name: "Start" }).click();
@@ -154,7 +169,7 @@ test("manages runs, permissions, profiles, and operations", async ({
 
 test("keeps navigation usable on mobile", async ({ page, isMobile }) => {
   test.skip(!isMobile, "mobile project only");
-  await page.goto("/");
+  await page.goto("/#/admin");
   await page.getByLabel("打开导航").click();
   await page.getByRole("link", { name: /任务编排/ }).click();
   await expect(page.getByRole("heading", { name: "任务编排" })).toBeVisible();

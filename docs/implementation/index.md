@@ -22,6 +22,7 @@
 
 - [稳定单 Agent 执行单元](stable-agent-execution-unit.md)：定义外部编排和调度的基础原子，并说明 `qwen serve` 与 SAEU 的关系。
 - [AgentFlow V2 产品与架构整体方案](v2-product-architecture.md)：把产品目标重定位为面向最终用户的云端长期运行 Agent 工作台，并设计用户端 Workspace、后台 Admin/Ops/Audit 和 runtime 底座的分层方案。
+- [AgentFlow V2 C/B 双端产品重设计](v2-c-b-product-redesign.md)：将 C 端 Chat 工作区与 B 端 Admin 管理后台完全拆分，明确用户画像、信息架构、roadmap 与审计门槛。
 - [AgentFlow V2 多轮审计记录](v2-product-architecture-audit.md)：从产品、目标用户、竞品、架构、安全、数据隔离、调度、完成定义、实时投影、实施范围和反向事故角度审计 V2 方案。
 - [基于 qwen-code serve 的云端单 Agent 单元方案](qwen-serve-single-agent-cloud-unit.md)：完整设计单 Agent 云端部署、审计、重放、恢复和排障。
 - [基于 Qwen WebShell 的 Chat 渲染方案](qwen-webshell-chat-rendering.md)：评估直接复用 Qwen WebShell / daemon WebUI transcript 层，并设计 `RuntimeEvent -> DaemonEvent` 的可执行投影方案。
