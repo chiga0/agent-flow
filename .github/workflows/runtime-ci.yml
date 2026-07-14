@@ -38,6 +38,12 @@ jobs:
       - name: Runtime tests with coverage gate
         run: python3 scripts/check_runtime_coverage.py
 
+      - name: V2 control-plane smoke
+        run: |
+          PYTHONPATH=runtime python3 scripts/smoke_v2_control_plane.py \
+            --artifact-root "$RUNNER_TEMP/agentflow-v2-smoke" \
+            --timeout 10
+
       - name: Install web dependencies
         working-directory: web
         run: npm ci

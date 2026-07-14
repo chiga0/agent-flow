@@ -1026,8 +1026,12 @@ describe("AgentFlow console", () => {
         }),
       ),
     );
-    expect(await screen.findByText("run_created")).toBeInTheDocument();
-    expect(await screen.findByText("Run Detail")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/admin/runs/run_created"),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Run Detail" }),
+    ).toBeInTheDocument();
     expect(await screen.findByText("Agent Chat")).toBeInTheDocument();
   });
 

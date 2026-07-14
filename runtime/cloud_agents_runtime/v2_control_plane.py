@@ -302,9 +302,24 @@ class V2ControlPlane:
         if complex_task:
             strategy = "orchestrator-workers"
             agent_specs = [
-                ("brain", "Plan the work", "Clarify scope, risks, and execution order", []),
-                ("builder", "Execute the work", "Produce the requested deliverable", ["brain"]),
-                ("reviewer", "Review and package", "Evaluate output and prepare summary", ["builder"]),
+                (
+                    "brain",
+                    "Plan the work",
+                    "Clarify scope, risks, and execution order",
+                    [],
+                ),
+                (
+                    "builder",
+                    "Execute the work",
+                    "Produce the requested deliverable",
+                    ["brain"],
+                ),
+                (
+                    "reviewer",
+                    "Review and package",
+                    "Evaluate output and prepare summary",
+                    ["builder"],
+                ),
             ]
         else:
             strategy = "single-agent-fast-path"
@@ -677,7 +692,11 @@ class V2ControlPlane:
 
     def _next_sequence_locked(self, task_id: str) -> int:
         row = self._db.execute(
-            "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM v2_events WHERE task_id = ?",
+            """
+            SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
+            FROM v2_events
+            WHERE task_id = ?
+            """,
             (task_id,),
         ).fetchone()
         return int(row["next_sequence"])

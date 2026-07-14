@@ -128,6 +128,12 @@ jobs:
       - name: Runtime tests with coverage gate
         run: python3 scripts/check_runtime_coverage.py
 
+      - name: V2 control-plane smoke
+        run: |
+          PYTHONPATH=runtime python3 scripts/smoke_v2_control_plane.py \
+            --artifact-root "$RUNNER_TEMP/agentflow-v2-smoke" \
+            --timeout 10
+
       - name: Install web dependencies
         working-directory: web
         run: npm ci
@@ -289,6 +295,19 @@ jobs:
             --adapter fake \
             --timeout 30 \
             --skip-run
+          AUTH_EMAIL="$(
+            awk -F= '$1 == "RUN_MANAGER_BOOTSTRAP_EMAIL" {print $2}' \
+              /etc/cloud-agents-runtime.env
+          )"
+          AUTH_PASSWORD="$(
+            awk -F= '$1 == "RUN_MANAGER_BOOTSTRAP_PASSWORD" {print $2}' \
+              /etc/cloud-agents-runtime.env
+          )"
+          python3 scripts/smoke_v2_control_plane.py \
+            --base-url http://127.0.0.1:8765 \
+            --email "$AUTH_EMAIL" \
+            --password "$AUTH_PASSWORD" \
+            --timeout 10
           REMOTE
 
       - name: Qwen deep acceptance on VPS

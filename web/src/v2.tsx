@@ -228,9 +228,14 @@ export function V2TaskPage() {
     <div className="mx-auto grid w-full max-w-7xl gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <Link className="text-sm text-primary hover:underline" to="/v2">
-            Client Workspace
-          </Link>
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <Link className="text-primary hover:underline" to="/v2">
+              Client Workspace
+            </Link>
+            <Link className="text-primary hover:underline" to="/v2/admin">
+              Admin
+            </Link>
+          </div>
           <h1 className="mt-1 text-2xl font-semibold tracking-normal">
             {current?.title ?? "Task"}
           </h1>

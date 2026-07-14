@@ -41,6 +41,24 @@ flowchart LR
 
 2C2G 不建议作为“控制面 + qwen + 构建 + 多 worker”混合节点。
 
+### 2C2G 结论
+
+当前 V2 可用切片在 2C2G 上可以跑 control plane + fake smoke，但余量很小。推荐只把 2C2G 用作：
+
+- 公网入口。
+- `capacity=1` 的远程 worker。
+- 临时 demo control plane。
+
+不推荐把以下工作放到 2C2G：
+
+- `npm ci && npm run build && npm run test:e2e`。
+- Playwright browser install。
+- qwen executor 多并发。
+- Docker image build。
+- 长任务 workspace + qwen + Web 控制台同时运行。
+
+如果只有 2C2G，使用 `deploy/runtime.2c2g.env.example`，并保持 `RUN_MANAGER_WORKER_CAPACITY=1`、`RUNTIME_MEMORY_LIMIT=768m`、`QWEN_CONTAINER_MEMORY_MB=768`。如果有本机/NAS，优先把 V2 control plane 放在本机/NAS，2C2G 只做 worker 或边缘。
+
 ## 3. 控制面部署
 
 以下以 Linux NAS/Ubuntu 工作站为例。macOS 也可以运行，但建议用 `launchd` 或 Docker 管理后台进程。
@@ -125,11 +143,18 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/agentflow
 EnvironmentFile=/etc/agentflow-runtime.env
-ExecStart=/usr/bin/python3 -m runtime.cloud_agents_runtime.server
+Environment=PYTHONPATH=/opt/agentflow/runtime
+ExecStart=/usr/bin/python3 -m cloud_agents_runtime --host 127.0.0.1 --port 8765 --artifact-root /var/lib/agentflow-runtime --protect-health
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
 LimitNOFILE=65535
+CPUAccounting=true
+CPUQuota=150%
+MemoryAccounting=true
+MemoryMax=1536M
+TasksAccounting=true
+TasksMax=1024
 
 [Install]
 WantedBy=multi-user.target
@@ -155,6 +180,61 @@ http://127.0.0.1:8765/
 ```
 
 使用 `RUN_MANAGER_BOOTSTRAP_EMAIL` 和 `RUN_MANAGER_BOOTSTRAP_PASSWORD` 登录。
+
+### V2 smoke 验证
+
+服务启动后先验证 V2 的任务、计划、事件和结果闭环：
+
+```bash
+cd /opt/agentflow
+RUN_MANAGER_BOOTSTRAP_EMAIL="$(
+  awk -F= '$1=="RUN_MANAGER_BOOTSTRAP_EMAIL"{print $2}' /etc/agentflow-runtime.env
+)"
+RUN_MANAGER_BOOTSTRAP_PASSWORD="$(
+  awk -F= '$1=="RUN_MANAGER_BOOTSTRAP_PASSWORD"{print $2}' /etc/agentflow-runtime.env
+)"
+PYTHONPATH=runtime python3 scripts/smoke_v2_control_plane.py \
+  --base-url http://127.0.0.1:8765 \
+  --email "$RUN_MANAGER_BOOTSTRAP_EMAIL" \
+  --password "$RUN_MANAGER_BOOTSTRAP_PASSWORD" \
+  --timeout 10
+```
+
+成功时会输出类似：
+
+```json
+{"event_count": 12, "mode": "http", "status": "completed", "strategy": "orchestrator-workers", "task_id": "task_xxx"}
+```
+
+浏览器入口：
+
+```text
+http://127.0.0.1:8765/#/v2
+http://127.0.0.1:8765/#/v2/admin
+```
+
+### Docker Compose 部署
+
+不使用 systemd 直接跑 Python 时，可以用 compose：
+
+```bash
+cp deploy/runtime.local-nas.env.example .env
+python3 - <<'PY' >> .env
+import secrets
+print("RUN_MANAGER_TOKEN=" + secrets.token_urlsafe(32))
+print("RUNTIME_BOOTSTRAP_PASSWORD=" + secrets.token_urlsafe(18))
+print("RUN_MANAGER_SESSION_SECRET=" + secrets.token_urlsafe(32))
+PY
+docker compose -f deploy/docker-compose.runtime.yml up -d --build
+```
+
+2C2G VPS 使用：
+
+```bash
+cp deploy/runtime.2c2g.env.example .env
+# 填入 RUN_MANAGER_TOKEN/RUNTIME_BOOTSTRAP_PASSWORD/RUN_MANAGER_SESSION_SECRET
+docker compose -f deploy/docker-compose.runtime.yml up -d --build
+```
 
 ## 4. 公网访问
 
