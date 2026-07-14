@@ -1024,6 +1024,32 @@ cancel -> terminal state
 
 可实施性判定：**可实施，但必须按 Phase 0-8 分阶段推进。** 当前文档已经足以指导 Phase 0 和 Phase 1；Phase 2 之后需要在 schema 和 ADR 完成后再拆具体任务。
 
+### 19.6 外部成熟方案对标与 build-vs-buy 审计
+
+专业性判断：当前 V2 架构方向是专业的，但不能理解成“全部自研”。更准确的定位是：AgentFlow V2 是企业级 Agent 产品控制面、治理层、体验层和执行单元管理层；底层 durable execution、Agent graph、tool protocol、sandbox runtime、observability 等能力应优先采用成熟方案。
+
+| 能力域 | 成熟方案 | V2 决策 |
+| --- | --- | --- |
+| Durable workflow | Temporal | 生产首选；不自研核心可靠调度、replay、retry、signal。只保留接口抽象，允许 dev/local lightweight runner |
+| Agent graph / Brain | LangGraph、Microsoft Agent Framework、CrewAI Flow | 优先作为 Brain/Planner spike 候选；不要把 Brain 硬编码成自研 prompt chain |
+| Agent-to-tool | MCP | 直接作为工具和外部数据连接标准，不重复定义 tool discovery/invocation 协议 |
+| Agent-to-agent | A2A | 外部黑盒 Agent 互操作采用 A2A；内部仍以 canonical event 和 AgentTask 为事实源 |
+| Coding agent client protocol | ACP | 适合作为 coding agent/editor/webshell 的适配层候选，不作为平台唯一核心协议 |
+| Sandbox runtime | OpenHands runtime、Runloop、Daytona、Docker/Kubernetes | 优先复用隔离运行时模式和镜像约束；不要手写不成熟的容器安全层 |
+| Event-driven building blocks | Dapr pub/sub、Dapr Workflow、actors | 可作为 Channel Gateway、worker event bus、边缘服务解耦候选；不强制进入 MVP |
+| Low-code agent platform | Flowise、Dify 类产品 | 不作为 V2 内核；可借鉴 visual builder、tool marketplace、evaluation/HITL 产品形态 |
+| Multi-agent research framework | AutoGen、CrewAI | 可用于 prototype 和 Brain 策略验证；不能替代企业控制面、审计和执行单元治理 |
+
+Build-vs-buy 原则：
+
+1. 不自研 durable workflow engine，除非 Phase 0 spike 证明 Temporal 在本项目约束下不可接受。
+2. 不自研 MCP/A2A/ACP 等已有互操作协议，只做 adapter、gateway 和 canonical event mapping。
+3. 不自研容器隔离安全模型，只定义 Execution Unit contract，并复用 Docker/Kubernetes/OpenHands 类成熟 runtime 模式。
+4. 不把 LangGraph/CrewAI/AutoGen 直接当整个平台；它们解决的是 agent 编排或 agent 开发，不解决完整的租户、权限、Channel、审计、产物、执行单元注册和企业运维。
+5. V2 自研的合理边界是产品控制面：Client/Admin/Channel 体验、租户与权限、Task/Plan/Artifact 领域模型、adapter conformance、audit/replay projection、执行单元 registry/scheduler、企业级测试门禁。
+
+因此，V2 的专业路径不是“从零写一个 Agent 框架”，而是“站在成熟 Agent/Workflow/Protocol/Runtime 之上，做一个可治理、可审计、可多入口分发、可接入多种 CLI Agent 的平台控制面”。
+
 ## 20. 最终验收标准
 
 V2 不是“v1 页面改漂亮”。V2 完成时应满足：
