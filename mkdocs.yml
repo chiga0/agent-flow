@@ -29,6 +29,7 @@ nav:
   - 架构设计:
       - 架构总览: implementation/index.md
       - AgentFlow 架构与术语: architecture.md
+      - Client/Admin 分离与多 Agent 平台化方案: implementation/client-admin-agent-platform-plan.md
       - AgentFlow V2 产品与架构整体方案: implementation/v2-product-architecture.md
       - AgentFlow V2 C/B 双端产品重设计: implementation/v2-c-b-product-redesign.md
       - AgentFlow V2 实施 Roadmap: implementation/v2-implementation-roadmap.md
