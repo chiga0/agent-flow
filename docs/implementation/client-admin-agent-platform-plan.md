@@ -1050,6 +1050,68 @@ Build-vs-buy 原则：
 
 因此，V2 的专业路径不是“从零写一个 Agent 框架”，而是“站在成熟 Agent/Workflow/Protocol/Runtime 之上，做一个可治理、可审计、可多入口分发、可接入多种 CLI Agent 的平台控制面”。
 
+### 19.7 系统复杂度、鲁棒性与高可用审计
+
+复杂度判断：当前目标架构完整但偏复杂，复杂度主要来自 Client/Admin/Channel 三入口、多 Agent 编排、多 CLI adapter、执行单元发现、权限审计和 replay 同时成立。这个复杂度不是不合理，而是不能在 MVP 阶段一次性展开成大量微服务。
+
+系统设计结论：
+
+| 维度 | 审计结论 | 必须约束 |
+| --- | --- | --- |
+| 架构复杂度 | 高，但来自真实需求 | Phase 1-3 采用 modular monolith control plane，不提前拆十几个服务 |
+| 状态复杂度 | 高，任务、事件、产物、审批都有状态 | Postgres + Temporal history + Object Store 作为事实源，Redis 只做 cache/fanout |
+| 协议复杂度 | 中高，多 CLI 和外部协议并存 | 外部协议全部落到 canonical event，不让 UI 或 DB 绑定任一 native protocol |
+| 运行时复杂度 | 高，Agent CLI、workspace、容器、远程机器都可能失败 | Execution Unit contract + heartbeat + lease + idempotent event upload |
+| Channel 复杂度 | 中高，不同 IM 平台回调语义不同 | 统一 ChannelMessage/Callback/Notification，并强制验签、去重、幂等 |
+| 可观测复杂度 | 高，用户要看 chat，管理员要看 audit | raw log、canonical event、UI projection 分层，不把 debug log 当状态源 |
+
+MVP 降复杂度原则：
+
+1. 第一阶段只部署 4 个核心进程：Control Plane API、Temporal Worker、Execution Worker、Frontend。
+2. Realtime、Channel、Artifact 可以先作为 Control Plane 内部模块，等吞吐或团队边界明确后再拆服务。
+3. 第一条 golden path 只要求 Web Client + qwen adapter + local/docker execution + Postgres + object store dev mode。
+4. IM Channel 先选一个平台做完整闭环，再用 conformance fixture 扩展钉钉、飞书、企业微信。
+5. Brain 首版使用 deterministic planner 或 LangGraph/CrewAI spike 结果，不一开始做复杂自学习 planner。
+6. Dapr、Vector Store、Kubernetes autoscaling、A2A external agent marketplace 不进入 Phase 1-3 的硬依赖。
+
+鲁棒性设计要求：
+
+| 故障场景 | 预期行为 |
+| --- | --- |
+| 浏览器或移动端崩溃 | 后台 DagRun 继续执行，客户端按 event cursor 恢复 timeline |
+| API 进程重启 | 无内存事实状态丢失，请求可通过 idempotency key 重放 |
+| Temporal Worker 重启 | workflow 从 history 恢复，activity 按 retry policy 继续 |
+| Execution Worker 死亡 | lease 超时，AgentTask 进入 retry/reclaim，workspace snapshot 用于恢复或诊断 |
+| Agent CLI 卡死 | per-attempt timeout、heartbeat missing、kill process/container、记录 terminal event |
+| Redis 丢失 | 只影响短期 fanout/cache，客户端可从 Postgres event cursor 补齐 |
+| Object Store 上传失败 | artifact 进入 pending/failed，task 可重试上传或标记产物缺失 |
+| IM 平台重复回调 | ChannelCallback 按 platform/message/action id 去重，审批 action token 单次消费 |
+| Brain 生成坏计划 | DAG validation 拦截，必要时 fallback 到 single-agent 或 human review |
+| Policy 服务异常 | fail closed，高风险工具和外部发布操作默认阻断 |
+
+高可用设计要求：
+
+| 层 | HA 策略 |
+| --- | --- |
+| API/BFF | stateless，多副本，所有写请求带 idempotency key |
+| Realtime | SSE/WebSocket 可断线重连，使用 Last-Event-ID 或 event cursor 追平 |
+| Postgres | 生产使用托管 HA 或主备；事件、任务、权限、配置不落本地磁盘事实源 |
+| Temporal | 生产使用高可用部署或托管服务；workflow/activity timeout 和 retry policy 必须显式配置 |
+| Object Store | 使用 S3-compatible durable store，artifact hash、size、mime、scan status 入库 |
+| Worker | 多 worker pool，heartbeat、drain/resume、capacity label、tenant/project scope |
+| Channel | webhook 幂等、出站通知 outbox、失败重试、死信队列、人工重放 |
+| Audit | append-only event + immutable artifact lineage，审计查询不影响任务写入路径 |
+
+生产前必须补齐：
+
+1. 明确 SLO：任务提交成功率、任务恢复时间、通知延迟、审计查询延迟、AgentTask retry 上限。
+2. 明确 RPO/RTO：Postgres、Temporal、Object Store、worker workspace snapshot 的恢复目标。
+3. 增加 outbox/inbox 表：保证 Channel 通知、artifact event、worker event 上传可重试且不重复生效。
+4. 增加 chaos tests：API restart、worker kill、CLI timeout、Redis flush、IM duplicate callback、object store transient failure。
+5. 增加 runbook：worker drain、任务人工恢复、artifact 修复、policy lockout、tenant 级暂停。
+
+最终审计结论：**当前架构可做到鲁棒和高可用，但必须收敛 MVP 复杂度，并把 Postgres、Temporal、Object Store、idempotency/outbox、worker lease 作为可靠性主轴。** 如果 Phase 1 就拆成过多微服务，鲁棒性会下降；如果 Phase 1 先做 modular monolith + durable workflow + fake/qwen conformance，落地风险可控。
+
 ## 20. 最终验收标准
 
 V2 不是“v1 页面改漂亮”。V2 完成时应满足：
