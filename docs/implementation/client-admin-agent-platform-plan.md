@@ -65,6 +65,14 @@ V2 不承诺保留：
 - v1 的单 React app 巨文件结构。
 - v1 的内存态调度和轻量 mission DAG 实现。
 
+硬约束：
+
+- v1 不能决定 V2 的 control plane 分层。
+- v1 不能决定 V2 的 data model。
+- v1 不能决定 V2 的 API contract。
+- v1 不能决定 V2 的权限、租户、Channel 或执行单元模型。
+- v1 只能以独立进程、独立 adapter、离线 fixture 或迁移脚本形式存在。
+
 V2 可以继承：
 
 - 事件溯源和 JSONL artifact 思路。
@@ -814,6 +822,8 @@ Node.js 不建议作为主控制面，因为 V2 重点是 durable workflow、Pyt
 
 ## 16. v1 资产处置
 
+v1 是资产池，不是底座。V2 的实现不能 import v1 的单体 server 作为核心控制面，也不能让 v1 的 route、SQLite schema 或 React 页面结构反向约束 V2。
+
 | v1 资产 | V2 决策 |
 | --- | --- |
 | `ui_projection.py` | 可迁移为 UI Projection Service 的初版 |
@@ -825,6 +835,13 @@ Node.js 不建议作为主控制面，因为 V2 重点是 durable workflow、Pyt
 | React `app.tsx` | 不继续扩张，拆 Client/Admin/features |
 | `/runs` `/missions` | Admin/debug 可兼容，Client 不暴露 |
 | tests fixtures | 高价值，迁移成 V2 conformance tests |
+
+迁移原则：
+
+- `legacy-v1-adapter` 只能通过 V2 Agent Runtime Contract 暴露能力。
+- V2 数据库不复用 v1 SQLite schema；只提供一次性迁移或导入工具。
+- V2 Client/Admin 不嵌入 v1 页面；只允许链接到只读 legacy audit 页面作为临时排障工具。
+- 一旦 V2 的 qwen adapter、worker registration 和 audit replay 通过 conformance，legacy adapter 必须可以删除。
 
 ## 17. V2 实施路线
 
@@ -840,7 +857,7 @@ Node.js 不建议作为主控制面，因为 V2 重点是 durable workflow、Pyt
 - 建立 FastAPI、Postgres migration、repository、service、domain 分层。
 - 建立 React `/app` 和 `/admin` 双入口骨架。
 - 预留 Channel Gateway 模块、Channel 数据模型和 signed action token。
-- 保留 v1 runtime 作为 legacy adapter，供过渡验证。
+- 可选提供 `legacy-v1-adapter` 做对照验证，但它不能被 control plane、schema 或 API 依赖。
 
 ### Phase 2：Identity/Tenant/Policy
 
@@ -974,10 +991,38 @@ cancel -> terminal state
 | 风险 | 处理 |
 | --- | --- |
 | 范围过大 | 按 Phase 0-8 分层交付 |
-| 从零重写失控 | v1 作为 legacy adapter，先跑通端到端骨架 |
+| 从零重写失控 | Phase 0 先冻结 schema/ADR/conformance，再实现最小 V2 骨架；v1 只做外部对照 |
 | Temporal 引入成本 | Orchestrator 抽象，允许先内置轻量 engine |
 | Adapter 难统一 | conformance tests 先行 |
 | 90% 覆盖拖慢迭代 | domain/service/adapter fixture 测试优先，E2E 覆盖关键路径 |
+
+### 19.5 审计结论
+
+本设计已经完成设计层审计，可以进入 Phase 0 工程化准备，但不应直接跳到大规模编码。
+
+审计结论：
+
+| 维度 | 结论 |
+| --- | --- |
+| 产品 | Client/Admin/Channel 三入口清晰，普通用户不会暴露 runtime 细节 |
+| 架构 | Experience、Edge、Control Plane、Protocol、Execution、Data 分层明确 |
+| 领域模型 | Task、Plan、DagRun、AgentTask、Attempt、ArtifactContract 覆盖目标任务链路 |
+| 编排 | 覆盖五类主流编排模式，并保留 Brain 重规划和 HITL gate |
+| 安全 | 身份、租户、policy 继承、tainted context、Channel 验签、secret broker 都有位置 |
+| 持久化 | Postgres/Object Store/Vector Store 分工明确，事件事实源支持 replay |
+| 协议 | MCP/A2A/Agent Runtime Contract 边界清楚，不被 qwen 或 v1 私有事件锁死 |
+| 可观测 | Audit、Replay、Observability、Cost、Evaluation 是一等模块 |
+| 测试 | 已定义 domain/service/adapter/channel/workflow/frontend/E2E/conformance 覆盖策略 |
+
+进入实现前必须补齐的 Phase 0 交付物：
+
+1. ADR：确认 V2 greenfield、Task-first、Postgres-first、durable orchestration、Channel-first。
+2. JSON Schema/OpenAPI：Task、Plan、DagRun、AgentTask、Attempt、Policy、Channel、Artifact、RuntimeEvent。
+3. Conformance fixture：qwen/codex/claude/opencode fake native events、Channel callback、permission、artifact、replay。
+4. Architecture spikes：Temporal vs lightweight durable engine、qwen WebShell dependency boundary、Channel signed action token。
+5. Test gates：后端和前端覆盖率阈值、E2E viewport、Channel mock server、adapter conformance runner。
+
+可实施性判定：**可实施，但必须按 Phase 0-8 分阶段推进。** 当前文档已经足以指导 Phase 0 和 Phase 1；Phase 2 之后需要在 schema 和 ADR 完成后再拆具体任务。
 
 ## 20. 最终验收标准
 
