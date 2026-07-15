@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import unittest
 import time
+from unittest import mock
 
 from runtime.cloud_agents_runtime.v2_control_plane import V2ControlPlane, json_loads
 
@@ -80,6 +82,118 @@ class V2ControlPlaneTest(unittest.TestCase):
             "dispatch.selected",
             [event["type"] for event in control.events(task["task_id"])],
         )
+
+    def test_durable_workflow_artifact_evaluation_retry_and_replay(self):
+        control = V2ControlPlane(self.tmp_path())
+        task = control.create_task(
+            {
+                "goal": "Build and review a durable workflow",
+                "adapter": "codex",
+                "mode": "workflow",
+            },
+            principal="user_1",
+        )
+
+        completed = wait_for_status(control, task["task_id"], "completed")
+        workflow = control.workflow(task["task_id"])
+        artifacts = control.artifacts(task["task_id"])
+        evaluations = control.evaluations(task["task_id"])
+
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(workflow["run"]["status"], "completed")
+        self.assertEqual(workflow["run"]["engine"], "local-sqlite-dag")
+        self.assertEqual(len(workflow["steps"]), 3)
+        self.assertTrue(all(step["status"] == "completed" for step in workflow["steps"]))
+        self.assertEqual(len(artifacts), 3)
+        self.assertEqual(len(evaluations), 3)
+        self.assertEqual(
+            artifacts[0]["content"]["adapter"]["protocol"],
+            "ACP/A2A",
+        )
+
+        replay = control.replay_task(task["task_id"], principal="user_1")
+
+        self.assertEqual(replay["status"], "created")
+        self.assertEqual(replay["snapshot"]["task"]["task_id"], task["task_id"])
+        self.assertIn(
+            "task.replay_created",
+            [event["type"] for event in control.events(task["task_id"])],
+        )
+
+        retried = control.retry_task(task["task_id"], principal="user_1")
+        self.assertIn(retried["status"], {"queued", "running", "completed"})
+        retried_completed = wait_for_status(control, task["task_id"], "completed")
+
+        self.assertEqual(retried_completed["status"], "completed")
+        self.assertGreaterEqual(control.workflow(task["task_id"])["run"]["attempt"], 2)
+
+    def test_control_plane_boundary_paths_and_real_cli_adapter(self):
+        control = V2ControlPlane(self.tmp_path())
+
+        with self.assertRaises(ValueError):
+            control.register_execution_unit({"unit_id": " "})
+        with self.assertRaises(KeyError):
+            control.workflow("missing")
+        with self.assertRaises(KeyError):
+            control.artifacts("missing")
+        with self.assertRaises(KeyError):
+            control.evaluations("missing")
+        with self.assertRaises(KeyError):
+            control.replays("missing")
+        with self.assertRaises(KeyError):
+            control.retry_task("missing", principal="user_1")
+
+        task = control.create_task({"goal": "Hold retry while running"}, principal="user_1")
+        task = wait_for_status(control, task["task_id"], "completed")
+        control._db.execute(
+            "UPDATE v2_tasks SET status = ? WHERE task_id = ?",
+            ("running", task["task_id"]),
+        )
+        control._db.commit()
+        with self.assertRaises(ValueError):
+            control.retry_task(task["task_id"], principal="user_1")
+
+        control._db.execute("DELETE FROM v2_execution_units")
+        control._db.commit()
+        control.register_execution_unit({"unit_id": "fake-only", "adapters": ["fake"]})
+        self.assertEqual(control._select_execution_unit("codex")["unit_id"], "fake-only")
+        control._db.execute("DELETE FROM v2_execution_units")
+        control._db.commit()
+        with self.assertRaises(RuntimeError):
+            control._select_execution_unit("codex")
+        control._db.execute("DELETE FROM v2_channels")
+        control._db.commit()
+        with self.assertRaises(RuntimeError):
+            control._channel_by_platform("feishu")
+
+        script = control.root / "codex-adapter"
+        script.write_text("#!/bin/sh\ncat\n", encoding="utf-8")
+        script.chmod(0o755)
+        agent = {
+            "agent_task_id": "at_test",
+            "role": "builder",
+            "adapter": "codex",
+            "goal": "Use a real CLI bridge",
+            "depends_on": [],
+            "artifact_contract": {"artifacts": ["final_summary"]},
+        }
+        old_enabled = os.environ.get("V2_ENABLE_REAL_CLI_ADAPTERS")
+        old_command = os.environ.get("V2_CODEX_CLI_COMMAND")
+        try:
+            os.environ["V2_ENABLE_REAL_CLI_ADAPTERS"] = "1"
+            os.environ["V2_CODEX_CLI_COMMAND"] = str(script)
+            result = control._execute_agent_adapter(task["task_id"], agent)
+            self.assertEqual(result["execution_mode"], "real-cli")
+            self.assertIn("agentflow-v2-acp-a2a", result["summary"])
+            with mock.patch(
+                "runtime.cloud_agents_runtime.v2_control_plane.subprocess.run",
+                side_effect=OSError("boom"),
+            ):
+                failed = control._execute_agent_adapter(task["task_id"], agent)
+            self.assertEqual(failed["execution_mode"], "cli-error")
+        finally:
+            restore_env("V2_ENABLE_REAL_CLI_ADAPTERS", old_enabled)
+            restore_env("V2_CODEX_CLI_COMMAND", old_command)
 
     def test_idempotency_key_returns_existing_task(self):
         control = V2ControlPlane(self.tmp_path())
@@ -213,6 +327,13 @@ class V2ControlPlaneTest(unittest.TestCase):
         from pathlib import Path
 
         return Path(tempfile.mkdtemp(prefix="agentflow-v2-test-"))
+
+
+def restore_env(key: str, value: str | None) -> None:
+    if value is None:
+        os.environ.pop(key, None)
+    else:
+        os.environ[key] = value
 
 
 if __name__ == "__main__":

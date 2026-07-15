@@ -97,6 +97,52 @@ def make_handler(
                 except KeyError:
                     self.write_error(HTTPStatus.NOT_FOUND, "task not found")
                 return
+            if (
+                len(parts) == 4
+                and parts[0] == "v2"
+                and parts[1] == "tasks"
+                and parts[3] == "workflow"
+            ):
+                try:
+                    self.write_json(manager.v2.workflow(unquote(parts[2])))
+                except KeyError:
+                    self.write_error(HTTPStatus.NOT_FOUND, "task not found")
+                return
+            if (
+                len(parts) == 4
+                and parts[0] == "v2"
+                and parts[1] == "tasks"
+                and parts[3] == "artifacts"
+            ):
+                try:
+                    self.write_json({"artifacts": manager.v2.artifacts(unquote(parts[2]))})
+                except KeyError:
+                    self.write_error(HTTPStatus.NOT_FOUND, "task not found")
+                return
+            if (
+                len(parts) == 4
+                and parts[0] == "v2"
+                and parts[1] == "tasks"
+                and parts[3] == "evaluations"
+            ):
+                try:
+                    self.write_json(
+                        {"evaluations": manager.v2.evaluations(unquote(parts[2]))}
+                    )
+                except KeyError:
+                    self.write_error(HTTPStatus.NOT_FOUND, "task not found")
+                return
+            if (
+                len(parts) == 4
+                and parts[0] == "v2"
+                and parts[1] == "tasks"
+                and parts[3] == "replays"
+            ):
+                try:
+                    self.write_json({"replays": manager.v2.replays(unquote(parts[2]))})
+                except KeyError:
+                    self.write_error(HTTPStatus.NOT_FOUND, "task not found")
+                return
             if path == "/v2/admin/overview":
                 self.write_json(manager.v2.admin_overview())
                 return
@@ -484,6 +530,41 @@ def make_handler(
                         self.write_error(HTTPStatus.BAD_REQUEST, str(exc))
                         return
                     self.write_json({"event": event}, status=HTTPStatus.ACCEPTED)
+                    return
+                if (
+                    len(parts) == 4
+                    and parts[0] == "v2"
+                    and parts[1] == "tasks"
+                    and parts[3] == "retry"
+                ):
+                    try:
+                        task = manager.v2.retry_task(
+                            unquote(parts[2]),
+                            principal=self.principal_id(),
+                        )
+                    except KeyError:
+                        self.write_error(HTTPStatus.NOT_FOUND, "task not found")
+                        return
+                    except ValueError as exc:
+                        self.write_error(HTTPStatus.BAD_REQUEST, str(exc))
+                        return
+                    self.write_json(task, status=HTTPStatus.ACCEPTED)
+                    return
+                if (
+                    len(parts) == 4
+                    and parts[0] == "v2"
+                    and parts[1] == "tasks"
+                    and parts[3] == "replay"
+                ):
+                    try:
+                        replay = manager.v2.replay_task(
+                            unquote(parts[2]),
+                            principal=self.principal_id(),
+                        )
+                    except KeyError:
+                        self.write_error(HTTPStatus.NOT_FOUND, "task not found")
+                        return
+                    self.write_json(replay, status=HTTPStatus.CREATED)
                     return
                 if (
                     len(parts) == 3
@@ -1021,6 +1102,12 @@ def make_handler(
             if self.current_identity:
                 principal = self.current_identity.get("principal_id")
                 return str(principal) if principal else None
+            remote_user = self.headers.get("x-remote-user")
+            if remote_user:
+                return remote_user
+            authorization = self.headers.get("authorization") or ""
+            if authorization.strip():
+                return "api-token"
             return None
 
         def current_roles(self) -> list[str] | None:
@@ -1253,8 +1340,15 @@ def required_scope_for(method: str, path: str) -> str | None:
         if method == "GET":
             if len(parts) >= 4 and parts[3] == "events.json":
                 return "events:read"
+            if len(parts) >= 4 and parts[3] in {
+                "artifacts",
+                "evaluations",
+                "replays",
+                "workflow",
+            }:
+                return "events:read"
             return "tasks:read"
-        if len(parts) >= 4 and parts[3] == "messages":
+        if len(parts) >= 4 and parts[3] in {"messages", "retry", "replay"}:
             return "tasks:write"
         return "tasks:create"
     if parts[0] == "workers":

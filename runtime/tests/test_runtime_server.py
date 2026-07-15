@@ -148,6 +148,74 @@ class RuntimeServerTest(unittest.TestCase):
             )
             self.assertIn("cleanup", cleanup)
 
+    def test_v2_task_workflow_artifact_retry_and_replay_api(self) -> None:
+        with running_runtime(token="secret") as base_url:
+            headers = {"authorization": "Bearer secret"}
+            created = request_json(
+                f"{base_url}/v2/tasks",
+                method="POST",
+                payload={
+                    "goal": "Coordinate a V2 HTTP workflow",
+                    "mode": "workflow",
+                    "adapter": "codex",
+                    "channel": "feishu",
+                },
+                headers=headers,
+            )
+            task_id = created["task_id"]
+            deadline = time.time() + 3
+            current = created
+            while time.time() < deadline:
+                current = request_json(f"{base_url}/v2/tasks/{task_id}", headers=headers)
+                if current["status"] == "completed":
+                    break
+                time.sleep(0.05)
+
+            self.assertEqual(current["status"], "completed")
+            workflow = request_json(
+                f"{base_url}/v2/tasks/{task_id}/workflow",
+                headers=headers,
+            )
+            artifacts = request_json(
+                f"{base_url}/v2/tasks/{task_id}/artifacts",
+                headers=headers,
+            )
+            evaluations = request_json(
+                f"{base_url}/v2/tasks/{task_id}/evaluations",
+                headers=headers,
+            )
+            replay = request_json(
+                f"{base_url}/v2/tasks/{task_id}/replay",
+                method="POST",
+                payload={},
+                headers=headers,
+            )
+            replays = request_json(
+                f"{base_url}/v2/tasks/{task_id}/replays",
+                headers=headers,
+            )
+            retried = request_json(
+                f"{base_url}/v2/tasks/{task_id}/retry",
+                method="POST",
+                payload={},
+                headers=headers,
+            )
+            unit = request_json(
+                f"{base_url}/v2/admin/execution-units",
+                method="POST",
+                payload={"unit_id": "docker-http", "kind": "docker", "adapters": ["fake"]},
+                headers=headers,
+            )
+
+            self.assertEqual(workflow["run"]["engine"], "local-sqlite-dag")
+            self.assertEqual(len(workflow["steps"]), 3)
+            self.assertTrue(artifacts["artifacts"])
+            self.assertTrue(evaluations["evaluations"])
+            self.assertEqual(replay["status"], "created")
+            self.assertTrue(replays["replays"])
+            self.assertIn(retried["status"], {"queued", "running", "completed"})
+            self.assertEqual(unit["unit_id"], "docker-http")
+
     def test_console_login_session_cookie_authorizes_api(self) -> None:
         with running_runtime(
             token="secret",

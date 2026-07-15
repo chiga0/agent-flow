@@ -277,6 +277,72 @@ const v2Events = [
   },
 ];
 
+const v2Workflow = {
+  run: {
+    workflow_run_id: "wfr_1",
+    task_id: "task_v2_1",
+    status: "completed",
+    engine: "local-sqlite-dag",
+    config: { strategy: "orchestrator-workers" },
+    attempt: 1,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  steps: v2Task.plan.agent_tasks.map((agent) => ({
+    step_id: `wfs_${agent.role}`,
+    workflow_run_id: "wfr_1",
+    task_id: "task_v2_1",
+    agent_task_id: agent.agent_task_id,
+    role: agent.role,
+    status: agent.status,
+    adapter: agent.adapter,
+    order_index: agent.order_index,
+    input: { goal: agent.goal },
+    output: { artifact_id: `artifact_${agent.role}` },
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    started_at: new Date().toISOString(),
+    completed_at: new Date().toISOString(),
+  })),
+};
+
+const v2Artifacts = {
+  artifacts: v2Task.plan.agent_tasks.map((agent) => ({
+    artifact_id: `artifact_${agent.role}`,
+    task_id: "task_v2_1",
+    agent_task_id: agent.agent_task_id,
+    name: "final_summary",
+    kind: "summary",
+    status: "available",
+    content: { final_summary: agent.result.final_summary },
+    ref: `v2/task_v2_1/artifact_${agent.role}.json`,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  })),
+};
+
+const v2Evaluations = {
+  evaluations: v2Task.plan.agent_tasks.map((agent) => ({
+    evaluation_id: `eval_${agent.role}`,
+    task_id: "task_v2_1",
+    agent_task_id: agent.agent_task_id,
+    kind: "contract",
+    status: "passed",
+    details: { checks: ["non_empty_summary"] },
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  })),
+};
+
+const v2Replay = {
+  replay_id: "replay_1",
+  task_id: "task_v2_1",
+  requested_by: "owner@example.com",
+  status: "created",
+  snapshot: { task: v2Task, workflow: v2Workflow },
+  created_at: new Date().toISOString(),
+};
+
 const v2Overview = {
   generated_at: new Date().toISOString(),
   tasks: { total: 1, by_status: { completed: 1 } },
@@ -588,6 +654,10 @@ const fixtures: Record<string, unknown> = {
   "v2/tasks": { tasks: [v2Task, v2FallbackTask] },
   "v2/tasks/task_v2_1": v2Task,
   "v2/tasks/task_v2_1/events.json": { events: v2Events },
+  "v2/tasks/task_v2_1/workflow": v2Workflow,
+  "v2/tasks/task_v2_1/artifacts": v2Artifacts,
+  "v2/tasks/task_v2_1/evaluations": v2Evaluations,
+  "v2/tasks/task_v2_1/replays": { replays: [v2Replay] },
   "v2/admin/overview": v2Overview,
   "v2/admin/execution-units": { units: v2Overview.execution_units },
   "v2/admin/channels": { channels: v2Overview.channels },
@@ -977,10 +1047,27 @@ describe("AgentFlow console", () => {
       await screen.findByRole("heading", { name: "Ship the V2 control plane" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Plan DAG")).toBeInTheDocument();
+    expect(screen.getByText("Durable Workflow")).toBeInTheDocument();
+    expect(screen.getByText("Artifacts")).toBeInTheDocument();
+    expect(screen.getByText("Evaluations")).toBeInTheDocument();
+    expect(screen.getByText("Replay Snapshots")).toBeInTheDocument();
     expect(screen.getByText("Canonical Events")).toBeInTheDocument();
     expect(screen.getByText("Agent Contracts")).toBeInTheDocument();
     expect(screen.getByText("orchestrator-workers")).toBeInTheDocument();
     expect(screen.getByText("task.created")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Replay" }));
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/v2/tasks/task_v2_1/replay",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "/v2/tasks/task_v2_1/retry",
+      expect.objectContaining({ method: "POST" }),
+    );
 
     await user.type(
       screen.getByPlaceholderText("Add context or a follow-up instruction"),
@@ -3069,6 +3156,12 @@ async function fetchMock(input: RequestInfo | URL, init?: RequestInit) {
         created_at: new Date().toISOString(),
       },
     });
+  }
+  if (init?.method === "POST" && path === "v2/tasks/task_v2_1/retry") {
+    return jsonResponse({ ...v2Task, status: "queued" });
+  }
+  if (init?.method === "POST" && path === "v2/tasks/task_v2_1/replay") {
+    return jsonResponse(v2Replay);
   }
   if (path === "runs/run_created") {
     return jsonResponse({ ...run, run_id: "run_created", status: "queued" });

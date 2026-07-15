@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sqlite3
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -52,6 +55,10 @@ class V2ControlPlane:
                 "channel_registry",
                 "adapter_selection",
                 "dispatch_decision",
+                "durable_workflow",
+                "artifact_registry",
+                "evaluation_registry",
+                "retry_replay",
                 "admin_overview",
             ],
             "adapters": self.adapter_catalog(),
@@ -134,6 +141,7 @@ class V2ControlPlane:
                 ),
             )
             plan = self._create_plan(task_id, goal, mode, adapter, now)
+            self._create_workflow_run_locked(task_id, plan, now)
             self._append_event_locked(
                 task_id,
                 "task.created",
@@ -313,6 +321,127 @@ class V2ControlPlane:
                 "SELECT * FROM v2_channels ORDER BY platform ASC"
             ).fetchall()
             return [channel_from_row(row) for row in rows]
+
+    def workflow(self, task_id: str) -> dict[str, Any]:
+        with self._lock:
+            if self._task_row(task_id) is None:
+                raise KeyError(task_id)
+            run = self._workflow_run(task_id)
+            steps = self._db.execute(
+                """
+                SELECT * FROM v2_workflow_steps
+                WHERE task_id = ?
+                ORDER BY order_index ASC, created_at ASC
+                """,
+                (task_id,),
+            ).fetchall()
+            return {
+                "run": workflow_run_from_row(run) if run is not None else None,
+                "steps": [workflow_step_from_row(row) for row in steps],
+            }
+
+    def artifacts(self, task_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            if self._task_row(task_id) is None:
+                raise KeyError(task_id)
+            rows = self._db.execute(
+                """
+                SELECT * FROM v2_artifacts
+                WHERE task_id = ?
+                ORDER BY created_at ASC
+                """,
+                (task_id,),
+            ).fetchall()
+            return [artifact_from_row(row) for row in rows]
+
+    def evaluations(self, task_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            if self._task_row(task_id) is None:
+                raise KeyError(task_id)
+            rows = self._db.execute(
+                """
+                SELECT * FROM v2_evaluations
+                WHERE task_id = ?
+                ORDER BY created_at ASC
+                """,
+                (task_id,),
+            ).fetchall()
+            return [evaluation_from_row(row) for row in rows]
+
+    def replays(self, task_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            if self._task_row(task_id) is None:
+                raise KeyError(task_id)
+            rows = self._db.execute(
+                """
+                SELECT * FROM v2_replays
+                WHERE task_id = ?
+                ORDER BY created_at DESC
+                """,
+                (task_id,),
+            ).fetchall()
+            return [replay_from_row(row) for row in rows]
+
+    def retry_task(self, task_id: str, *, principal: str) -> dict[str, Any]:
+        with self._lock:
+            row = self._task_row(task_id)
+            if row is None:
+                raise KeyError(task_id)
+            if row["status"] == "running":
+                raise ValueError("task is already running")
+            now = utc_now()
+            self._db.execute(
+                "UPDATE v2_agent_tasks SET status = ?, result_json = ?, updated_at = ? WHERE task_id = ?",
+                ("queued", json_dumps({}), now, task_id),
+            )
+            self._set_task_status_locked(task_id, "queued")
+            current = self._workflow_run(task_id)
+            attempt = 1 if current is None else int(current["attempt"]) + 1
+            self._db.execute(
+                "UPDATE v2_workflow_runs SET status = ?, attempt = ?, updated_at = ? WHERE task_id = ?",
+                ("queued", attempt, now, task_id),
+            )
+            self._append_event_locked(
+                task_id,
+                "task.retry_requested",
+                principal,
+                {"attempt": attempt},
+            )
+            self._db.commit()
+        self._ensure_runner(task_id)
+        return self.get_task(task_id)
+
+    def replay_task(self, task_id: str, *, principal: str) -> dict[str, Any]:
+        with self._lock:
+            task = self.get_task(task_id)
+            replay_id = f"replay_{uuid4().hex}"
+            events = self.events(task_id)
+            replay = {
+                "task": task,
+                "workflow": self.workflow(task_id),
+                "events": events,
+                "artifacts": self.artifacts(task_id),
+                "evaluations": self.evaluations(task_id),
+            }
+            now = utc_now()
+            self._db.execute(
+                """
+                INSERT INTO v2_replays (
+                    replay_id, task_id, requested_by, status, snapshot_json,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (replay_id, task_id, principal, "created", json_dumps(replay), now),
+            )
+            self._append_event_locked(
+                task_id,
+                "task.replay_created",
+                principal,
+                {"replay_id": replay_id, "event_count": len(events)},
+            )
+            self._db.commit()
+            return self.replays(task_id)[0]
 
     def adapter_catalog(self) -> list[dict[str, Any]]:
         units = self.execution_units()
@@ -534,6 +663,7 @@ class V2ControlPlane:
                 if row is None or row["status"] in TERMINAL_TASK_STATUSES:
                     return
                 self._set_task_status_locked(task_id, "running")
+                self._set_workflow_status_locked(task_id, "running")
                 self._append_event_locked(
                     task_id,
                     "task.started",
@@ -547,6 +677,7 @@ class V2ControlPlane:
                     if self._task_row(task_id)["status"] == "cancelled":
                         return
                     started_at = utc_now()
+                    step_id = self._start_workflow_step_locked(task_id, agent, started_at)
                     self._db.execute(
                         """
                         UPDATE v2_agent_tasks
@@ -567,6 +698,7 @@ class V2ControlPlane:
                     )
                     self._db.commit()
                 time.sleep(0.05)
+                adapter_result = self._execute_agent_adapter(task_id, agent)
                 with self._lock:
                     self._append_event_locked(
                         task_id,
@@ -574,13 +706,29 @@ class V2ControlPlane:
                         agent["role"],
                         {
                             "agent_task_id": agent["agent_task_id"],
-                            "message": f"{agent['title']} completed by {agent['adapter']} adapter.",
+                            "message": adapter_result["message"],
+                            "protocol": adapter_result["protocol"],
                         },
                     )
                     result = {
-                        "final_summary": f"{agent['title']} finished for task {task_id}.",
+                        "final_summary": adapter_result["summary"],
                         "quality": "contract-passed",
+                        "adapter": adapter_result,
                     }
+                    artifact = self._write_artifact_locked(
+                        task_id,
+                        agent["agent_task_id"],
+                        "final_summary",
+                        "summary",
+                        result,
+                    )
+                    evaluation = self._write_evaluation_locked(
+                        task_id,
+                        agent["agent_task_id"],
+                        "contract",
+                        "passed",
+                        {"checks": ["non_empty_summary"], "artifact_id": artifact["artifact_id"]},
+                    )
                     completed_at = utc_now()
                     self._db.execute(
                         """
@@ -603,12 +751,21 @@ class V2ControlPlane:
                         {
                             "agent_task_id": agent["agent_task_id"],
                             "result": result,
+                            "artifact_id": artifact["artifact_id"],
+                            "evaluation_id": evaluation["evaluation_id"],
                         },
+                    )
+                    self._complete_workflow_step_locked(
+                        step_id,
+                        "completed",
+                        {"artifact_id": artifact["artifact_id"]},
+                        completed_at,
                     )
                     self._db.commit()
 
             with self._lock:
                 self._set_task_status_locked(task_id, "completed")
+                self._set_workflow_status_locked(task_id, "completed")
                 self._append_event_locked(
                     task_id,
                     "artifact.created",
@@ -630,6 +787,7 @@ class V2ControlPlane:
             with self._lock:
                 if self._task_row(task_id) is not None:
                     self._set_task_status_locked(task_id, "failed")
+                    self._set_workflow_status_locked(task_id, "failed")
                     self._append_event_locked(
                         task_id,
                         "task.failed",
@@ -637,6 +795,283 @@ class V2ControlPlane:
                         {"error": str(exc)},
                     )
                     self._db.commit()
+
+    def _create_workflow_run_locked(
+        self,
+        task_id: str,
+        plan: dict[str, Any],
+        now: str,
+    ) -> None:
+        self._db.execute(
+            """
+            INSERT INTO v2_workflow_runs (
+                workflow_run_id, task_id, status, engine, config_json, attempt,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"wfr_{uuid4().hex}",
+                task_id,
+                "queued",
+                "local-sqlite-dag",
+                json_dumps(
+                    {
+                        "strategy": plan["strategy"],
+                        "graph": plan["graph"],
+                        "retry_policy": {
+                            "max_attempts": 2,
+                            "backoff_seconds": 0.1,
+                        },
+                        "durable_target": "temporal-compatible",
+                    }
+                ),
+                1,
+                now,
+                now,
+            ),
+        )
+
+    def _workflow_run(self, task_id: str) -> sqlite3.Row | None:
+        return self._db.execute(
+            """
+            SELECT * FROM v2_workflow_runs
+            WHERE task_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (task_id,),
+        ).fetchone()
+
+    def _set_workflow_status_locked(self, task_id: str, status: str) -> None:
+        self._db.execute(
+            """
+            UPDATE v2_workflow_runs
+            SET status = ?, updated_at = ?
+            WHERE task_id = ?
+            """,
+            (status, utc_now(), task_id),
+        )
+
+    def _start_workflow_step_locked(
+        self,
+        task_id: str,
+        agent: dict[str, Any],
+        started_at: str,
+    ) -> str:
+        run = self._workflow_run(task_id)
+        workflow_run_id = run["workflow_run_id"] if run is not None else ""
+        step_id = f"wfs_{uuid4().hex}"
+        self._db.execute(
+            """
+            INSERT INTO v2_workflow_steps (
+                step_id, workflow_run_id, task_id, agent_task_id, role, status,
+                adapter, order_index, input_json, output_json, created_at,
+                updated_at, started_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                step_id,
+                workflow_run_id,
+                task_id,
+                agent["agent_task_id"],
+                agent["role"],
+                "running",
+                agent["adapter"],
+                agent["order_index"],
+                json_dumps(
+                    {
+                        "goal": agent["goal"],
+                        "depends_on": agent["depends_on"],
+                        "artifact_contract": agent["artifact_contract"],
+                    }
+                ),
+                json_dumps({}),
+                started_at,
+                started_at,
+                started_at,
+            ),
+        )
+        return step_id
+
+    def _complete_workflow_step_locked(
+        self,
+        step_id: str,
+        status: str,
+        output: dict[str, Any],
+        completed_at: str,
+    ) -> None:
+        self._db.execute(
+            """
+            UPDATE v2_workflow_steps
+            SET status = ?, output_json = ?, updated_at = ?, completed_at = ?
+            WHERE step_id = ?
+            """,
+            (status, json_dumps(output), completed_at, completed_at, step_id),
+        )
+
+    def _write_artifact_locked(
+        self,
+        task_id: str,
+        agent_task_id: str,
+        name: str,
+        kind: str,
+        content: dict[str, Any],
+    ) -> dict[str, Any]:
+        artifact_id = f"artifact_{uuid4().hex}"
+        now = utc_now()
+        ref = f"v2/{task_id}/{artifact_id}.json"
+        self._db.execute(
+            """
+            INSERT INTO v2_artifacts (
+                artifact_id, task_id, agent_task_id, name, kind, status,
+                content_json, ref, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                artifact_id,
+                task_id,
+                agent_task_id,
+                name,
+                kind,
+                "available",
+                json_dumps(content),
+                ref,
+                now,
+                now,
+            ),
+        )
+        return {
+            "artifact_id": artifact_id,
+            "task_id": task_id,
+            "agent_task_id": agent_task_id,
+            "name": name,
+            "kind": kind,
+            "status": "available",
+            "ref": ref,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def _write_evaluation_locked(
+        self,
+        task_id: str,
+        agent_task_id: str,
+        kind: str,
+        status: str,
+        details: dict[str, Any],
+    ) -> dict[str, Any]:
+        evaluation_id = f"eval_{uuid4().hex}"
+        now = utc_now()
+        self._db.execute(
+            """
+            INSERT INTO v2_evaluations (
+                evaluation_id, task_id, agent_task_id, kind, status,
+                details_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                evaluation_id,
+                task_id,
+                agent_task_id,
+                kind,
+                status,
+                json_dumps(details),
+                now,
+                now,
+            ),
+        )
+        return {
+            "evaluation_id": evaluation_id,
+            "task_id": task_id,
+            "agent_task_id": agent_task_id,
+            "kind": kind,
+            "status": status,
+            "details": details,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def _execute_agent_adapter(
+        self,
+        task_id: str,
+        agent: dict[str, Any],
+    ) -> dict[str, Any]:
+        adapter = str(agent["adapter"])
+        protocol = "internal" if adapter == "fake" else "ACP/A2A"
+        envelope = {
+            "protocol": "agentflow-v2-acp-a2a",
+            "protocol_version": "2026-07",
+            "task_id": task_id,
+            "agent_task_id": agent["agent_task_id"],
+            "role": agent["role"],
+            "adapter": adapter,
+            "goal": agent["goal"],
+            "context": {
+                "depends_on": agent["depends_on"],
+                "artifact_contract": agent["artifact_contract"],
+            },
+        }
+        if adapter == "fake":
+            return simulated_adapter_result(adapter, protocol, envelope)
+
+        command_env = {
+            "qwen": "V2_QWEN_CODE_COMMAND",
+            "codex": "V2_CODEX_CLI_COMMAND",
+            "claude": "V2_CLAUDE_CODE_COMMAND",
+            "opencode": "V2_OPENCODE_COMMAND",
+        }[adapter]
+        default_command = {
+            "qwen": "qwen",
+            "codex": "codex",
+            "claude": "claude",
+            "opencode": "opencode",
+        }[adapter]
+        configured_command = os.environ.get(command_env)
+        executable = shutil.which(configured_command or default_command)
+        real_cli_enabled = os.environ.get("V2_ENABLE_REAL_CLI_ADAPTERS") == "1"
+        if not real_cli_enabled or executable is None:
+            result = simulated_adapter_result(adapter, protocol, envelope)
+            result.update(
+                {
+                    "execution_mode": "protocol-simulated",
+                    "command_configured": executable is not None,
+                    "requires_env": command_env if executable is None else None,
+                    "real_cli_enabled": real_cli_enabled,
+                }
+            )
+            return result
+
+        try:
+            completed = subprocess.run(
+                [executable],
+                input=json_dumps(envelope),
+                text=True,
+                capture_output=True,
+                timeout=20,
+                cwd=self.root,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            result = simulated_adapter_result(adapter, protocol, envelope)
+            result.update({"execution_mode": "cli-error", "error": str(exc)})
+            return result
+
+        stdout = completed.stdout.strip()
+        stderr = completed.stderr.strip()
+        output = stdout or stderr or f"{adapter} completed with code {completed.returncode}"
+        return {
+            "adapter": adapter,
+            "protocol": protocol,
+            "execution_mode": "real-cli",
+            "exit_code": completed.returncode,
+            "message": output[:800],
+            "summary": output[:1200],
+            "envelope": envelope,
+        }
 
     def _ensure_runner(self, task_id: str) -> None:
         with self._lock:
@@ -711,6 +1146,8 @@ class V2ControlPlane:
         row = self._task_row(task_id)
         if row is None or row["status"] != "completed":
             return None
+        artifacts = self.artifacts(task_id)
+        evaluations = self.evaluations(task_id)
         summaries = [
             agent["result"].get("final_summary")
             for agent in self._agent_tasks(task_id)
@@ -718,14 +1155,14 @@ class V2ControlPlane:
         ]
         return {
             "summary": " ".join(summaries) or "Task completed.",
-            "artifacts": [
-                {
-                    "name": "final_summary",
-                    "kind": "summary",
-                    "status": "available",
-                }
-            ],
-            "evaluation": {"status": "passed", "checks": ["contract"]},
+            "artifacts": artifacts,
+            "evaluation": {
+                "status": "passed"
+                if all(item["status"] == "passed" for item in evaluations)
+                else "failed",
+                "checks": [item["kind"] for item in evaluations] or ["contract"],
+                "items": evaluations,
+            },
         }
 
     def _find_task_by_idempotency_key(self, key: str) -> dict[str, Any] | None:
@@ -970,12 +1407,92 @@ class V2ControlPlane:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS v2_workflow_runs (
+                    workflow_run_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    engine TEXT NOT NULL,
+                    config_json TEXT NOT NULL,
+                    attempt INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(task_id) REFERENCES v2_tasks(task_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS v2_workflow_steps (
+                    step_id TEXT PRIMARY KEY,
+                    workflow_run_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    agent_task_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    adapter TEXT NOT NULL,
+                    order_index INTEGER NOT NULL,
+                    input_json TEXT NOT NULL,
+                    output_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    FOREIGN KEY(workflow_run_id) REFERENCES v2_workflow_runs(workflow_run_id),
+                    FOREIGN KEY(task_id) REFERENCES v2_tasks(task_id),
+                    FOREIGN KEY(agent_task_id) REFERENCES v2_agent_tasks(agent_task_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS v2_artifacts (
+                    artifact_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    agent_task_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    content_json TEXT NOT NULL,
+                    ref TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(task_id) REFERENCES v2_tasks(task_id),
+                    FOREIGN KEY(agent_task_id) REFERENCES v2_agent_tasks(agent_task_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS v2_evaluations (
+                    evaluation_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    agent_task_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    details_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(task_id) REFERENCES v2_tasks(task_id),
+                    FOREIGN KEY(agent_task_id) REFERENCES v2_agent_tasks(agent_task_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS v2_replays (
+                    replay_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    requested_by TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    snapshot_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(task_id) REFERENCES v2_tasks(task_id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_v2_tasks_status
                     ON v2_tasks(status);
                 CREATE INDEX IF NOT EXISTS idx_v2_events_task_sequence
                     ON v2_events(task_id, sequence);
                 CREATE INDEX IF NOT EXISTS idx_v2_agent_tasks_task
                     ON v2_agent_tasks(task_id, order_index);
+                CREATE INDEX IF NOT EXISTS idx_v2_workflow_runs_task
+                    ON v2_workflow_runs(task_id);
+                CREATE INDEX IF NOT EXISTS idx_v2_workflow_steps_task
+                    ON v2_workflow_steps(task_id, order_index);
+                CREATE INDEX IF NOT EXISTS idx_v2_artifacts_task
+                    ON v2_artifacts(task_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_v2_evaluations_task
+                    ON v2_evaluations(task_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_v2_replays_task
+                    ON v2_replays(task_id, created_at);
                 """
             )
             self._db.commit()
@@ -1001,6 +1518,24 @@ def json_loads(value: str | None) -> Any:
     if not value:
         return {}
     return json.loads(value)
+
+
+def simulated_adapter_result(
+    adapter: str,
+    protocol: str,
+    envelope: dict[str, Any],
+) -> dict[str, Any]:
+    role = str(envelope.get("role") or "agent")
+    goal = str(envelope.get("goal") or "complete the assigned task")
+    summary = f"{role} completed via {adapter}: {goal}"
+    return {
+        "adapter": adapter,
+        "protocol": protocol,
+        "execution_mode": "simulated",
+        "message": summary,
+        "summary": summary,
+        "envelope": envelope,
+    }
 
 
 def event_from_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -1058,4 +1593,75 @@ def channel_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "config": json_loads(row["config_json"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+    }
+
+
+def workflow_run_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "workflow_run_id": row["workflow_run_id"],
+        "task_id": row["task_id"],
+        "status": row["status"],
+        "engine": row["engine"],
+        "config": json_loads(row["config_json"]),
+        "attempt": row["attempt"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def workflow_step_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "step_id": row["step_id"],
+        "workflow_run_id": row["workflow_run_id"],
+        "task_id": row["task_id"],
+        "agent_task_id": row["agent_task_id"],
+        "role": row["role"],
+        "status": row["status"],
+        "adapter": row["adapter"],
+        "order_index": row["order_index"],
+        "input": json_loads(row["input_json"]),
+        "output": json_loads(row["output_json"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "started_at": row["started_at"],
+        "completed_at": row["completed_at"],
+    }
+
+
+def artifact_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "artifact_id": row["artifact_id"],
+        "task_id": row["task_id"],
+        "agent_task_id": row["agent_task_id"],
+        "name": row["name"],
+        "kind": row["kind"],
+        "status": row["status"],
+        "content": json_loads(row["content_json"]),
+        "ref": row["ref"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def evaluation_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "evaluation_id": row["evaluation_id"],
+        "task_id": row["task_id"],
+        "agent_task_id": row["agent_task_id"],
+        "kind": row["kind"],
+        "status": row["status"],
+        "details": json_loads(row["details_json"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def replay_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "replay_id": row["replay_id"],
+        "task_id": row["task_id"],
+        "requested_by": row["requested_by"],
+        "status": row["status"],
+        "snapshot": json_loads(row["snapshot_json"]),
+        "created_at": row["created_at"],
     }

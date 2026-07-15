@@ -42,8 +42,12 @@ import {
   runtimeApi,
   type V2AdminOverview,
   type V2AgentTask,
+  type V2Artifact,
+  type V2Evaluation,
   type V2Event,
+  type V2Replay,
   type V2Task,
+  type V2WorkflowStep,
 } from "./lib/api";
 
 const modeOptions = [
@@ -409,6 +413,39 @@ export function V2TaskPage() {
     queryFn: () => runtimeApi.v2TaskEvents(taskId),
     refetchInterval: 1500,
   });
+  const workflow = useQuery({
+    queryKey: ["v2", "tasks", taskId, "workflow"],
+    queryFn: () => runtimeApi.v2TaskWorkflow(taskId),
+    refetchInterval: 1500,
+  });
+  const artifacts = useQuery({
+    queryKey: ["v2", "tasks", taskId, "artifacts"],
+    queryFn: () => runtimeApi.v2TaskArtifacts(taskId),
+    refetchInterval: 3000,
+  });
+  const evaluations = useQuery({
+    queryKey: ["v2", "tasks", taskId, "evaluations"],
+    queryFn: () => runtimeApi.v2TaskEvaluations(taskId),
+    refetchInterval: 3000,
+  });
+  const replays = useQuery({
+    queryKey: ["v2", "tasks", taskId, "replays"],
+    queryFn: () => runtimeApi.v2TaskReplays(taskId),
+    refetchInterval: 5000,
+  });
+  const refreshTaskDetail = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["v2", "tasks"] }),
+      queryClient.invalidateQueries({ queryKey: ["v2", "tasks", taskId] }),
+      queryClient.invalidateQueries({ queryKey: ["v2", "tasks", taskId, "events"] }),
+      queryClient.invalidateQueries({ queryKey: ["v2", "tasks", taskId, "workflow"] }),
+      queryClient.invalidateQueries({ queryKey: ["v2", "tasks", taskId, "artifacts"] }),
+      queryClient.invalidateQueries({
+        queryKey: ["v2", "tasks", taskId, "evaluations"],
+      }),
+      queryClient.invalidateQueries({ queryKey: ["v2", "tasks", taskId, "replays"] }),
+    ]);
+  };
   const sendMessage = useMutation({
     mutationFn: () => runtimeApi.v2SubmitMessage(taskId, message),
     onSuccess: async () => {
@@ -417,6 +454,14 @@ export function V2TaskPage() {
         queryKey: ["v2", "tasks", taskId, "events"],
       });
     },
+  });
+  const retryTask = useMutation({
+    mutationFn: () => runtimeApi.v2RetryTask(taskId),
+    onSuccess: refreshTaskDetail,
+  });
+  const replayTask = useMutation({
+    mutationFn: () => runtimeApi.v2ReplayTask(taskId),
+    onSuccess: refreshTaskDetail,
   });
   const current = task.data;
 
@@ -439,7 +484,27 @@ export function V2TaskPage() {
             {current?.goal ?? "Loading"}
           </p>
         </div>
-        {current ? <StatusBadge status={current.status} /> : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {current ? <StatusBadge status={current.status} /> : null}
+          <Button
+            disabled={replayTask.isPending || !current}
+            size="sm"
+            variant="secondary"
+            onClick={() => replayTask.mutate()}
+          >
+            <Clock3 className="h-4 w-4" />
+            Replay
+          </Button>
+          <Button
+            disabled={retryTask.isPending || current?.status === "running" || !current}
+            size="sm"
+            variant="secondary"
+            onClick={() => retryTask.mutate()}
+          >
+            <RefreshCw className="h-4 w-4" />
+            Retry
+          </Button>
+        </div>
       </div>
 
       {current ? (
@@ -483,6 +548,64 @@ export function V2TaskPage() {
             ) : (
               <EmptyState title="No result yet" detail="The task is still running." />
             )}
+          </CardBody>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Route className="h-4 w-4 text-primary" />
+              <CardTitle>Durable Workflow</CardTitle>
+            </div>
+            {workflow.data?.run ? (
+              <Badge tone="info">attempt {workflow.data.run.attempt}</Badge>
+            ) : null}
+          </CardHeader>
+          <CardBody>
+            <WorkflowSteps steps={workflow.data?.steps ?? []} />
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Boxes className="h-4 w-4 text-primary" />
+              <CardTitle>Artifacts</CardTitle>
+            </div>
+            <Badge tone="neutral">{artifacts.data?.artifacts.length ?? 0}</Badge>
+          </CardHeader>
+          <CardBody>
+            <ArtifactList artifacts={artifacts.data?.artifacts ?? []} />
+          </CardBody>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-primary" />
+              <CardTitle>Evaluations</CardTitle>
+            </div>
+            <Badge tone="neutral">{evaluations.data?.evaluations.length ?? 0}</Badge>
+          </CardHeader>
+          <CardBody>
+            <EvaluationList evaluations={evaluations.data?.evaluations ?? []} />
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <RefreshCw className="h-4 w-4 text-primary" />
+              <CardTitle>Replay Snapshots</CardTitle>
+            </div>
+            <Badge tone="neutral">{replays.data?.replays.length ?? 0}</Badge>
+          </CardHeader>
+          <CardBody>
+            <ReplayList replays={replays.data?.replays ?? []} />
           </CardBody>
         </Card>
       </div>
@@ -548,6 +671,105 @@ export function V2TaskPage() {
           </CardBody>
         </Card>
       </div>
+    </div>
+  );
+}
+
+function WorkflowSteps({ steps }: { steps: V2WorkflowStep[] }) {
+  if (!steps.length) {
+    return <EmptyState title="No workflow steps yet" />;
+  }
+  return (
+    <div className="grid gap-3">
+      {steps.map((step) => (
+        <div
+          key={step.step_id}
+          className="grid gap-2 rounded-md border border-border p-3 text-sm"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-medium">
+              {step.order_index + 1}. {step.role}
+            </span>
+            <StatusBadge status={step.status} />
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            <span>{adapterLabel(step.adapter)}</span>
+            <span>{step.agent_task_id}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ArtifactList({ artifacts }: { artifacts: V2Artifact[] }) {
+  if (!artifacts.length) {
+    return <EmptyState title="No artifacts yet" />;
+  }
+  return (
+    <div className="grid gap-3">
+      {artifacts.map((artifact) => (
+        <div
+          key={artifact.artifact_id}
+          className="grid gap-2 rounded-md border border-border p-3 text-sm"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-medium">{artifact.name}</span>
+            <StatusBadge status={artifact.status} />
+          </div>
+          <div className="break-all text-xs text-muted-foreground">
+            {artifact.kind} · {artifact.ref}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EvaluationList({ evaluations }: { evaluations: V2Evaluation[] }) {
+  if (!evaluations.length) {
+    return <EmptyState title="No evaluations yet" />;
+  }
+  return (
+    <div className="grid gap-3">
+      {evaluations.map((evaluation) => (
+        <div
+          key={evaluation.evaluation_id}
+          className="grid gap-2 rounded-md border border-border p-3 text-sm"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-medium">{evaluation.kind}</span>
+            <StatusBadge status={evaluation.status} />
+          </div>
+          <pre className="max-h-24 overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">
+            {JSON.stringify(evaluation.details, null, 2)}
+          </pre>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ReplayList({ replays }: { replays: V2Replay[] }) {
+  if (!replays.length) {
+    return <EmptyState title="No replay snapshots yet" />;
+  }
+  return (
+    <div className="grid gap-3">
+      {replays.map((replay) => (
+        <div
+          key={replay.replay_id}
+          className="grid gap-2 rounded-md border border-border p-3 text-sm"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-medium">{replay.replay_id}</span>
+            <StatusBadge status={replay.status} />
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {replay.requested_by} · {new Date(replay.created_at).toLocaleString()}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

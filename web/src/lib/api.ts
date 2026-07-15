@@ -451,6 +451,67 @@ export interface V2Event {
   created_at: string;
 }
 
+export interface V2WorkflowRun {
+  workflow_run_id: string;
+  task_id: string;
+  status: string;
+  engine: string;
+  config: Record<string, unknown>;
+  attempt: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface V2WorkflowStep {
+  step_id: string;
+  workflow_run_id: string;
+  task_id: string;
+  agent_task_id: string;
+  role: string;
+  status: string;
+  adapter: string;
+  order_index: number;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface V2Artifact {
+  artifact_id: string;
+  task_id: string;
+  agent_task_id: string;
+  name: string;
+  kind: string;
+  status: string;
+  content: Record<string, unknown>;
+  ref: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface V2Evaluation {
+  evaluation_id: string;
+  task_id: string;
+  agent_task_id: string;
+  kind: string;
+  status: string;
+  details: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface V2Replay {
+  replay_id: string;
+  task_id: string;
+  requested_by: string;
+  status: string;
+  snapshot: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface V2ExecutionUnit {
   unit_id: string;
   kind: string;
@@ -518,6 +579,22 @@ export const runtimeApi = {
     api<{ events: V2Event[] }>(
       `v2/tasks/${encodeURIComponent(taskId)}/events.json`,
     ),
+  v2TaskWorkflow: (taskId: string) =>
+    api<{ run: V2WorkflowRun | null; steps: V2WorkflowStep[] }>(
+      `v2/tasks/${encodeURIComponent(taskId)}/workflow`,
+    ),
+  v2TaskArtifacts: (taskId: string) =>
+    api<{ artifacts: V2Artifact[] }>(
+      `v2/tasks/${encodeURIComponent(taskId)}/artifacts`,
+    ),
+  v2TaskEvaluations: (taskId: string) =>
+    api<{ evaluations: V2Evaluation[] }>(
+      `v2/tasks/${encodeURIComponent(taskId)}/evaluations`,
+    ),
+  v2TaskReplays: (taskId: string) =>
+    api<{ replays: V2Replay[] }>(
+      `v2/tasks/${encodeURIComponent(taskId)}/replays`,
+    ),
   v2CreateTask: (payload: Record<string, unknown>) =>
     api<V2Task>("v2/tasks", {
       method: "POST",
@@ -528,6 +605,16 @@ export const runtimeApi = {
     api<{ event: V2Event }>(`v2/tasks/${encodeURIComponent(taskId)}/messages`, {
       method: "POST",
       body: JSON.stringify({ message }),
+    }),
+  v2RetryTask: (taskId: string) =>
+    api<V2Task>(`v2/tasks/${encodeURIComponent(taskId)}/retry`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  v2ReplayTask: (taskId: string) =>
+    api<V2Replay>(`v2/tasks/${encodeURIComponent(taskId)}/replay`, {
+      method: "POST",
+      body: JSON.stringify({}),
     }),
   v2AdminOverview: () => api<V2AdminOverview>("v2/admin/overview"),
   v2ExecutionUnits: () =>
