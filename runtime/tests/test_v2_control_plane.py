@@ -56,6 +56,31 @@ class V2ControlPlaneTest(unittest.TestCase):
             ["brain", "builder", "reviewer"],
         )
 
+    def test_dispatch_selects_requested_adapter_unit_and_channel(self):
+        control = V2ControlPlane(self.tmp_path())
+
+        task = control.create_task(
+            {
+                "goal": "Implement a Codex-backed code review",
+                "adapter": "codex",
+                "channel": "feishu",
+                "mode": "workflow",
+            },
+            principal="user_1",
+        )
+        dispatch = task["metadata"]["dispatch"]
+
+        self.assertEqual(task["adapter"], "codex")
+        self.assertEqual(dispatch["adapter_protocol"], "ACP/A2A")
+        self.assertEqual(dispatch["execution_unit_id"], "local-dev")
+        self.assertEqual(dispatch["channel"], "feishu")
+        self.assertTrue(dispatch["delivery"]["requires_connector"])
+        self.assertIn("codex", [item["adapter"] for item in control.adapter_catalog()])
+        self.assertIn(
+            "dispatch.selected",
+            [event["type"] for event in control.events(task["task_id"])],
+        )
+
     def test_idempotency_key_returns_existing_task(self):
         control = V2ControlPlane(self.tmp_path())
 

@@ -57,14 +57,20 @@ test("uses the V2 client and admin control-plane surfaces", async ({ page }) => 
       "Describe the outcome you want. The platform will choose a plan, agents, runtime, and artifacts.",
     )
     .fill("Ship the V2 control plane");
-  await page.getByLabel("Mode").selectOption("multi-agent");
-  await page.getByLabel("Channel").selectOption("feishu");
+  await page.getByRole("button", { name: /Multi-agent/ }).click();
+  await page.getByRole("button", { name: /Feishu/ }).click();
+  await page.getByRole("button", { name: /qwen-code/ }).click();
   const createRequest = page.waitForRequest(
     (request) =>
       request.method() === "POST" && request.url().includes("/v2/tasks"),
   );
   await page.getByRole("button", { name: "Start" }).click();
-  await createRequest;
+  const request = await createRequest;
+  expect(request.postDataJSON()).toMatchObject({
+    adapter: "qwen",
+    channel: "feishu",
+    mode: "multi-agent",
+  });
 
   await expect(
     page.getByRole("heading", { name: "Ship the V2 control plane" }),
@@ -357,6 +363,13 @@ async function mockRuntime(
     priority: "normal",
     channel: "feishu",
     adapter: "fake",
+    metadata: {
+      dispatch: {
+        adapter: "fake",
+        execution_unit_id: "local-dev",
+        reason: "auto selected fake on local-dev for feishu",
+      },
+    },
     created_at: now,
     updated_at: now,
     progress: {

@@ -12,6 +12,9 @@ from .events import utc_now
 
 
 TERMINAL_TASK_STATUSES = {"completed", "failed", "cancelled"}
+SUPPORTED_MODES = {"auto", "single", "workflow", "multi-agent"}
+SUPPORTED_CHANNELS = {"web", "mobile", "dingtalk", "feishu", "wecom"}
+SUPPORTED_ADAPTERS = {"auto", "fake", "qwen", "codex", "claude", "opencode"}
 
 
 class V2ControlPlane:
@@ -47,8 +50,11 @@ class V2ControlPlane:
                 "background_durable_runner",
                 "execution_unit_registry",
                 "channel_registry",
+                "adapter_selection",
+                "dispatch_decision",
                 "admin_overview",
             ],
+            "adapters": self.adapter_catalog(),
             "runtime": {
                 "durable_engine": "local-sqlite-runner",
                 "production_target": "temporal",
@@ -74,17 +80,29 @@ class V2ControlPlane:
 
             now = utc_now()
             task_id = f"task_{uuid4().hex}"
-            mode = str(payload.get("mode") or "auto")
-            channel = str(payload.get("channel") or "web")
-            adapter = str(payload.get("adapter") or "fake")
+            mode = normalize_choice(payload.get("mode"), SUPPORTED_MODES, "auto")
+            channel = normalize_choice(payload.get("channel"), SUPPORTED_CHANNELS, "web")
+            requested_adapter = normalize_choice(
+                payload.get("adapter"),
+                SUPPORTED_ADAPTERS,
+                "auto",
+            )
             project_id = str(payload.get("project_id") or "project_default")
             tenant_id = str(payload.get("tenant_id") or "tenant_default")
             title = summarize_goal(goal)
+            strategy = self._strategy_for(goal, mode)
+            dispatch = self._dispatch_decision(
+                requested_adapter=requested_adapter,
+                channel=channel,
+                strategy=strategy,
+            )
+            adapter = str(dispatch["adapter"])
             metadata = dict(payload.get("metadata") or {})
             metadata.update(
                 {
                     "source": payload.get("source") or channel,
                     "priority": payload.get("priority") or "normal",
+                    "dispatch": dispatch,
                 }
             )
 
@@ -137,6 +155,12 @@ class V2ControlPlane:
                     "strategy": plan["strategy"],
                     "agent_task_count": len(plan["agent_tasks"]),
                 },
+            )
+            self._append_event_locked(
+                task_id,
+                "dispatch.selected",
+                "scheduler",
+                dispatch,
             )
             self._db.commit()
             task = self.get_task(task_id)
@@ -290,6 +314,31 @@ class V2ControlPlane:
             ).fetchall()
             return [channel_from_row(row) for row in rows]
 
+    def adapter_catalog(self) -> list[dict[str, Any]]:
+        units = self.execution_units()
+        configured = {
+            adapter
+            for unit in units
+            if unit["status"] == "active"
+            for adapter in unit["adapters"]
+        }
+        return [
+            {
+                "adapter": adapter,
+                "label": label,
+                "status": "available" if adapter in configured else default_status,
+                "protocol": protocol,
+                "execution": execution,
+            }
+            for adapter, label, protocol, execution, default_status in [
+                ("fake", "Fake smoke runner", "internal", "local-simulated", "available"),
+                ("qwen", "qwen-code", "ACP/A2A", "cli-adapter", "registered"),
+                ("codex", "codex cli", "ACP/A2A", "cli-adapter", "registered"),
+                ("claude", "claude code", "ACP/A2A", "cli-adapter", "registered"),
+                ("opencode", "opencode", "ACP/A2A", "cli-adapter", "registered"),
+            ]
+        ]
+
     def _create_plan(
         self,
         task_id: str,
@@ -298,8 +347,8 @@ class V2ControlPlane:
         adapter: str,
         now: str,
     ) -> dict[str, Any]:
-        complex_task = mode in {"multi-agent", "workflow"} or len(goal) > 160
-        if complex_task:
+        strategy = self._strategy_for(goal, mode)
+        if strategy == "orchestrator-workers":
             strategy = "orchestrator-workers"
             agent_specs = [
                 (
@@ -329,6 +378,7 @@ class V2ControlPlane:
         plan_id = f"plan_{uuid4().hex}"
         graph = {
             "strategy": strategy,
+            "execution": "serial" if strategy == "orchestrator-workers" else "single",
             "nodes": [
                 {
                     "id": role,
@@ -414,6 +464,68 @@ class V2ControlPlane:
             "artifact_contract": artifact_contract,
             "agent_tasks": agent_tasks,
         }
+
+    def _strategy_for(self, goal: str, mode: str) -> str:
+        complex_task = mode in {"multi-agent", "workflow"} or len(goal) > 160
+        return "orchestrator-workers" if complex_task else "single-agent-fast-path"
+
+    def _dispatch_decision(
+        self,
+        *,
+        requested_adapter: str,
+        channel: str,
+        strategy: str,
+    ) -> dict[str, Any]:
+        adapter = "fake" if requested_adapter == "auto" else requested_adapter
+        unit = self._select_execution_unit(adapter)
+        channel_config = self._channel_by_platform(channel)
+        live_channel = channel_config["status"] == "configured"
+        return {
+            "requested_adapter": requested_adapter,
+            "adapter": adapter,
+            "adapter_protocol": "internal" if adapter == "fake" else "ACP/A2A",
+            "execution_unit_id": unit["unit_id"],
+            "execution_unit_kind": unit["kind"],
+            "strategy": strategy,
+            "orchestration": "serial-dag"
+            if strategy == "orchestrator-workers"
+            else "single-step",
+            "channel": channel,
+            "channel_status": channel_config["status"],
+            "delivery": {
+                "mode": "in-app" if live_channel else "outbound-reserved",
+                "requires_connector": not live_channel,
+                "ack_event": "channel.delivery.queued",
+            },
+            "reason": self._dispatch_reason(requested_adapter, adapter, unit, channel_config),
+        }
+
+    def _select_execution_unit(self, adapter: str) -> dict[str, Any]:
+        active_units = [unit for unit in self.execution_units() if unit["status"] == "active"]
+        for unit in active_units:
+            if adapter in unit["adapters"]:
+                return unit
+        for unit in active_units:
+            if "fake" in unit["adapters"]:
+                return unit
+        raise RuntimeError(f"no active execution unit can run adapter {adapter}")
+
+    def _channel_by_platform(self, platform: str) -> dict[str, Any]:
+        for channel in self.channels():
+            if channel["platform"] == platform:
+                return channel
+        raise RuntimeError(f"channel {platform} is not registered")
+
+    def _dispatch_reason(
+        self,
+        requested_adapter: str,
+        adapter: str,
+        unit: dict[str, Any],
+        channel: dict[str, Any],
+    ) -> str:
+        if requested_adapter == "auto":
+            return f"auto selected {adapter} on {unit['unit_id']} for {channel['platform']}"
+        return f"requested {adapter} on {unit['unit_id']} for {channel['platform']}"
 
     def _run_task(self, task_id: str) -> None:
         try:
@@ -645,6 +757,7 @@ class V2ControlPlane:
             "priority": row["priority"],
             "channel": row["channel"],
             "adapter": row["adapter"],
+            "metadata": json_loads(row["metadata_json"]),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "progress": self._progress(task_id),
@@ -718,11 +831,15 @@ class V2ControlPlane:
         with self._lock:
             self._db.execute(
                 """
-                INSERT OR IGNORE INTO v2_execution_units (
+                INSERT INTO v2_execution_units (
                     unit_id, kind, status, labels_json, resources_json,
                     adapters_json, features_json, heartbeat_at, created_at, updated_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(unit_id) DO UPDATE SET
+                    adapters_json = excluded.adapters_json,
+                    features_json = excluded.features_json,
+                    updated_at = excluded.updated_at
                 """,
                 (
                     "local-dev",
@@ -730,8 +847,8 @@ class V2ControlPlane:
                     "active",
                     json_dumps({"region": "local", "tier": "dev"}),
                     json_dumps({"cpu": 2, "memory_mb": 2048}),
-                    json_dumps(["fake", "qwen"]),
-                    json_dumps(["workspace", "artifacts", "events"]),
+                    json_dumps(["fake", "qwen", "codex", "claude", "opencode"]),
+                    json_dumps(["workspace", "artifacts", "events", "cli-adapters"]),
                     now,
                     now,
                     now,
@@ -749,7 +866,15 @@ class V2ControlPlane:
                         f"channel_{platform}",
                         platform,
                         "configured" if platform == "web" else "reserved",
-                        json_dumps({"signed_callbacks": platform != "web"}),
+                        json_dumps(
+                            {
+                                "signed_callbacks": platform != "web",
+                                "mobile_ready": platform in {"web", "mobile"},
+                                "bot_connector": platform
+                                if platform in {"dingtalk", "feishu", "wecom"}
+                                else None,
+                            }
+                        ),
                         now,
                         now,
                     ),
@@ -861,6 +986,11 @@ def summarize_goal(goal: str) -> str:
     if len(compact) <= 72:
         return compact
     return compact[:69].rstrip() + "..."
+
+
+def normalize_choice(value: Any, allowed: set[str], default: str) -> str:
+    choice = str(value or default).strip().lower()
+    return choice if choice in allowed else default
 
 
 def json_dumps(value: Any) -> str:

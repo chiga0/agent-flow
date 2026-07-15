@@ -2,19 +2,27 @@ import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
+  ArrowRight,
+  Bot,
   Boxes,
+  Brain,
   CheckCircle2,
   Clock3,
   GitBranch,
+  Layers3,
+  ListChecks,
   MessageSquare,
   Network,
+  RadioTower,
   RefreshCw,
+  Route,
   Send,
   ShieldCheck,
   Smartphone,
   TerminalSquare,
+  Zap,
 } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 
 import {
   Badge,
@@ -27,7 +35,6 @@ import {
   Field,
   Input,
   Metric,
-  Select,
   StatusBadge,
   Textarea,
 } from "./components/ui";
@@ -39,16 +46,60 @@ import {
   type V2Task,
 } from "./lib/api";
 
+const modeOptions = [
+  {
+    value: "auto",
+    label: "Auto",
+    detail: "balanced",
+    icon: <Zap className="h-4 w-4" />,
+  },
+  {
+    value: "workflow",
+    label: "Workflow",
+    detail: "DAG",
+    icon: <Route className="h-4 w-4" />,
+  },
+  {
+    value: "multi-agent",
+    label: "Multi-agent",
+    detail: "brain + workers",
+    icon: <Layers3 className="h-4 w-4" />,
+  },
+];
+
+const channelOptions = [
+  { value: "web", label: "Web", icon: <MessageSquare className="h-4 w-4" /> },
+  { value: "mobile", label: "Mobile", icon: <Smartphone className="h-4 w-4" /> },
+  { value: "dingtalk", label: "DingTalk", icon: <RadioTower className="h-4 w-4" /> },
+  { value: "feishu", label: "Feishu", icon: <RadioTower className="h-4 w-4" /> },
+  { value: "wecom", label: "WeCom", icon: <RadioTower className="h-4 w-4" /> },
+];
+
+const adapterOptions = [
+  { value: "auto", label: "Auto", icon: <Bot className="h-4 w-4" /> },
+  { value: "qwen", label: "qwen-code", icon: <TerminalSquare className="h-4 w-4" /> },
+  { value: "codex", label: "codex cli", icon: <TerminalSquare className="h-4 w-4" /> },
+  { value: "claude", label: "claude code", icon: <TerminalSquare className="h-4 w-4" /> },
+  { value: "opencode", label: "opencode", icon: <TerminalSquare className="h-4 w-4" /> },
+  { value: "fake", label: "fake", icon: <CheckCircle2 className="h-4 w-4" /> },
+];
+
 export function V2ClientPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [goal, setGoal] = useState("");
   const [mode, setMode] = useState("auto");
   const [channel, setChannel] = useState("web");
+  const [adapter, setAdapter] = useState("auto");
   const tasks = useQuery({
     queryKey: ["v2", "tasks"],
     queryFn: runtimeApi.v2Tasks,
     refetchInterval: 2000,
+  });
+  const overview = useQuery({
+    queryKey: ["v2", "admin", "overview"],
+    queryFn: runtimeApi.v2AdminOverview,
+    refetchInterval: 5000,
   });
   const createTask = useMutation({
     mutationFn: runtimeApi.v2CreateTask,
@@ -66,6 +117,12 @@ export function V2ClientPage() {
     ["queued", "running"].includes(task.status),
   );
   const completed = taskItems.filter((task) => task.status === "completed");
+  const recent = taskItems.slice(0, 6);
+  const channels = overview.data?.channels ?? [];
+  const units = overview.data?.execution_units ?? [];
+  const availableAdapters = Array.from(
+    new Set(units.flatMap((unit) => unit.adapters)),
+  );
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -76,126 +133,265 @@ export function V2ClientPage() {
       goal: goal.trim(),
       mode,
       channel,
-      adapter: "fake",
+      adapter,
       metadata: { product_surface: "v2-client" },
     });
   };
 
   return (
-    <div className="mx-auto grid w-full max-w-7xl gap-5">
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="grid gap-4">
+    <div className="mx-auto grid w-full max-w-7xl gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium text-primary">AgentFlow V2</div>
+          <h1 className="mt-1 text-3xl font-semibold tracking-normal">
+            Client Workspace
+          </h1>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone={active.length ? "warn" : "ok"}>
+            {active.length ? `${active.length} active` : "ready"}
+          </Badge>
+          <Link
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm font-medium hover:bg-muted"
+            to="/v2/admin"
+          >
+            <ShieldCheck className="h-4 w-4" />
+            Admin
+          </Link>
+        </div>
+      </div>
+
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <form
+          aria-label="New Task"
+          className="grid gap-4 rounded-lg border border-border bg-card p-4"
+          onSubmit={submit}
+        >
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium text-primary">AgentFlow V2</div>
-              <h1 className="mt-1 text-3xl font-semibold tracking-normal">
-                Client Workspace
-              </h1>
+            <div className="flex items-center gap-2">
+              <div className="grid h-9 w-9 place-items-center rounded-md border border-border bg-background">
+                <Brain className="h-4 w-4 text-primary" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold">New Task</div>
+                <div className="text-xs text-muted-foreground">
+                  {modeLabel(mode)} · {channelLabel(channel)} · {adapterLabel(adapter)}
+                </div>
+              </div>
             </div>
-            <Link
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm font-medium hover:bg-muted"
-              to="/v2/admin"
+            <Button
+              disabled={createTask.isPending || !goal.trim()}
+              type="submit"
+              variant="primary"
             >
-              <ShieldCheck className="h-4 w-4" />
-              Admin
-            </Link>
+              <Send className="h-4 w-4" />
+              {createTask.isPending ? "Starting" : "Start"}
+            </Button>
           </div>
 
-          <form
-            className="grid gap-3 rounded-lg border border-border bg-card p-3"
-            onSubmit={submit}
-          >
+          <Field label="Goal">
             <Textarea
-              className="min-h-40 resize-y border-0 bg-transparent text-base focus:ring-0"
+              className="min-h-44 resize-y text-base"
               placeholder="Describe the outcome you want. The platform will choose a plan, agents, runtime, and artifacts."
               value={goal}
               onChange={(event) => setGoal(event.target.value)}
             />
-            <div className="grid gap-2 border-t border-border pt-3 md:grid-cols-[1fr_1fr_auto]">
-              <Field label="Mode">
-                <Select value={mode} onChange={(event) => setMode(event.target.value)}>
-                  <option value="auto">Auto</option>
-                  <option value="workflow">Workflow</option>
-                  <option value="multi-agent">Multi-agent</option>
-                </Select>
-              </Field>
-              <Field label="Channel">
-                <Select
-                  value={channel}
-                  onChange={(event) => setChannel(event.target.value)}
-                >
-                  <option value="web">Web</option>
-                  <option value="mobile">Mobile</option>
-                  <option value="dingtalk">DingTalk</option>
-                  <option value="feishu">Feishu</option>
-                  <option value="wecom">WeCom</option>
-                </Select>
-              </Field>
-              <Button
-                className="self-end"
-                disabled={createTask.isPending || !goal.trim()}
-                type="submit"
-                variant="primary"
-              >
-                <Send className="h-4 w-4" />
-                {createTask.isPending ? "Starting" : "Start"}
-              </Button>
-            </div>
-          </form>
+          </Field>
 
-          <div className="grid gap-3 md:grid-cols-3">
-            <Metric label="Active" value={active.length} detail="queued/running" />
-            <Metric label="Completed" value={completed.length} detail="accepted results" />
-            <Metric
-              label="Channels"
-              value="5"
-              detail="web, mobile, DingTalk, Feishu, WeCom"
-            />
+          <div className="grid gap-3 border-t border-border pt-4">
+            <fieldset className="grid gap-2">
+              <legend className="text-sm font-medium">Mode</legend>
+              <div className="grid gap-2 md:grid-cols-3">
+                {modeOptions.map((option) => (
+                  <OptionButton
+                    key={option.value}
+                    active={mode === option.value}
+                    detail={option.detail}
+                    icon={option.icon}
+                    label={option.label}
+                    onClick={() => setMode(option.value)}
+                  />
+                ))}
+              </div>
+            </fieldset>
+
+            <fieldset className="grid gap-2">
+              <legend className="text-sm font-medium">Channel</legend>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                {channelOptions.map((option) => (
+                  <OptionButton
+                    key={option.value}
+                    active={channel === option.value}
+                    compact
+                    detail={channelStatus(channels, option.value)}
+                    icon={option.icon}
+                    label={option.label}
+                    onClick={() => setChannel(option.value)}
+                  />
+                ))}
+              </div>
+            </fieldset>
+
+            <fieldset className="grid gap-2">
+              <legend className="text-sm font-medium">Agent CLI</legend>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {adapterOptions.map((option) => (
+                  <OptionButton
+                    key={option.value}
+                    active={adapter === option.value}
+                    detail={
+                      option.value === "auto"
+                        ? "scheduler"
+                        : availableAdapters.includes(option.value)
+                          ? "registered"
+                          : "not discovered"
+                    }
+                    icon={option.icon}
+                    label={option.label}
+                    onClick={() => setAdapter(option.value)}
+                  />
+                ))}
+              </div>
+            </fieldset>
           </div>
-
-          <TaskGrid tasks={taskItems} />
-        </div>
+        </form>
 
         <aside className="grid content-start gap-4">
-          <Card>
-            <CardHeader>
+          <div className="grid gap-3 rounded-lg border border-border bg-card p-4">
+            <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <Activity className="h-4 w-4 text-primary" />
-                <CardTitle>Live Work</CardTitle>
+                <div className="text-sm font-semibold">Workload</div>
               </div>
               <Button size="icon" variant="ghost" onClick={() => tasks.refetch()}>
                 <RefreshCw className="h-4 w-4" />
               </Button>
-            </CardHeader>
-            <CardBody>
-              <TaskList tasks={active.slice(0, 4)} />
-            </CardBody>
-          </Card>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <Metric label="Active" value={active.length} detail="queued/running" />
+              <Metric label="Done" value={completed.length} detail="completed" />
+              <Metric label="Units" value={units.length} detail="registered" />
+            </div>
+          </div>
 
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Smartphone className="h-4 w-4 text-primary" />
-                <CardTitle>Channel Ready</CardTitle>
-              </div>
-            </CardHeader>
-            <CardBody className="grid gap-2">
-              {["Web", "Mobile", "DingTalk", "Feishu", "WeCom"].map((item) => (
-                <div
-                  key={item}
-                  className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm"
-                >
-                  <span>{item}</span>
-                  <Badge tone={item === "Web" ? "ok" : "info"}>
-                    {item === "Web" ? "live" : "reserved"}
-                  </Badge>
-                </div>
-              ))}
-            </CardBody>
-          </Card>
+          <ChannelReadiness channels={channels} />
+
+          <div className="grid gap-3 rounded-lg border border-border bg-card p-4">
+            <div className="flex items-center gap-2">
+              <RadioTower className="h-4 w-4 text-primary" />
+              <div className="text-sm font-semibold">Dispatch Trust</div>
+            </div>
+            <div className="grid gap-2 text-sm">
+              <TrustRow label="Idempotency" value="enabled" />
+              <TrustRow label="Events" value="canonical" />
+              <TrustRow label="Recovery" value="background runner" />
+            </div>
+          </div>
         </aside>
       </section>
+
+      <section className="grid gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <ListChecks className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-semibold">Task Track</h2>
+          </div>
+          <Badge tone="neutral">{taskItems.length} total</Badge>
+        </div>
+        <TaskGrid tasks={recent} />
+      </section>
     </div>
+  );
+}
+
+function OptionButton({
+  active,
+  compact,
+  detail,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  compact?: boolean;
+  detail: ReactNode;
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={[
+        "flex min-h-14 items-center gap-3 rounded-md border px-3 py-2 text-left transition-colors",
+        active
+          ? "border-primary bg-primary/10 text-foreground"
+          : "border-border bg-background hover:bg-muted",
+        compact ? "min-h-12" : "",
+      ].join(" ")}
+      type="button"
+      onClick={onClick}
+    >
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-border bg-card text-primary">
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-medium">{label}</span>
+        <span className="block truncate text-xs text-muted-foreground">{detail}</span>
+      </span>
+    </button>
+  );
+}
+
+function ChannelReadiness({ channels }: { channels: V2AdminOverview["channels"] }) {
+  return (
+    <div className="grid gap-3 rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center gap-2">
+        <Smartphone className="h-4 w-4 text-primary" />
+        <div className="text-sm font-semibold">Channel Ready</div>
+      </div>
+      <div className="grid gap-2">
+        {channelOptions.map((option) => (
+          <div
+            key={option.value}
+            className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm"
+          >
+            <span className="flex items-center gap-2">
+              {option.icon}
+              {option.label}
+            </span>
+            <StatusBadge status={channelStatus(channels, option.value)} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TrustRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-medium">{value}</span>
+    </div>
+  );
+}
+
+function modeLabel(value: string) {
+  return modeOptions.find((option) => option.value === value)?.label ?? value;
+}
+
+function channelLabel(value: string) {
+  return channelOptions.find((option) => option.value === value)?.label ?? value;
+}
+
+function adapterLabel(value: string) {
+  return adapterOptions.find((option) => option.value === value)?.label ?? value;
+}
+
+function channelStatus(channels: V2AdminOverview["channels"], platform: string) {
+  return (
+    channels.find((channel) => channel.platform === platform)?.status ??
+    (platform === "web" ? "configured" : "reserved")
   );
 }
 
@@ -448,52 +644,49 @@ function TaskGrid({ tasks }: { tasks: V2Task[] }) {
     );
   }
   return (
-    <div className="grid gap-3 md:grid-cols-2">
+    <div className="grid gap-3">
       {tasks.map((task) => (
-        <Link
-          key={task.task_id}
-          className="grid gap-3 rounded-md border border-border p-3 hover:bg-muted"
-          to="/v2/tasks/$taskId"
-          params={{ taskId: task.task_id }}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="line-clamp-1 font-medium">{task.title}</div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                {task.plan?.strategy ?? task.mode}
-              </div>
-            </div>
-            <StatusBadge status={task.status} />
-          </div>
-          <p className="line-clamp-2 text-sm text-muted-foreground">{task.goal}</p>
-          <ProgressBar percent={task.progress.percent} />
-        </Link>
+        <TaskTrackItem key={task.task_id} task={task} />
       ))}
     </div>
   );
 }
 
-function TaskList({ tasks }: { tasks: V2Task[] }) {
-  if (!tasks.length) {
-    return <EmptyState title="No active work" />;
-  }
+function TaskTrackItem({ task }: { task: V2Task }) {
+  const dispatch = task.metadata?.dispatch as Record<string, unknown> | undefined;
+  const adapter = String(dispatch?.adapter ?? task.adapter);
+  const unit = String(dispatch?.execution_unit_id ?? "unassigned");
+  const reason = String(dispatch?.reason ?? task.plan?.strategy ?? task.mode);
   return (
-    <div className="grid gap-2">
-      {tasks.map((task) => (
-        <Link
-          key={task.task_id}
-          className="grid gap-2 rounded-md border border-border p-3 hover:bg-muted"
-          to="/v2/tasks/$taskId"
-          params={{ taskId: task.task_id }}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="line-clamp-1 text-sm font-medium">{task.title}</span>
-            <StatusBadge status={task.status} />
-          </div>
-          <ProgressBar percent={task.progress.percent} />
-        </Link>
-      ))}
-    </div>
+    <Link
+      className="grid gap-3 rounded-md border border-border bg-card p-3 hover:bg-muted md:grid-cols-[minmax(0,1fr)_220px]"
+      to="/v2/tasks/$taskId"
+      params={{ taskId: task.task_id }}
+    >
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge status={task.status} />
+          <Badge tone="info">{task.plan?.strategy ?? task.mode}</Badge>
+          <Badge tone="neutral">{channelLabel(task.channel)}</Badge>
+        </div>
+        <div className="mt-2 line-clamp-1 font-medium">{task.title}</div>
+        <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{task.goal}</p>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span>{adapterLabel(adapter)}</span>
+          <ArrowRight className="h-3 w-3" />
+          <span>{unit}</span>
+          <span className="hidden sm:inline">·</span>
+          <span className="line-clamp-1">{reason}</span>
+        </div>
+      </div>
+      <div className="grid content-center gap-2">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>Progress</span>
+          <span>{task.progress.percent}%</span>
+        </div>
+        <ProgressBar percent={task.progress.percent} />
+      </div>
+    </Link>
   );
 }
 

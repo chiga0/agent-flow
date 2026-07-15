@@ -1,6 +1,7 @@
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -143,6 +144,13 @@ const v2Task = {
   priority: "normal",
   channel: "web",
   adapter: "fake",
+  metadata: {
+    dispatch: {
+      adapter: "fake",
+      execution_unit_id: "local-dev",
+      reason: "auto selected fake on local-dev for web",
+    },
+  },
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
   progress: {
@@ -227,6 +235,25 @@ const v2Task = {
     artifacts: [{ name: "final_summary", kind: "summary", status: "available" }],
     evaluation: { status: "passed", checks: ["contract"] },
   },
+};
+
+const v2FallbackTask = {
+  ...v2Task,
+  task_id: "task_v2_legacy",
+  title: "Legacy recovered task",
+  goal: "Continue a recovered task",
+  status: "queued",
+  channel: "email",
+  adapter: "custom-cli",
+  metadata: {},
+  progress: {
+    completed_steps: 0,
+    running_steps: 0,
+    total_steps: 1,
+    percent: 0,
+  },
+  plan: null,
+  result: null,
 };
 
 const v2Events = [
@@ -558,7 +585,7 @@ const fixtures: Record<string, unknown> = {
     completed: false,
     generated_at: new Date().toISOString(),
   },
-  "v2/tasks": { tasks: [v2Task] },
+  "v2/tasks": { tasks: [v2Task, v2FallbackTask] },
   "v2/tasks/task_v2_1": v2Task,
   "v2/tasks/task_v2_1/events.json": { events: v2Events },
   "v2/admin/overview": v2Overview,
@@ -930,8 +957,9 @@ describe("AgentFlow console", () => {
       ),
       "Ship the V2 control plane",
     );
-    await user.selectOptions(screen.getByLabelText("Mode"), "multi-agent");
-    await user.selectOptions(screen.getByLabelText("Channel"), "feishu");
+    await user.click(screen.getByRole("button", { name: /Multi-agent/ }));
+    await user.click(screen.getByRole("button", { name: /Feishu/ }));
+    await user.click(screen.getByRole("button", { name: /codex cli/ }));
     await user.click(screen.getByRole("button", { name: "Start" }));
 
     await waitFor(() =>
@@ -939,7 +967,9 @@ describe("AgentFlow console", () => {
         "/v2/tasks",
         expect.objectContaining({
           method: "POST",
-          body: expect.stringContaining("Ship the V2 control plane"),
+          body: expect.stringMatching(
+            /Ship the V2 control plane.*multi-agent.*feishu.*codex/s,
+          ),
         }),
       ),
     );
@@ -965,6 +995,19 @@ describe("AgentFlow console", () => {
           body: expect.stringContaining("Include audit notes"),
         }),
       ),
+    );
+  });
+
+  it("does not submit an empty V2 task", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("link", { name: "V2" }));
+    fireEvent.submit(await screen.findByRole("form", { name: "New Task" }));
+
+    expect(fetch).not.toHaveBeenCalledWith(
+      "/v2/tasks",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 

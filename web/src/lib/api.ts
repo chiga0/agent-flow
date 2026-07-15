@@ -428,6 +428,7 @@ export interface V2Task {
   priority: string;
   channel: string;
   adapter: string;
+  metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
   progress: V2Progress;
