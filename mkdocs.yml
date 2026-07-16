@@ -29,6 +29,7 @@ nav:
       - IM 机器人接入: channel-integrations.md
       - 执行单元注册与调度: execution-units.md
       - 产品可用性审计: implementation/product-usability-audit.md
+      - 产品体验与用户流程审计: implementation/product-experience-flow-audit.md
       - 方案审计与 Review 记录: implementation/review-and-audit-record.md
       - 本地或 NAS 主控部署教程: implementation/local-nas-control-plane-deployment.md
       - 实施 Roadmap: implementation/implementation-roadmap.md

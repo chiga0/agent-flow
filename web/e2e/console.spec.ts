@@ -40,6 +40,7 @@ test("creates a task from the client workspace", async ({ page }) => {
     page.getByRole("heading", { name: "Ship the control plane" }),
   ).toBeVisible();
   await expect(page.getByText("Plan DAG")).toBeVisible();
+  await expect(page.getByText("Agent Chat")).toBeVisible();
   await expect(page.getByText("Qwen WebShell")).toBeVisible();
   await expect(page.getByText("Canonical Events")).toBeVisible();
   const followUpRequest = page.waitForRequest(

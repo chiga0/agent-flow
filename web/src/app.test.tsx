@@ -1070,6 +1070,7 @@ describe("AgentFlow console", () => {
       await screen.findByRole("heading", { name: "Ship the control plane" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Plan DAG")).toBeInTheDocument();
+    expect(screen.getByText("Agent Chat")).toBeInTheDocument();
     expect(screen.getByText("Durable Workflow")).toBeInTheDocument();
     expect(screen.getByText("Artifacts")).toBeInTheDocument();
     expect(screen.getByText("Evaluations")).toBeInTheDocument();

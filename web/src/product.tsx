@@ -95,6 +95,12 @@ const adapterOptions = [
   { value: "fake", label: "fake", icon: <CheckCircle2 className="h-4 w-4" /> },
 ];
 
+const taskTemplates = [
+  "把这个需求拆成可执行计划，并输出风险清单和验收标准。",
+  "生成一份本周运维巡检报告，标出异常、影响和下一步动作。",
+  "审计当前项目的部署链路，给出可以直接执行的修复顺序。",
+];
+
 export function ProductClientPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -201,6 +207,19 @@ export function ProductClientPage() {
               onChange={(event) => setGoal(event.target.value)}
             />
           </Field>
+
+          <div className="flex flex-wrap gap-2">
+            {taskTemplates.map((template) => (
+              <button
+                key={template}
+                className="rounded-md border border-border px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                type="button"
+                onClick={() => setGoal(template)}
+              >
+                {template}
+              </button>
+            ))}
+          </div>
 
           <div className="grid gap-3 border-t border-border pt-4">
             <fieldset className="grid gap-2">
@@ -458,9 +477,14 @@ export function ProductTaskPage() {
     mutationFn: () => runtimeApi.v2SubmitMessage(taskId, message),
     onSuccess: async () => {
       setMessage("");
-      await queryClient.invalidateQueries({
-        queryKey: ["v2", "tasks", taskId, "events"],
-      });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["v2", "tasks", taskId, "events"],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["v2", "tasks", taskId, "webshell-events"],
+        }),
+      ]);
     },
   });
   const retryTask = useMutation({
@@ -472,6 +496,12 @@ export function ProductTaskPage() {
     onSuccess: refreshTaskDetail,
   });
   const current = task.data;
+  const submitFollowUp = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (message.trim()) {
+      sendMessage.mutate();
+    }
+  };
 
   return (
     <div className="mx-auto grid w-full max-w-7xl gap-5">
@@ -524,6 +554,38 @@ export function ProductTaskPage() {
         </div>
       ) : null}
 
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <TerminalSquare className="h-4 w-4 text-primary" />
+            <CardTitle>Agent Chat</CardTitle>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge tone="info">Qwen WebShell</Badge>
+            <Badge tone="neutral">DaemonEvent</Badge>
+          </div>
+        </CardHeader>
+        <CardBody className="grid gap-3">
+          <QwenWebshellPanel events={webshellEvents.data?.events ?? []} />
+          <form className="grid gap-2 border-t border-border pt-3" onSubmit={submitFollowUp}>
+            <Input
+              placeholder="Add context or a follow-up instruction"
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+            />
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">
+                Sent to the task runner and mirrored into the WebShell event stream.
+              </span>
+              <Button disabled={!message.trim() || sendMessage.isPending} type="submit">
+                <Send className="h-4 w-4" />
+                Send
+              </Button>
+            </div>
+          </form>
+        </CardBody>
+      </Card>
+
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
         <Card>
           <CardHeader>
@@ -559,19 +621,6 @@ export function ProductTaskPage() {
           </CardBody>
         </Card>
       </div>
-
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <TerminalSquare className="h-4 w-4 text-primary" />
-            <CardTitle>Qwen WebShell</CardTitle>
-          </div>
-          <Badge tone="info">DaemonEvent</Badge>
-        </CardHeader>
-        <CardBody>
-          <QwenWebshellPanel events={webshellEvents.data?.events ?? []} />
-        </CardBody>
-      </Card>
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card>
@@ -642,25 +691,6 @@ export function ProductTaskPage() {
           </CardHeader>
           <CardBody className="grid gap-3">
             <EventTimeline events={events.data?.events ?? []} />
-            <form
-              className="grid gap-2 border-t border-border pt-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (message.trim()) {
-                  sendMessage.mutate();
-                }
-              }}
-            >
-              <Input
-                placeholder="Add context or a follow-up instruction"
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-              />
-              <Button disabled={!message.trim() || sendMessage.isPending} type="submit">
-                <Send className="h-4 w-4" />
-                Send
-              </Button>
-            </form>
           </CardBody>
         </Card>
 
@@ -1079,10 +1109,17 @@ function EventTimeline({ events }: { events: V2Event[] }) {
 
 function QwenWebshellPanel({ events }: { events: DaemonEvent[] }) {
   if (!events.length) {
-    return <EmptyState title="No webshell events yet" />;
+    return (
+      <div className="grid min-h-64 place-items-center rounded-md border border-border bg-muted/20 p-4">
+        <EmptyState
+          title="No WebShell events yet"
+          detail="The agent transcript will appear here as soon as the task runner emits user, agent, tool, or status events."
+        />
+      </div>
+    );
   }
   return (
-    <div className="grid max-h-[420px] gap-3 overflow-auto rounded-md border border-border bg-muted/20 p-3">
+    <div className="grid max-h-[520px] min-h-64 gap-3 overflow-auto rounded-md border border-border bg-muted/20 p-3">
       {events.map((event) => {
         const update = event.data?.update as
           | {
