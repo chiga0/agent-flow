@@ -1,5 +1,5 @@
 site_name: AgentFlow
-site_description: AgentFlow is an Agent orchestration system for long-running cloud execution, governance, auditability, and recovery.
+site_description: AgentFlow is a self-hosted agent orchestration platform for long-running tasks, governance, auditability, and recovery.
 site_url: https://chiga0.github.io/agent-flow/
 repo_url: https://github.com/chiga0/agent-flow
 repo_name: chiga0/agent-flow
@@ -12,55 +12,27 @@ theme:
 
 nav:
   - 首页: index.md
-  - 快速开始:
-      - 认识 AgentFlow: getting-started.md
+  - 上手与使用:
+      - 快速开始: getting-started.md
       - 核心概念: concepts.md
-      - 架构与术语: architecture.md
-      - 从部署到可用产品: deployment-runbook.md
-      - IM 机器人接入: channel-integrations.md
+      - Client 使用指南: user-guide.md
+      - Admin 管理指南: admin-guide.md
+  - 部署与接入:
+      - 部署指南: deployment-runbook.md
+      - 自托管与 CI: self-deploy.md
       - 执行单元注册与调度: execution-units.md
-      - 架构走读: architecture-walkthrough.md
-      - 使用管理台: user-guide.md
-      - 自我部署: self-deploy.md
+      - IM 机器人接入: channel-integrations.md
+      - 本机/NAS 主控部署: implementation/local-nas-control-plane-deployment.md
       - 排障手册: troubleshooting.md
-  - 运维与审计:
-      - AgentFlow 操作手册: implementation/operation-manual.md
-      - 从部署到可用产品: deployment-runbook.md
-      - IM 机器人接入: channel-integrations.md
-      - 执行单元注册与调度: execution-units.md
-      - 产品可用性审计: implementation/product-usability-audit.md
-      - 产品体验与用户流程审计: implementation/product-experience-flow-audit.md
-      - 方案审计与 Review 记录: implementation/review-and-audit-record.md
-      - 本地或 NAS 主控部署教程: implementation/local-nas-control-plane-deployment.md
-      - 实施 Roadmap: implementation/implementation-roadmap.md
-      - V2 实施 Roadmap: implementation/v2-implementation-roadmap.md
-  - 架构设计:
-      - 架构总览: implementation/index.md
-      - AgentFlow 架构与术语: architecture.md
-      - AgentFlow 架构走读: architecture-walkthrough.md
-      - Client/Admin 分离与多 Agent 平台化方案: implementation/client-admin-agent-platform-plan.md
-      - AgentFlow V2 产品与架构整体方案: implementation/v2-product-architecture.md
-      - AgentFlow V2 C/B 双端产品重设计: implementation/v2-c-b-product-redesign.md
-      - AgentFlow V2 实施 Roadmap: implementation/v2-implementation-roadmap.md
-      - AgentFlow V2 多轮审计记录: implementation/v2-product-architecture-audit.md
-      - 稳定单 Agent 执行单元: implementation/stable-agent-execution-unit.md
-      - SubAgent 与独立执行单元边界: implementation/subagent-vs-execution-unit.md
-      - 基于 qwen-code serve 的云端单 Agent 单元方案: implementation/qwen-serve-single-agent-cloud-unit.md
-      - 基于 Qwen WebShell 的 Chat 渲染方案: implementation/qwen-webshell-chat-rendering.md
-      - 沙箱与隔离方案: implementation/sandbox-isolation.md
+  - 架构与治理:
+      - 架构总览: architecture.md
+      - 架构走读: architecture-walkthrough.md
+      - Roadmap: roadmap.md
+      - 产品与架构审计: audit.md
       - ACP、A2A 与 MCP 协议选型: implementation/protocol-acp-a2a.md
-      - Temporal 调研与适配方案: implementation/temporal-evaluation.md
-      - 事件溯源、JSONL 与回放: implementation/event-sourcing-and-replay.md
-      - 人类介入与权限 Channel 架构: implementation/human-in-the-loop-permission-channel-architecture.md
-      - 单 Agent 基座选型: implementation/single-agent-strategy.md
-      - 从单 Agent 执行单元到多 Agent 编排: implementation/single-to-multi-agent-implementation-plan.md
-      - 外部方案对比与多方向审计: implementation/alternative-solutions-comparative-audit.md
-      - DeerFlow 深度调研与 AgentFlow 对比: implementation/deer-flow-comparative-research.md
-  - 研究资料:
-      - AgentFlow 与企业级 Cloud Agents 技术调研报告: cloud-agents/index.md
-      - 生产级多 Agent 系统编排与运行屏障工程: multi-agent/research-on-multi-agent-orchestration-frameworks.md
-      - A2A 协议生态与多 Agent 编排治理调研: multi-agent/a2a-ecosystem-and-governance-research.md
-      - Qwen Code Core 与 SDK Agent 架构分析: other-agents/qwen-code-core-sdk-agent-architecture.md
+      - Temporal 适配方案: implementation/temporal-evaluation.md
+      - 事件溯源与回放: implementation/event-sourcing-and-replay.md
+      - Qwen WebShell Chat 渲染: implementation/qwen-webshell-chat-rendering.md
 
 markdown_extensions:
   - admonition

@@ -66,7 +66,7 @@ npm ci
 npm run build
 ```
 
-如果你的远端仓库仍使用旧仓库名，请把 clone URL 换成当前 PR 所在仓库地址。运行目录建议固定为 `/opt/agentflow`，后续 systemd、worker 和部署脚本都更好维护。
+运行目录建议固定为 `/opt/agentflow`，后续 systemd、worker 和部署脚本都更好维护。
 
 ### 3.3 创建运行目录和密钥
 
@@ -221,6 +221,8 @@ V2_BACKUP_ENABLED=1
 V2_BACKUP_TARGET=/data/backups
 ```
 
+`V2_` 前缀是当前实现的环境变量兼容命名，不代表部署时还需要选择产品版本。
+
 启动：
 
 ```bash
@@ -236,7 +238,7 @@ docker compose --env-file .env -f deploy/docker-compose.ha.yml ps
 
 | 路径 | 用途 | 入口 |
 | --- | --- | --- |
-| V2 Execution Unit Registry | 描述 Docker、ECS、NAS、本机 workspace 等能力，供 V2 编排和调度选择 | Admin -> Execution Units |
+| Execution Unit Registry | 描述 Docker、ECS、NAS、本机 workspace 等能力，供编排和调度选择 | Admin -> Execution Units |
 | Remote Worker Registration | 生成 worker 专用 token 和部署命令，让一台机器主动连回控制面领任务 | Admin -> Units |
 
 ### 6.1 用环境变量发现执行单元
@@ -265,6 +267,8 @@ V2_EXECUTION_UNITS_JSON='[
   }
 ]'
 ```
+
+`V2_EXECUTION_UNITS_JSON` 是当前实现沿用的变量名。文档和产品视角统一称为 Execution Unit Registry。
 
 重启 runtime 后，在 Admin -> Execution Units 点击 Discover，或者调用：
 
@@ -376,7 +380,7 @@ HA profile 需要备份：
 3. 恢复数据库和 artifact 目录。
 4. 启动 runtime。
 5. 启动 worker。
-6. 跑 health 和 V2 smoke。
+6. 跑 health 和 control-plane smoke。
 7. 用一条 fake task 验证 Client、Admin、artifact 和 audit。
 
 ## 11. 最小验收清单
@@ -387,7 +391,7 @@ HA profile 需要备份：
 | --- | --- |
 | 登录 | owner 邮箱密码可以进入 Client 和 Admin |
 | Health | `/health` 返回正常 |
-| V2 smoke | `scripts/smoke_v2_control_plane.py` 完成 |
+| Control-plane smoke | `scripts/smoke_v2_control_plane.py` 完成 |
 | fake task | Client 创建任务后能完成并产生事件 |
 | 执行单元 | Admin 能看到至少 1 个 active unit 或 worker |
 | IM 出站 | 目标群能收到测试消息 |

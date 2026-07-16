@@ -1,56 +1,76 @@
-# 认识 AgentFlow
+# 快速开始
 
-AgentFlow 的目标是把“在本地 CLI 里跑一次 Agent”变成“可以长期运行、可以审计、可以恢复、可以交给 worker 执行的任务系统”。
+这篇文档帮助你从“刚部署好”走到“完成第一个可审计任务”。如果你是普通用户，只需要看 Client 部分；如果你负责部署和运维，继续完成 Admin 和 smoke 验证。
 
-你可以把它理解成三个东西组合在一起：
+## 1. 访问入口
 
-- 一个 Web 管理台：创建任务、看进度、处理权限、下载结果。
-- 一个 Run Manager：保存任务状态、事件流、artifact、审计包和 worker 心跳。
-- 一组执行单元：本机或远程 worker，实际运行 fake/qwen 等 Agent adapter。
+Client 面向任务发起者：
 
-## 它解决什么问题
+```text
+https://<你的域名>/cloud-agents/#/
+```
 
-普通 Agent CLI 很适合本地交互，但长期运行时会遇到这些问题：
+Admin 面向 owner、operator、auditor：
 
-- 浏览器或终端断开后，不知道任务是否还在继续。
-- 模型输出、工具调用、权限审批、失败原因分散在日志里。
-- qwen 之类真实执行器容易消耗 CPU/内存，小 VPS 上更明显。
-- 多个任务并行时缺少队列、容量、worker、审计和恢复机制。
+```text
+https://<你的域名>/cloud-agents/#/admin
+```
 
-AgentFlow 把这些能力放到一个运行时里，让任务可以被创建、排队、认领、执行、审批、取消、重试、归档和审计。
+登录使用部署时配置的本地邮箱账户：
 
-## 当前能做什么
+| 字段 | 来源 |
+| --- | --- |
+| 邮箱 | `RUN_MANAGER_BOOTSTRAP_EMAIL` 或 GitHub Secret `RUNTIME_AUTH_EMAIL` |
+| 密码 | `RUN_MANAGER_BOOTSTRAP_PASSWORD` 或 GitHub Secret `RUNTIME_AUTH_PASSWORD` |
 
-当前 beta 版适合下面这些场景：
+如果兼容部署没有配置 `RUNTIME_AUTH_PASSWORD`，部署 workflow 会兼容使用 `RUNTIME_BASIC_AUTH_PASSWORD` 作为登录密码。不要把密码写入仓库、文档或聊天记录。
 
-- 用 `fake` adapter 验证部署、登录、事件流、artifact 和监控链路。
-- 用 `qwen` adapter 跑真实轻量任务，并查看实时输出和 executor 日志。
-- 创建 mission，把一个目标拆成多个 profile task 执行。
-- 注册远程 worker，让控制面和执行面分离。
-- 在 Run Detail 中处理权限请求，并下载 audit bundle。
-- 通过 GitHub Actions 把最新 main 自动部署到一台 VPS。
+## 2. 创建第一个任务
 
-当前不适合直接当成开放式多租户 SaaS 使用。邮箱验证、找回密码、多组织、精细计费、外部通知渠道和更强的隔离边界仍需要继续建设。
+第一次验证请用 `fake` adapter，先确认平台链路健康：
 
-## 第一次上手
+1. 打开 Client。
+2. 在任务输入框写入：`请回复 OK，并说明当前任务链路可用。`
+3. Adapter 选择 `fake`。
+4. 提交任务。
+5. 进入 Task Detail，确认能看到 `Agent Chat`、状态、Workflow、Canonical Events、Artifacts。
+6. 下载或预览产物，确认任务完成。
 
-建议先用一条 fake run 建立直觉：
+fake 任务通过后，再尝试 `qwen` 或其他真实 adapter。真实 adapter 依赖 CLI 命令、模型配置、机器资源、workspace 隔离和权限策略，排障复杂度明显更高。
 
-1. 打开管理台，例如 `https://your-domain/cloud-agents/`。
-2. 使用部署时配置的邮箱和密码登录。
-3. 进入 `Runs`，adapter 选 `fake`。
-4. 输入一个短 prompt，例如 `hello runtime`。
-5. 创建后进入 Run Detail。
-6. 查看 Agent Chat、Event Stream、Artifacts 和 Audit Bundle。
+## 3. 真实 Agent 验证顺序
 
-fake run 成功后，再尝试 qwen run。qwen 会依赖机器资源、qwen CLI、settings、权限审批和 executor 策略，所以更适合放在第二步验证。
+建议按这个顺序逐步打开能力：
 
-## 学习路径
+| 顺序 | 验证项 | 成功标准 |
+| --- | --- | --- |
+| 1 | fake task | Task completed，事件和产物完整 |
+| 2 | Admin overview | 队列、Workflow、HA、Channel 状态可读 |
+| 3 | Execution Unit | 至少一个 active unit 或 worker 心跳正常 |
+| 4 | qwen task | Agent Chat 有真实输出，artifact 中有日志或报告 |
+| 5 | IM Channel | 平台消息能创建 task，出站消息可审计 |
+| 6 | Retry/Replay | 失败任务可以重试，历史事件可以回放 |
 
-按这个顺序继续：
+## 4. 普通用户应该看什么
 
-1. [核心概念](concepts.md)：先读懂系统里的名词。
-2. [使用管理台](user-guide.md)：学习每个页面如何使用。
-3. [自我部署](self-deploy.md)：把系统部署到自己的机器。
-4. [排障手册](troubleshooting.md)：出现问题时按症状定位。
-5. [产品可用性审计](implementation/product-usability-audit.md)：了解当前仍缺什么。
+普通用户只需要理解四个区域：
+
+| 区域 | 作用 |
+| --- | --- |
+| New Task | 描述目标、选择简单/复杂任务、选择 adapter |
+| Recent Tasks | 找到自己最近提交的任务 |
+| Agent Chat | 实时看 Agent 输出、工具调用和需要你处理的动作 |
+| Artifacts / Result | 查看最终结果、报告、日志和审计材料 |
+
+不要从 Admin 的 Run、Worker、Executor 开始学习。那些是运维和审计视角。
+
+## 5. 管理员上线检查
+
+管理员部署后至少检查：
+
+1. [Admin 管理指南](admin-guide.md) 中的 Overview、Execution Units、Channels、Tenants、HA。
+2. [执行单元注册与调度](execution-units.md) 中的 unit/worker 注册。
+3. [IM 机器人接入](channel-integrations.md) 中的签名校验和回调代理。
+4. [部署指南](deployment-runbook.md) 中的 smoke、备份、监控和资源建议。
+
+2C2G 机器建议只跑低并发控制面或单 worker。真实 qwen、Playwright、前端构建、Docker build 和多任务并发不要挤在同一台 2C2G 上。

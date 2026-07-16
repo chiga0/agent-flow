@@ -1,50 +1,57 @@
 # AgentFlow
 
-AgentFlow 是一个可自托管的 Agent 运行时：你可以把一个 AI 编程任务放到云端或自己的机器上长期运行，随时查看进度、处理权限请求、下载审计材料，并把执行能力扩展到多台 worker。
+AgentFlow 是一个可自托管的长期运行 Agent 平台。用户在 Client 端提交任务，系统负责编排 Agent、调度执行单元、保存过程事件、生成产物，并让管理员在 Admin 端完成运维、审计、租户配置和用户管理。
 
-当前版本更接近“单租户 beta 运行平台”，不是已经完成的 SaaS 产品。它已经能跑 fake/qwen 任务、mission、worker、executor、artifact、audit、权限审批和基础账户认证；多租户、邮箱验证、支付、企业级权限边界仍在演进。
+当前文档只描述现行产品形态。历史控制台、早期路线图和过期方案文档已经从文档导航中移除；代码中的 `/v2/...` API 名称仅作为后端接口命名保留，不再代表一个需要用户选择的产品版本。
 
-## 建议阅读顺序
+## 先读什么
 
-如果你是第一次接触这个项目，建议按下面顺序读：
+第一次上手建议按这个顺序：
 
-1. [认识 AgentFlow](getting-started.md)：先了解产品解决什么问题，以及当前能做什么。
-2. [核心概念](concepts.md)：弄清 run、mission、worker、executor、artifact、permission 这些词。
-3. [使用管理台](user-guide.md)：按页面学习如何创建任务、看进度、处理权限和下载审计包。
-4. [从部署到可用产品的完整教程](deployment-runbook.md)：按真实部署顺序完成控制面、执行单元、Channel、首个任务和验收。
-5. [钉钉、飞书、企业微信机器人接入](channel-integrations.md)：配置真实 IM 出站、入站代理和安全校验。
-6. [执行单元发现、注册与调度](execution-units.md)：把本机、NAS、Docker、ECS 注册为可调度执行资源。
-7. [架构走读](architecture-walkthrough.md)：从用户请求到产物落盘拆开看系统分层。
-8. [排障手册](troubleshooting.md)：遇到登录失败、一直 running、qwen 失败、CI 部署失败时从这里查。
+1. [快速开始](getting-started.md)：了解入口、账号、首个任务和验证顺序。
+2. [核心概念](concepts.md)：理解 Task、Agent、Workflow、Execution Unit、Channel、Artifact、Audit。
+3. [Client 使用指南](user-guide.md)：普通用户如何创建任务、追踪 Agent Chat、查看 DAG、下载产物。
+4. [Admin 管理指南](admin-guide.md)：管理员如何管理租户、用户、执行单元、Channel、HA 和审计。
+5. [部署指南](deployment-runbook.md)：从本机/NAS/VPS/HA profile 部署到可用产品。
+6. [执行单元注册与调度](execution-units.md)：接入本机 workspace、Docker、ECS、NAS 或远程 worker。
+7. [IM 机器人接入](channel-integrations.md)：接入钉钉、飞书、企业微信的真实收发链路。
+8. [架构总览](architecture.md)：从系统设计角度理解分层和可靠性边界。
+9. [排障手册](troubleshooting.md)：登录、任务卡住、qwen 失败、worker stale、部署失败时从这里查。
 
-读完这些文档，你已经可以作为使用者、自部署者和运维者上手。后面的“运维与审计”“架构设计”“研究资料”面向二次开发和方案评审；其中 [基于 Qwen WebShell 的 Chat 渲染方案](implementation/qwen-webshell-chat-rendering.md) 记录了前端 Chat 组件复用和 `DaemonEvent` 投影方案，[A2A 协议生态与多 Agent 编排治理调研](multi-agent/a2a-ecosystem-and-governance-research.md) 记录了 A2A 生态、成熟度与治理控制面分析。
-
-## 当前产品状态
+## 当前可用边界
 
 | 能力 | 状态 | 说明 |
 | --- | --- | --- |
-| Web 管理台 | 可用 | 支持 Run、Mission、Units、Executors、Access、Operations 等页面 |
-| 本地邮箱账户登录 | 可用 | 使用部署时配置的 owner email/password；暂未接 SMTP 邮件验证 |
-| fake run | 稳定 | 适合 smoke test 和链路验证 |
-| qwen run | 可用 | 支持 shared、per-run process、container foundation，真实任务仍需关注资源 |
-| mission 编排 | 可用 | 支持轻量 DAG、profile、review gate foundation |
-| remote worker | foundation 可用 | 支持 heartbeat、claim、event 回传、artifact 上传 |
-| 审计材料 | 可用 | run/mission event、diagnostics、executor 日志、audit bundle |
-| 多租户 SaaS | 未完成 | 当前按单租户/个人自托管设计 |
+| Client 工作台 | 可用 | 任务创建、任务列表、任务详情、Agent Chat、Workflow、Artifact、Retry、Replay |
+| Admin 管理台 | 可用 | Overview、Execution Units、Channels、Tenants、RBAC、HA、Workflow 状态 |
+| 真实 Agent adapter | 可用 | 支持 fake/qwen/codex/claude/opencode 统一 adapter；真实 CLI 需要在部署环境启用并安装命令 |
+| qwen WebShell 投影 | 可用 | Task Detail 已把 WebShell/DaemonEvent 聊天区域作为核心区域展示 |
+| IM Channel | 可用基础链路 | 支持平台配置、出站 webhook、入站 webhook 和消息审计；生产建议加边缘签名校验代理 |
+| 执行单元 | 可用基础链路 | 支持环境发现、Admin 注册、远程 worker 注册、资源标签和调度选择 |
+| HA profile | 可部署 | Postgres、Redis、Temporal profile、多 worker、备份配置已有部署文档和 smoke |
+| 商业级开放 SaaS | 仍需审慎 | SSO、邮件验证、计费、细粒度租户隔离、对象存储和更完整合规控制仍需继续建设 |
 
-## 最小本地预览
+## 本地预览
 
 文档站：
 
 ```bash
-python -m pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 mkdocs serve
 ```
 
 Runtime：
 
 ```bash
-python3 -m runtime.cloud_agents_runtime --host 127.0.0.1 --port 8765
+RUN_MANAGER_BOOTSTRAP_EMAIL=owner@example.com \
+RUN_MANAGER_BOOTSTRAP_PASSWORD=secret \
+PYTHONPATH=runtime \
+python3 -m cloud_agents_runtime --host 127.0.0.1 --port 8765
 ```
 
-生产部署请直接看：[从部署到可用产品的完整教程](deployment-runbook.md)。
+浏览器打开：
+
+```text
+http://127.0.0.1:8765/#/
+http://127.0.0.1:8765/#/admin
+```

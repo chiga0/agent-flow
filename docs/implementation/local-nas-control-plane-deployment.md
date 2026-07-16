@@ -43,7 +43,7 @@ flowchart LR
 
 ### 2C2G 结论
 
-当前 V2 可用切片在 2C2G 上可以跑 control plane + fake smoke，但余量很小。推荐只把 2C2G 用作：
+当前可用切片在 2C2G 上可以跑 control plane + fake smoke，但余量很小。推荐只把 2C2G 用作：
 
 - 公网入口。
 - `capacity=1` 的远程 worker。
@@ -57,7 +57,7 @@ flowchart LR
 - Docker image build。
 - 长任务 workspace + qwen + Web 控制台同时运行。
 
-如果只有 2C2G，使用 `deploy/runtime.2c2g.env.example`，并保持 `RUN_MANAGER_WORKER_CAPACITY=1`、`RUNTIME_MEMORY_LIMIT=768m`、`QWEN_CONTAINER_MEMORY_MB=768`。如果有本机/NAS，优先把 V2 control plane 放在本机/NAS，2C2G 只做 worker 或边缘。
+如果只有 2C2G，使用 `deploy/runtime.2c2g.env.example`，并保持 `RUN_MANAGER_WORKER_CAPACITY=1`、`RUNTIME_MEMORY_LIMIT=768m`、`QWEN_CONTAINER_MEMORY_MB=768`。如果有本机/NAS，优先把 control plane 放在本机/NAS，2C2G 只做 worker 或边缘。
 
 ## 3. 控制面部署
 
@@ -181,9 +181,9 @@ http://127.0.0.1:8765/
 
 使用 `RUN_MANAGER_BOOTSTRAP_EMAIL` 和 `RUN_MANAGER_BOOTSTRAP_PASSWORD` 登录。
 
-### V2 smoke 验证
+### Control-plane smoke 验证
 
-服务启动后先验证 V2 的任务、计划、事件和结果闭环：
+服务启动后先验证任务、计划、事件和结果闭环：
 
 ```bash
 cd /opt/agentflow
@@ -401,7 +401,7 @@ Web 验收：
 2. `journalctl -u agentflow-runtime -n 200 --no-pager`。
 3. 检查 `/var/lib/agentflow-runtime/runtime.db` 和 artifact 目录。
 4. 从 `Operations` 创建或下载 backup。
-5. 如果 worker 仍持有旧 lease，先在 `Units` 执行 Retry，再恢复接单。
+5. 如果 worker 仍持有历史 lease，先在 `Units` 执行 Retry，再恢复接单。
 
 worker 恢复顺序：
 

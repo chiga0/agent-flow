@@ -6,7 +6,7 @@
 
 ```mermaid
 flowchart TD
-  Task["用户任务"] --> Scheduler["V2 Scheduler / Workflow Engine"]
+  Task["用户任务"] --> Scheduler["Scheduler / Workflow Engine"]
   Scheduler --> Registry["Execution Unit Registry"]
   Registry --> Local["local-workspace"]
   Registry --> Docker["docker"]
@@ -24,7 +24,7 @@ AgentFlow 有两层视图：
 
 | 名称 | 作用 | 使用者 |
 | --- | --- | --- |
-| Execution Unit | 描述机器、容器、NAS、ECS 的能力和标签 | V2 编排器、Admin |
+| Execution Unit | 描述机器、容器、NAS、ECS 的能力和标签 | 编排器、Admin |
 | Remote Worker | 真正运行在某台机器上的进程，主动心跳和认领任务 | 运维、调度器 |
 
 Execution Unit 偏“能力注册”，Remote Worker 偏“实际执行进程”。生产环境通常两者都存在：先声明 `ecs-hk-2c2g` 的能力，再部署一个 `RUN_WORKER_ID=ecs-hk-2c2g` 的 worker 进程。
@@ -75,6 +75,8 @@ V2_EXECUTION_UNITS_JSON='[
   }
 ]'
 ```
+
+`V2_EXECUTION_UNITS_JSON` 是实现兼容变量名。用户和管理员只需要理解它配置的是当前 Execution Unit Registry。
 
 重启 runtime 后：
 
@@ -224,6 +226,8 @@ V2_CLAUDE_CODE_COMMAND=claude
 V2_OPENCODE_COMMAND=opencode
 ```
 
+这些 `V2_` 环境变量名沿用当前后端实现，不代表存在两个产品版本。
+
 调度建议：
 
 | 场景 | adapter |
@@ -289,7 +293,7 @@ PYTHONPATH=runtime python3 scripts/smoke_v2_control_plane.py \
 curl "$BASE_URL/workers" \
   -H "Authorization: Bearer $RUN_MANAGER_TOKEN"
 
-# 查看 V2 execution units
+# 查看 execution units
 curl "$BASE_URL/v2/admin/execution-units" \
   -H "Authorization: Bearer $RUN_MANAGER_TOKEN"
 ```
@@ -302,4 +306,3 @@ UI 验收：
 | Admin -> Units | 能看到 worker heartbeat 和 capacity |
 | Client task detail | 能看到 Chat、DAG、事件和 artifact |
 | Run/Task detail | 能下载 audit bundle |
-

@@ -1,112 +1,119 @@
 # 核心概念
 
-这篇只解释用户需要先理解的概念。更底层的协议、沙箱、事件溯源和多 Agent 设计可以之后再读架构文档。
+AgentFlow 的用户视角是 Task-first：用户提交任务，系统自动规划、调度、执行、审计并交付产物。底层仍有 Run、Worker、Executor 等实现对象，但它们属于 Admin 和排障语境。
 
-## Run
+## Task
 
-Run 是一次 Agent 执行。
+Task 是用户看到的主要对象。
 
-你在 `Runs` 页面提交一个 prompt，就会创建一个 run。run 有自己的状态、事件、artifact、executor 信息和审计包。
+一个 Task 包含：
+
+- 用户目标和上下文。
+- Agent 计划和 Workflow/DAG。
+- Agent Chat 和 WebShell 事件投影。
+- 子 Agent 的角色、目标、产出物和评估结果。
+- 产物、审计包、回放和重试记录。
 
 常见状态：
 
 | 状态 | 含义 |
 | --- | --- |
-| `queued` | 已入队，等待 worker 或 executor |
-| `running` | 正在执行 |
-| `waiting_approval` | 等待人工审批权限 |
-| `completed` | 已完成 |
-| `failed` | 执行失败 |
+| `queued` | 已创建，等待编排或执行资源 |
+| `running` | Agent 正在执行 |
+| `blocked` | 等待权限、资源或人工处理 |
+| `completed` | 已完成并生成结果 |
+| `failed` | 执行失败，可查看原因并重试 |
 | `cancelled` | 已取消 |
 
-## Adapter
+## Agent Adapter
 
-Adapter 是接入真实 Agent 的适配层。
+Adapter 是统一接入不同 Agent CLI 的协议层。
 
-当前常用 adapter：
-
-| Adapter | 用途 |
+| Adapter | 典型用途 |
 | --- | --- |
-| `fake` | 平台链路 smoke test，成本低、稳定 |
-| `qwen` | 调用 qwen-code 执行真实任务 |
+| `fake` | smoke test、部署验收、端到端链路验证 |
+| `qwen` | qwen-code 真实执行 |
+| `codex` | Codex CLI 真实执行 |
+| `claude` | Claude Code 真实执行 |
+| `opencode` | OpenCode 真实执行 |
+| `auto` | 由策略选择可用 adapter |
 
-如果你只是验证部署是否成功，先用 `fake`。如果 fake 正常但 qwen 失败，通常说明平台主链路可用，问题在 qwen 设置、机器资源、权限审批或 executor。
+真实 CLI adapter 需要在执行单元上安装对应命令，并通过环境变量启用真实执行模式。未启用时，系统可以用协议模拟路径验证控制面和 UI。
 
-## Mission
+## Workflow 和 DAG
 
-Mission 是比 run 更高一层的复杂任务。
+简单任务可以由一个 Agent 完成。复杂任务会生成 Workflow/DAG：
 
-一个 mission 会把目标拆成多个 task，每个 task 可以使用不同 profile，例如 planner、coder、tester、reviewer。底层仍然会创建一个或多个 run。
+- orchestrator 负责拆解目标。
+- 子 Agent 有明确角色、上下文、目标和产出物。
+- 子任务可以并行、串行或 fan-out/fan-in。
+- 每个子任务都需要事件、artifact 和评估结果。
 
-适合 mission 的任务：
+生产 profile 可以接入 Temporal；轻量部署可以使用内置 durable workflow。
 
-- 需要先分析、再实现、再测试、再 review。
-- 需要多个子任务并行。
-- 需要 reviewer 或 release gate 给出结论。
+## Execution Unit
 
-## Profile
+Execution Unit 是可被调度的执行资源。它可以代表：
 
-Profile 是执行模板，不是一个长期在线的 Agent。
+- 本机隔离 workspace。
+- Docker 容器执行池。
+- ECS/云主机。
+- NAS 或工作站。
+- 远程 worker 进程。
 
-它描述某类任务应该用什么 prompt、工具策略、审批策略、资源限制和 artifact 输出。内置 profile 包括 planner、coder、tester、reviewer、release-gate、doc-writer。
+Admin 会根据 unit 的 labels、resources、adapters、features 和健康状态选择执行位置。
 
-## Worker 和 Unit
+## Worker 和 Executor
 
-Worker 是会主动向控制面报到并认领任务的执行进程。Unit 是管理台里看到的执行单元视图。
+Worker 是主动向控制面心跳、认领任务并上传事件的后台进程。
 
-你可以把控制面部署在一台更稳定的机器上，再把 2C2G VPS 注册成 capacity=1 的 worker。这样 qwen 或构建任务卡住时，不容易拖垮 Web 管理台。
+Executor 是 Worker 为某个 Task/Run 启动的真实执行实例，例如 qwen serve、per-run CLI process 或容器。
 
-关键字段：
+简单理解：
 
-| 字段 | 含义 |
+| 对象 | 回答的问题 |
 | --- | --- |
-| `capacity` | 这个 worker 同时能跑多少个任务 |
-| `heartbeat` | worker 最近一次报到时间 |
-| `labels` | region、tier、用途等标签 |
-| `metrics` | CPU、内存、磁盘、swap、load 等资源水位 |
+| Execution Unit | 哪台机器或哪个资源池可以接任务 |
+| Worker | 谁在主动领任务并汇报心跳 |
+| Executor | 某个任务实际由哪个进程/容器执行 |
 
-注册 worker 时生成的一次性令牌是一个最小权限 API token，通常只包含 `workers:*`。它只在创建时显示一次；如果部署命令丢失或令牌泄露，重新生成并撤销旧 token。
+## Channel
 
-## Executor
+Channel 是任务入口和通知出口。当前设计预留并支持：
 
-Executor 是 qwen adapter 背后的具体运行策略。
+- Web 和移动端 Web。
+- 钉钉机器人。
+- 飞书机器人。
+- 企业微信机器人。
 
-常见策略：
+Channel 消息不会绕过任务、权限和审计系统。入站消息会创建 Task，出站消息会记录发送状态，审批动作会写入审计事件。
 
-| 策略 | 含义 |
+## Artifact 和 Audit
+
+Artifact 是任务产物，例如报告、日志、诊断文件、事件 JSONL、代码 diff、评估结果。
+
+Audit 是可复盘证据链：
+
+- 用户输入。
+- Agent 输出。
+- 工具调用。
+- 权限审批。
+- 执行单元和 executor 状态。
+- 失败原因、重试、回放和评估结果。
+
+普通用户优先看 Result 和 Artifacts；管理员和 auditor 再看 Canonical Events、Replay、Audit Bundle。
+
+## Tenant、User 和 RBAC
+
+Tenant 是租户配置边界。User 属于租户。RBAC 决定用户能访问哪些任务、配置和审计材料。
+
+常见角色：
+
+| 角色 | 适合对象 |
 | --- | --- |
-| `shared` | 共用一个 qwen serve，资源开销低 |
-| `per_run_process` | 每个 run 启动独立 qwen 进程，隔离更好 |
-| `container` | 每个 run 用容器执行，隔离 foundation 已有但仍需更多实机验收 |
+| `member` | 普通任务发起者 |
+| `operator` | 处理任务失败、执行单元和权限请求 |
+| `auditor` | 查看审计材料和任务历史 |
+| `owner` | 管理租户、用户、RBAC、Channel、执行单元和部署配置 |
 
-当 qwen run 失败时，`Executors` 页面和 run artifact 里的 stdout/stderr 是关键线索。
-
-Executor Registry 是控制面记录 executor lease 的注册表，包含 run_id、executor_id、strategy、pid、port、workspace、status 和 last_error。它不是 worker 注册表；worker 注册表回答“有哪些机器能接任务”，executor registry 回答“这些机器为哪些 run 拉起了哪些执行实例”。
-
-## Artifact 和 Audit Bundle
-
-Artifact 是任务执行过程中产生的材料，例如事件 JSONL、diagnostics、executor 日志、最终报告。
-
-小型文本产物可以在管理台直接预览。固定的“审计下载”区用于下载事件、诊断和完整审计包；具体文件仍在 Artifact 区按名称展示。
-
-Audit Bundle 是把关键材料打包后的审计包，适合用来复盘：
-
-- 当时输入了什么。
-- Agent 输出了什么。
-- 调用了哪些工具。
-- 哪些权限被批准或拒绝。
-- 失败时 executor 和 worker 的状态是什么。
-
-## Permission
-
-Permission 是 Agent 执行高风险操作前发起的人工审批请求。
-
-例如 shell 命令、文件写入、网络访问、git 操作等都可能触发审批。你需要在 Run Detail 的 Agent Chat 或 Permission 区域批准/拒绝，并填写 reason。
-
-如果 run 长时间没有更新，先检查它是不是在等待权限。
-
-## Account 和 Token
-
-浏览器登录使用本地邮箱账户。部署时配置 owner email/password，系统会 bootstrap 一个 owner 用户。
-
-API token 用于自动化和 worker 接入。token 只在创建时显示一次，服务端只保存 hash。worker 建议使用带 `workers:*` scope 的 token，不要把 master token 暴露给 worker。
+当前自托管默认以单租户 owner 起步，团队和企业使用时应在 Admin 中显式配置用户、角色和策略。
