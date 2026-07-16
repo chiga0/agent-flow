@@ -197,8 +197,22 @@ class V2ControlPlaneTest(unittest.TestCase):
             result = control._execute_agent_adapter(task["task_id"], agent)
             self.assertEqual(result["execution_mode"], "real-cli")
             self.assertIn("agentflow-v2-acp-a2a", result["summary"])
+            streamed = [
+                event
+                for event in control.events(task["task_id"])
+                if event["type"] == "agent.message"
+                and event["payload"].get("agent_task_id") == "at_test"
+            ]
+            self.assertTrue(streamed)
+            self.assertTrue(streamed[-1]["payload"]["partial"])
+            script.write_text(
+                "#!/bin/sh\ncat >/dev/null\nprintf '\\nfailed output\\n'\nexit 2\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "exited with code 2"):
+                control._execute_agent_adapter(task["task_id"], agent)
             with mock.patch(
-                "runtime.cloud_agents_runtime.v2_control_plane.subprocess.run",
+                "runtime.cloud_agents_runtime.v2_control_plane.subprocess.Popen",
                 side_effect=OSError("boom"),
             ):
                 failed = control._execute_agent_adapter(task["task_id"], agent)
@@ -374,6 +388,16 @@ class V2ControlPlaneTest(unittest.TestCase):
         self.assertTrue(events)
         self.assertEqual(events[0]["type"], "session_update")
         self.assertEqual(events[0]["_meta"]["source"], "agentflow-v2-webshell")
+        agent_event = next(
+            event
+            for event in events
+            if event["_meta"]["runtimeEventType"] == "agent.message"
+        )
+        self.assertTrue(agent_event["_meta"]["agentTaskId"])
+        self.assertIn(
+            agent_event["_meta"]["agentRole"],
+            {"agent", "brain", "builder", "reviewer"},
+        )
         with self.assertRaises(KeyError):
             control.webshell_events("missing")
 

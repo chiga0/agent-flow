@@ -1721,33 +1721,75 @@ class V2ControlPlane:
             )
             return result
 
+        timed_out = threading.Event()
+        process: subprocess.Popen[str] | None = None
+
+        def stop_timed_out_process() -> None:
+            timed_out.set()
+            if process is not None and process.poll() is None:
+                process.kill()
+
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 [executable, *command[1:]],
-                input=json_dumps(envelope),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                capture_output=True,
-                timeout=20,
+                bufsize=1,
                 cwd=self.root,
-                check=False,
             )
+            timer = threading.Timer(20, stop_timed_out_process)
+            timer.daemon = True
+            timer.start()
+            assert process.stdin is not None
+            assert process.stdout is not None
+            process.stdin.write(json_dumps(envelope))
+            process.stdin.close()
+            output_chunks: list[str] = []
+            for raw_line in process.stdout:
+                line = raw_line.rstrip()
+                if not line:
+                    continue
+                output_chunks.append(line)
+                with self._lock:
+                    self._append_event_locked(
+                        task_id,
+                        "agent.message",
+                        str(agent["role"]),
+                        {
+                            "agent_task_id": agent["agent_task_id"],
+                            "message": line[:800],
+                            "protocol": protocol,
+                            "execution_mode": "real-cli",
+                            "partial": True,
+                        },
+                    )
+                    self._db.commit()
+            process.stdout.close()
+            return_code = process.wait()
+            timer.cancel()
+            if timed_out.is_set():
+                raise subprocess.TimeoutExpired(command, 20)
         except (OSError, subprocess.TimeoutExpired) as exc:
             result = simulated_adapter_result(adapter, protocol, envelope)
             result.update({"execution_mode": "cli-error", "error": str(exc)})
             return result
+        finally:
+            if "timer" in locals():
+                timer.cancel()
 
-        stdout = completed.stdout.strip()
-        stderr = completed.stderr.strip()
-        output = stdout or stderr or f"{adapter} completed with code {completed.returncode}"
-        if completed.returncode != 0:
+        output = "\n".join(output_chunks).strip()
+        output = output or f"{adapter} completed with code {return_code}"
+        if return_code != 0:
             raise RuntimeError(
-                f"{adapter} CLI exited with code {completed.returncode}: {output[:400]}"
+                f"{adapter} CLI exited with code {return_code}: {output[:400]}"
             )
         return {
             "adapter": adapter,
             "protocol": protocol,
             "execution_mode": "real-cli",
-            "exit_code": completed.returncode,
+            "exit_code": return_code,
             "message": output[:800],
             "summary": output[:1200],
             "envelope": envelope,
@@ -2819,5 +2861,7 @@ def v2_event_to_daemon_event(event: dict[str, Any]) -> dict[str, Any]:
             "runtimeSequence": event["sequence"],
             "runtimeEventType": event_type,
             "source": "agentflow-v2-webshell",
+            "agentTaskId": payload.get("agent_task_id"),
+            "agentRole": event.get("actor"),
         },
     }

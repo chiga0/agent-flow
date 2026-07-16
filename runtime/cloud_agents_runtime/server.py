@@ -667,7 +667,7 @@ def make_handler(
                     try:
                         task = manager.v2.create_task(
                             payload,
-                            principal=self.principal_id(),
+                            principal=self.principal_id() or "api-token",
                             idempotency_key=self.headers.get("idempotency-key"),
                         )
                     except ValueError as exc:

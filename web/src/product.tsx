@@ -12,7 +12,6 @@ import {
   GitBranch,
   KeyRound,
   Layers3,
-  ListChecks,
   MessageSquare,
   Network,
   RadioTower,
@@ -25,7 +24,7 @@ import {
   Users,
   Zap,
 } from "lucide-react";
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import {
   Badge,
@@ -321,8 +320,13 @@ export function ProductClientPage() {
       <section className="grid gap-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <ListChecks className="h-4 w-4 text-primary" />
-            <h2 className="text-sm font-semibold">Task Track</h2>
+            <TerminalSquare className="h-4 w-4 text-primary" />
+            <div>
+              <h2 className="text-sm font-semibold">Live Agent Chats</h2>
+              <p className="text-xs text-muted-foreground">
+                Open a task to follow its real-time Agent output.
+              </p>
+            </div>
           </div>
           <Badge tone="neutral">{taskItems.length} total</Badge>
         </div>
@@ -485,6 +489,7 @@ export function ProductTaskPage() {
   const { taskId } = useParams({ strict: false }) as { taskId: string };
   const queryClient = useQueryClient();
   const [message, setMessage] = useState("");
+  const [selectedAgentId, setSelectedAgentId] = useState("all");
   const task = useQuery({
     queryKey: ["v2", "tasks", taskId],
     queryFn: () => runtimeApi.v2Task(taskId),
@@ -564,6 +569,16 @@ export function ProductTaskPage() {
     onSuccess: refreshTaskDetail,
   });
   const current = task.data;
+  const agents = current?.plan?.agent_tasks ?? [];
+  const visibleWebshellEvents =
+    selectedAgentId === "all"
+      ? liveWebshell.events
+      : liveWebshell.events.filter(
+          (event) => String(event._meta?.agentTaskId ?? "") === selectedAgentId,
+        );
+  const selectedAgent = agents.find(
+    (agent) => agent.agent_task_id === selectedAgentId,
+  );
   const submitFollowUp = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (message.trim()) {
@@ -625,9 +640,15 @@ export function ProductTaskPage() {
 
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2">
-            <TerminalSquare className="h-4 w-4 text-primary" />
-            <CardTitle>Agent Chat</CardTitle>
+          <div>
+            <div className="flex items-center gap-2">
+              <TerminalSquare className="h-4 w-4 text-primary" />
+              <CardTitle>Agent Chat</CardTitle>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Real-time output is the primary task view. Switch Agent when the plan
+              contains multiple workers.
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge tone="info">Qwen WebShell</Badge>
@@ -644,7 +665,27 @@ export function ProductTaskPage() {
           </div>
         </CardHeader>
         <CardBody className="grid gap-3">
-          <QwenWebshellPanel events={liveWebshell.events} />
+          <AgentSwitcher
+            agents={agents}
+            selectedAgentId={selectedAgentId}
+            onSelect={setSelectedAgentId}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+            <div className="text-sm font-medium">
+              {selectedAgent ? `${selectedAgent.role} output` : "All real-time output"}
+            </div>
+            <span className="text-xs text-muted-foreground">
+              {visibleWebshellEvents.length} events
+            </span>
+          </div>
+          <QwenWebshellPanel
+            events={visibleWebshellEvents}
+            emptyDetail={
+              selectedAgent
+                ? `Waiting for ${selectedAgent.role} to emit output.`
+                : undefined
+            }
+          />
           <form className="grid gap-2 border-t border-border pt-3" onSubmit={submitFollowUp}>
             <Input
               placeholder="Add context or a follow-up instruction"
@@ -1207,6 +1248,10 @@ function TaskTrackItem({ task }: { task: V2Task }) {
           <span className="hidden sm:inline">·</span>
           <span className="line-clamp-1">{reason}</span>
         </div>
+        <div className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary">
+          <TerminalSquare className="h-3.5 w-3.5" />
+          Open live chat
+        </div>
       </div>
       <div className="grid content-center gap-2">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -1274,19 +1319,88 @@ function EventTimeline({ events }: { events: V2Event[] }) {
   );
 }
 
-function QwenWebshellPanel({ events }: { events: DaemonEvent[] }) {
+function AgentSwitcher({
+  agents,
+  selectedAgentId,
+  onSelect,
+}: {
+  agents: V2AgentTask[];
+  selectedAgentId: string;
+  onSelect: (agentId: string) => void;
+}) {
+  if (!agents.length) {
+    return null;
+  }
+  return (
+    <div aria-label="Agent switcher" className="flex gap-2 overflow-x-auto pb-1">
+      <button
+        className={`flex shrink-0 items-center gap-2 rounded-md border px-3 py-2 text-sm ${
+          selectedAgentId === "all"
+            ? "border-primary bg-primary/10"
+            : "border-border bg-background hover:bg-muted"
+        }`}
+        type="button"
+        onClick={() => onSelect("all")}
+      >
+        <Layers3 className="h-4 w-4 text-primary" />
+        All output
+      </button>
+      {agents.map((agent) => (
+        <button
+          key={agent.agent_task_id}
+          className={`flex shrink-0 items-center gap-2 rounded-md border px-3 py-2 text-sm ${
+            selectedAgentId === agent.agent_task_id
+              ? "border-primary bg-primary/10"
+              : "border-border bg-background hover:bg-muted"
+          }`}
+          type="button"
+          onClick={() => onSelect(agent.agent_task_id)}
+        >
+          <Bot className="h-4 w-4 text-primary" />
+          <span className="font-medium">{agent.role}</span>
+          <StatusBadge status={agent.status} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function QwenWebshellPanel({
+  events,
+  emptyDetail,
+}: {
+  events: DaemonEvent[];
+  emptyDetail?: string;
+}) {
+  const outputRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const output = outputRef.current;
+    if (output) {
+      output.scrollTop = output.scrollHeight;
+    }
+  }, [events]);
   if (!events.length) {
     return (
-      <div className="grid min-h-64 place-items-center rounded-md border border-border bg-muted/20 p-4">
+      <div
+        aria-label="Real-time Agent output"
+        className="grid min-h-[55vh] place-items-center rounded-md border border-border bg-muted/20 p-4"
+      >
         <EmptyState
           title="No WebShell events yet"
-          detail="The agent transcript will appear here as soon as the task runner emits user, agent, tool, or status events."
+          detail={
+            emptyDetail ??
+            "The agent transcript will appear here as soon as the task runner emits user, agent, tool, or status events."
+          }
         />
       </div>
     );
   }
   return (
-    <div className="grid max-h-[520px] min-h-64 gap-3 overflow-auto rounded-md border border-border bg-muted/20 p-3">
+    <div
+      ref={outputRef}
+      aria-label="Real-time Agent output"
+      className="grid max-h-[68vh] min-h-[55vh] content-start gap-3 overflow-auto rounded-md border border-border bg-muted/20 p-3"
+    >
       {events.map((event) => {
         const update = event.data?.update as
           | {
@@ -1297,6 +1411,7 @@ function QwenWebshellPanel({ events }: { events: DaemonEvent[] }) {
         const kind = String(update?.sessionUpdate ?? "session_update");
         const text = String(update?.content?.text ?? "");
         const isUser = kind.includes("user");
+        const agentRole = String(event._meta?.agentRole ?? "agent");
         return (
           <div
             key={String(event.id)}
@@ -1307,7 +1422,9 @@ function QwenWebshellPanel({ events }: { events: DaemonEvent[] }) {
                 isUser ? "border-primary bg-primary text-primary-foreground" : "bg-card"
               }`}
             >
-              <div className="mb-1 text-[11px] opacity-75">{kind}</div>
+              <div className="mb-1 text-[11px] opacity-75">
+                {isUser ? "you" : agentRole} · {kind}
+              </div>
               <div className="whitespace-pre-wrap">{text || "..."}</div>
             </div>
           </div>

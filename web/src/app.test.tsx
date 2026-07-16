@@ -514,6 +514,8 @@ const daemonEvents = [
       runtimeRunId: "run_1",
       runtimeSequence: 3,
       runtimeEventType: "message.delta",
+      agentTaskId: "at_brain",
+      agentRole: "brain",
     },
   },
   {
@@ -1025,7 +1027,7 @@ describe("aflow console", () => {
       await screen.findByRole("heading", { name: "Client Workspace" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Channel Ready")).toBeInTheDocument();
-    expect(screen.getByText("Task Track")).toBeInTheDocument();
+    expect(screen.getByText("Live Agent Chats")).toBeInTheDocument();
 
     await user.click(screen.getByRole("link", { name: "管理后台" }));
     expect(
@@ -1097,6 +1099,20 @@ describe("aflow console", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Plan DAG")).toBeInTheDocument();
     expect(screen.getByText("Agent Chat")).toBeInTheDocument();
+    expect(screen.getByLabelText("Agent switcher")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /All output/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /brain/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /builder/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reviewer/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /brain/ }));
+    expect(screen.getByText("brain output")).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText("Real-time Agent output")).getByText(
+        "Inspecting live runner state.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /builder/ }));
+    expect(screen.getByText("Waiting for builder to emit output.")).toBeInTheDocument();
     expect(screen.getByText("Stream complete")).toBeInTheDocument();
     expect(screen.getByText("Execution")).toBeInTheDocument();
     expect(screen.getByText("Durable Workflow")).toBeInTheDocument();

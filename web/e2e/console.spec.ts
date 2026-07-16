@@ -42,6 +42,14 @@ test("creates a task from the client workspace", async ({ page }) => {
   await expect(page.getByText("Plan DAG")).toBeVisible();
   await expect(page.getByText("Agent Chat")).toBeVisible();
   await expect(page.getByText("Qwen WebShell")).toBeVisible();
+  await expect(page.getByLabel("Agent switcher")).toBeVisible();
+  await expect(page.getByRole("button", { name: /All output/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /brain/ })).toBeVisible();
+  await page.getByRole("button", { name: /brain/ }).click();
+  await expect(page.getByText("brain output")).toBeVisible();
+  await expect(page.getByLabel("Real-time Agent output")).toContainText(
+    "Webshell ready",
+  );
   await expect(page.getByText("Canonical Events")).toBeVisible();
   const followUpRequest = page.waitForRequest(
     (request) =>
@@ -689,6 +697,8 @@ async function mockRuntime(
             runtimeRunId: "task_v2_1",
             runtimeSequence: 1,
             runtimeEventType: "agent.message",
+            agentTaskId: "at_brain",
+            agentRole: "brain",
           },
         },
       ],

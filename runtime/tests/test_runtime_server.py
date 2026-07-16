@@ -333,6 +333,15 @@ class RuntimeServerTest(unittest.TestCase):
             self.assertIn("engines", engines)
             self.assertIn("units", discovery)
 
+    def test_v2_task_creation_without_auth_uses_api_principal(self) -> None:
+        with running_runtime() as base_url:
+            created = request_json(
+                f"{base_url}/v2/tasks",
+                method="POST",
+                payload={"goal": "Open the chat-first task page", "adapter": "fake"},
+            )
+            self.assertEqual(created["created_by"], "api-token")
+
     def test_v2_webshell_events_stream_as_sse_and_resume(self) -> None:
         with running_runtime(token="secret") as base_url:
             headers = {"authorization": "Bearer secret"}
