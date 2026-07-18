@@ -1,7 +1,7 @@
 site_name: AgentFlow
 site_description: AgentFlow is a self-hosted agent orchestration platform for long-running tasks, governance, auditability, and recovery.
 site_url: https://chiga0.github.io/agent-flow/
-repo_url: https://github.com/chiga0/agent-flow
+repo_url: https://github.com/chiga0/aflow
 repo_name: chiga0/agent-flow
 
 theme:

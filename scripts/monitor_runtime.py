@@ -16,7 +16,7 @@ from typing import Any
 
 
 ASSET_RE = re.compile(r'(?:src|href)="\.(/assets/[^"]+)"')
-USER_AGENT = "agentflow-runtime-monitor/0.1 (+https://github.com/chiga0/agent-flow)"
+USER_AGENT = "agentflow-runtime-monitor/0.1 (+https://github.com/chiga0/aflow)"
 TERMINAL_RUN_EVENTS = {"run.completed", "run.failed", "run.cancelled"}
 
 

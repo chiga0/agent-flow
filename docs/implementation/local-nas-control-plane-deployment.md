@@ -82,7 +82,7 @@ qwen --version
 ```bash
 sudo mkdir -p /opt/agentflow
 sudo chown "$USER":"$USER" /opt/agentflow
-git clone https://github.com/chiga0/agent-flow.git /opt/agentflow
+git clone https://github.com/chiga0/aflow.git /opt/agentflow
 cd /opt/agentflow
 ```
 
