@@ -13,6 +13,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .adapters import FakeAdapter, QwenServeAdapter, RuntimeAdapter
 from .models import RunSpec, RunState
@@ -83,7 +84,11 @@ class ControlPlaneClient:
         return self.request_json(
             f"/workers/{quote_path(worker_id)}/runs/{quote_path(run_id)}/events",
             method="POST",
-            payload={"type": event_type, "data": data},
+            payload={
+                "type": event_type,
+                "data": data,
+                "worker_event_id": f"worker_event_{uuid4().hex}",
+            },
         )
 
     def upload_artifact(
@@ -99,6 +104,7 @@ class ControlPlaneClient:
         final: bool | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"name": name}
+        payload["worker_artifact_id"] = f"worker_artifact_{uuid4().hex}"
         if mode != "write":
             payload["mode"] = mode
         if chunk_index is not None:
@@ -136,15 +142,29 @@ class ControlPlaneClient:
             headers=headers,
             method=method,
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                parsed = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"{method} {path} failed: {exc.code} {detail}") from exc
-        if not isinstance(parsed, dict):
-            raise RuntimeError(f"{method} {path} returned non-object JSON")
-        return parsed
+        last_error = ""
+        for attempt in range(1, 8):
+            try:
+                with urllib.request.urlopen(
+                    request,
+                    timeout=self.timeout_seconds,
+                ) as response:
+                    parsed = json.loads(response.read().decode("utf-8"))
+                if not isinstance(parsed, dict):
+                    raise RuntimeError(f"{method} {path} returned non-object JSON")
+                return parsed
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                last_error = f"{exc.code} {detail}"
+                if exc.code not in {502, 503, 504}:
+                    raise RuntimeError(
+                        f"{method} {path} failed: {exc.code} {detail}"
+                    ) from exc
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+                last_error = str(exc)
+            if attempt < 7:
+                time.sleep(min(0.5 * (2 ** (attempt - 1)), 8))
+        raise RuntimeError(f"{method} {path} failed after retries: {last_error}")
 
 
 class RemoteWorkerRunStore:
@@ -268,8 +288,10 @@ class RemoteWorkerDaemon:
             timeout_seconds=config.request_timeout_seconds,
         )
         self.adapters = adapters or default_adapters()
+        self.instance_id = f"worker_instance_{uuid4().hex}"
         self._stop = threading.Event()
         self._active: list[threading.Thread] = []
+        self._active_run_ids: set[str] = set()
         self._active_lock = threading.Lock()
 
     def stop(self) -> None:
@@ -297,15 +319,23 @@ class RemoteWorkerDaemon:
             return None
         run = run_state_from_payload(run_payload)
         thread = threading.Thread(
-            target=self._execute_run,
+            target=self._execute_run_and_release,
             args=(run,),
             name=f"remote-worker-{run.run_id}",
             daemon=True,
         )
         with self._active_lock:
             self._active.append(thread)
+            self._active_run_ids.add(run.run_id)
         thread.start()
         return thread
+
+    def _execute_run_and_release(self, run: RunState) -> None:
+        try:
+            self._execute_run(run)
+        finally:
+            with self._active_lock:
+                self._active_run_ids.discard(run.run_id)
 
     def _execute_run(self, run: RunState) -> None:
         self._map_remote_workspace(run)
@@ -445,6 +475,7 @@ class RemoteWorkerDaemon:
 
     def _worker_payload(self) -> dict[str, Any]:
         metadata = dict(self.config.metadata)
+        metadata["instance_id"] = self.instance_id
         metadata.setdefault("hostname", socket.gethostname())
         metadata.setdefault("resources", host_resource_capacity())
         raw_metrics = metadata.get("metrics")
@@ -460,10 +491,13 @@ class RemoteWorkerDaemon:
             {*extra_features, "artifacts", "claim", "control", "events", "heartbeat"}
         )
         metadata["capabilities"] = capabilities
+        with self._active_lock:
+            active_run_ids = sorted(self._active_run_ids)
         return {
             "kind": "remote",
             "capacity": self.config.capacity,
             "lease_ttl_seconds": self.config.lease_ttl_seconds,
+            "active_run_ids": active_run_ids,
             "metadata": metadata,
         }
 

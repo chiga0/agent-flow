@@ -334,6 +334,7 @@ class RunStore:
         capacity: int,
         lease_ttl_seconds: int,
         metadata: dict[str, Any] | None = None,
+        active_run_ids: set[str] | None = None,
     ) -> WorkerState:
         with self._lock:
             worker = self.register_worker(
@@ -351,6 +352,8 @@ class RunStore:
             for job in self._jobs.values():
                 if job.status != "running" or job.worker_id != worker_id:
                     continue
+                if active_run_ids is not None and job.run_id not in active_run_ids:
+                    continue
                 if self._runs[job.run_id].status in {"completed", "failed", "cancelled"}:
                     continue
                 job.heartbeat_at = now
@@ -358,6 +361,10 @@ class RunStore:
                 job.updated_at = now
                 self._persist_job(job)
             return worker
+
+    def get_worker(self, worker_id: str) -> WorkerState | None:
+        with self._lock:
+            return self._workers.get(worker_id)
 
     def set_worker_state(
         self,
@@ -396,10 +403,20 @@ class RunStore:
             ]
 
     def requeue_running_jobs_for_worker(self, worker_id: str, reason: str) -> list[str]:
+        return self.requeue_unreported_jobs_for_worker(worker_id, set(), reason)
+
+    def requeue_unreported_jobs_for_worker(
+        self,
+        worker_id: str,
+        active_run_ids: set[str],
+        reason: str,
+    ) -> list[str]:
         requeued: list[tuple[str, int]] = []
         with self._lock:
             for job in self._jobs.values():
                 if job.status != "running" or job.worker_id != worker_id:
+                    continue
+                if job.run_id in active_run_ids:
                     continue
                 run = self._runs[job.run_id]
                 if run.status in {"completed", "failed", "cancelled"}:

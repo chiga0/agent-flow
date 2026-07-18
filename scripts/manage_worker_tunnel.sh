@@ -99,13 +99,18 @@ status_tunnel() {
     echo "$TUNNEL_NAME stopped"
     return 1
   fi
+  local remote_listener_check
+  remote_listener_check="ss -lnt | awk '\$4 == "
+  remote_listener_check+="\"$TUNNEL_REMOTE_BIND:$TUNNEL_REMOTE_PORT\" "
+  remote_listener_check+="{found=1} END {exit !found}'"
   if ssh \
     -i "$TUNNEL_SSH_KEY" \
     -o BatchMode=yes \
     -o ConnectTimeout=10 \
     "$TUNNEL_SSH_TARGET" \
-    "ss -lnt | awk '\$4 == \"$TUNNEL_REMOTE_BIND:$TUNNEL_REMOTE_PORT\" {found=1} END {exit !found}'"; then
-    echo "$TUNNEL_NAME healthy (pid $(cat "$PID_FILE"), remote $TUNNEL_REMOTE_BIND:$TUNNEL_REMOTE_PORT)"
+    "$remote_listener_check"; then
+    echo "$TUNNEL_NAME healthy (pid $(cat "$PID_FILE"), remote " \
+      "$TUNNEL_REMOTE_BIND:$TUNNEL_REMOTE_PORT)"
     return
   fi
   echo "$TUNNEL_NAME process is running but remote forwarding is not ready" >&2

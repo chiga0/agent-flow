@@ -63,12 +63,21 @@ REPO_REF=main \
 
 脚本会幂等执行以下步骤：
 
-1. 安装或升级到 Node.js 22。
+1. 下载官方归档、校验 SHA-256 后安装或升级到 Node.js 22（不安装 Debian 的完整 `npm` 依赖树）。
 2. 安装固定版本的 `qwen-code`。
 3. 同步指定 `REPO_REF`。
 4. 以 `cloudagents` 用户启动受限的 `cloud-agents-qwen.service`。
 5. 安装并启动 `cloud-agents-worker.service`。
 6. 等待 Qwen 健康检查和 worker 心跳真正可见后才返回成功。
+
+仓库同步和外网偶发抖动会自动重试，并强制 Git 使用 HTTP/1.1。若远端仓库已经处于经过验收的提交、只想重复验证服务安装与启动，可以显式跳过联网更新：
+
+```bash
+REPO_UPDATE=0 \
+  ./scripts/deploy_worker_vps.sh root@203.0.113.10 /absolute/path/worker.pem
+```
+
+`REPO_UPDATE=0` 不会切换代码版本；应先用 `git -C /opt/agentflow rev-parse HEAD` 确认该提交正是需要部署的版本。Git 单次尝试默认限制为 120 秒，可通过 `DEPLOY_GIT_TIMEOUT_SECONDS` 调整。
 
 如果 ECS 已经有受保护的 Qwen daemon，可复用其环境文件，避免低内存主机启动第二个 daemon：
 
@@ -111,6 +120,18 @@ curl -fsS http://127.0.0.1:8765/workers \
 ssh -i /absolute/path/worker.pem root@203.0.113.10 \
   'systemctl is-active cloud-agents-worker; systemctl is-active cloud-agents-qwen; qwen --version'
 ```
+
+使用真实 Client API 连续执行代码审计、运维巡检、多阶段研究、文件生成和高风险审批五类任务：
+
+```bash
+RUN_MANAGER_TOKEN=replace-with-manager-token \
+python3 scripts/validate_remote_execution_units.py \
+  --unit-id ecs-hk \
+  --worker-id worker-ecs-hk \
+  --rounds 2
+```
+
+脚本会逐个校验 V2 Task 的目标执行单元、`remote-worker` 执行模式、worker 身份、远端 run ID 和 Qwen 成功结果；高风险任务必须先产生审批卡，明确批准后才继续。
 
 验收任务必须确认：
 

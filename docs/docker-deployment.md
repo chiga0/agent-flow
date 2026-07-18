@@ -53,6 +53,8 @@ gzip -dc agentflow-runtime.tar.gz | docker load
 ./scripts/docker_deploy.sh qwen-smoke
 ```
 
+`qwen-smoke` 会显式固定到 `local-dev` 执行单元，确保它验证的是 Docker 容器内的 Qwen，而不会在已注册远端 ECS 后被自动调度到远端 worker。
+
 不同 CPU 架构之间不能直接复用单架构镜像。NAS 管理界面如果自动更改 Compose 项目名，artifacts 和 Qwen state 卷名也会随之变化；备份前以 `docker volume ls` 的实际结果为准。
 
 ## 首次部署

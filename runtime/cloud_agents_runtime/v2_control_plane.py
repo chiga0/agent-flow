@@ -2446,10 +2446,15 @@ class V2ControlPlane:
                         return
                 adapter_result = self._execute_agent_adapter(task_id, agent)
                 if adapter_result.get("success") is False:
+                    adapter_error = (
+                        adapter_result.get("error")
+                        or adapter_result.get("stderr")
+                        or adapter_result.get("summary")
+                    )
                     raise RuntimeError(
                         f"{agent['adapter']} exited with code "
                         f"{adapter_result.get('exit_code')}: "
-                        f"{adapter_result.get('error') or adapter_result.get('stderr') or adapter_result.get('summary')}"
+                        f"{adapter_error}"
                     )
                 with self._lock:
                     if self._task_row(task_id)["status"] == "cancelled":

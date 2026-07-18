@@ -259,24 +259,30 @@ class RunManager:
             20,
             min(int(os.environ.get("V2_CLI_TIMEOUT_SECONDS", "600")), 3600),
         )
-        run = self.create_run(
-            RunSpec(
-                prompt=prompt,
-                adapter=adapter,
-                timeout_seconds=timeout_seconds,
-                metadata={
-                    "created_from": "v2_remote_bridge",
-                    "v2_task_id": task_id,
-                    "v2_agent_task_id": agent["agent_task_id"],
-                    "execution_unit_id": unit_id,
-                    "worker_requirements": {
-                        "adapters": [adapter],
-                        "features": ["artifacts"],
-                        "labels": {"execution_unit_id": unit_id},
-                    },
-                },
-            )
+        run = self._existing_v2_remote_run(
+            task_id,
+            str(agent["agent_task_id"]),
+            unit_id,
         )
+        if run is None:
+            run = self.create_run(
+                RunSpec(
+                    prompt=prompt,
+                    adapter=adapter,
+                    timeout_seconds=timeout_seconds,
+                    metadata={
+                        "created_from": "v2_remote_bridge",
+                        "v2_task_id": task_id,
+                        "v2_agent_task_id": agent["agent_task_id"],
+                        "execution_unit_id": unit_id,
+                        "worker_requirements": {
+                            "adapters": [adapter],
+                            "features": ["artifacts"],
+                            "labels": {"execution_unit_id": unit_id},
+                        },
+                    },
+                )
+            )
         deadline = time.monotonic() + timeout_seconds + 15
         last_sequence = 0
         while time.monotonic() < deadline and not self._stop.is_set():
@@ -333,6 +339,37 @@ class RunManager:
                 "agent_task_id": agent["agent_task_id"],
             },
         }
+
+    def _existing_v2_remote_run(
+        self,
+        task_id: str,
+        agent_task_id: str,
+        execution_unit_id: str,
+    ) -> RunState | None:
+        """Reuse the durable run when a V2 task runner is recovered after restart."""
+        matches = []
+        for run in self.store.list_runs():
+            metadata = dict(run.spec.metadata or {})
+            if (
+                metadata.get("created_from") == "v2_remote_bridge"
+                and metadata.get("v2_task_id") == task_id
+                and metadata.get("v2_agent_task_id") == agent_task_id
+                and metadata.get("execution_unit_id") == execution_unit_id
+            ):
+                matches.append(run)
+        if not matches:
+            return None
+        completed = [run for run in matches if run.status == "completed"]
+        if completed:
+            return max(completed, key=lambda run: run.updated_at)
+        active = [
+            run
+            for run in matches
+            if run.status not in {"completed", "failed", "cancelled"}
+        ]
+        if active:
+            return min(active, key=lambda run: run.created_at)
+        return max(matches, key=lambda run: run.updated_at)
 
     def list_tasks(
         self,
@@ -572,19 +609,7 @@ class RunManager:
 
     def remote_worker_heartbeat(self, worker_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         worker_id = normalize_worker_id(worker_id)
-        capacity = payload_positive_int(payload, "capacity", default=1)
-        lease_ttl_seconds = payload_positive_int(
-            payload,
-            "lease_ttl_seconds",
-            default=self.lease_ttl_seconds,
-        )
-        worker = self.store.heartbeat_worker(
-            worker_id,
-            capacity,
-            lease_ttl_seconds,
-            metadata=worker_metadata(payload, default_kind="remote"),
-        )
-        self.store.recover_expired_leases()
+        worker, _, _ = self._record_remote_worker_presence(worker_id, payload)
         return {
             **worker.to_dict(),
             "control": self.remote_worker_control(worker_id),
@@ -592,19 +617,10 @@ class RunManager:
 
     def claim_remote_run(self, worker_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         worker_id = normalize_worker_id(worker_id)
-        capacity = payload_positive_int(payload, "capacity", default=1)
-        lease_ttl_seconds = payload_positive_int(
-            payload,
-            "lease_ttl_seconds",
-            default=self.lease_ttl_seconds,
-        )
-        worker = self.store.heartbeat_worker(
+        worker, capacity, lease_ttl_seconds = self._record_remote_worker_presence(
             worker_id,
-            capacity,
-            lease_ttl_seconds,
-            metadata=worker_metadata(payload, default_kind="remote"),
+            payload,
         )
-        self.store.recover_expired_leases()
         if worker.status == "draining":
             return {
                 "worker": worker.to_dict(),
@@ -625,17 +641,57 @@ class RunManager:
             predicate=lambda run: worker_matches_run(worker.metadata, run),
         )
         run = self.store.get_run(job.run_id) if job else None
+        current_worker = self.store.get_worker(worker_id) or worker
         return {
-            "worker": self.store.heartbeat_worker(
-                worker_id,
-                capacity,
-                lease_ttl_seconds,
-                metadata=worker.metadata,
-            ).to_dict(),
+            "worker": current_worker.to_dict(),
             "job": job.to_dict() if job else None,
             "run": run.to_dict() if run else None,
             "control": self.remote_worker_control(worker_id),
         }
+
+    def _record_remote_worker_presence(
+        self,
+        worker_id: str,
+        payload: dict[str, Any],
+    ) -> tuple[Any, int, int]:
+        capacity = payload_positive_int(payload, "capacity", default=1)
+        lease_ttl_seconds = payload_positive_int(
+            payload,
+            "lease_ttl_seconds",
+            default=self.lease_ttl_seconds,
+        )
+        metadata = worker_metadata(payload, default_kind="remote")
+        active_run_ids = remote_worker_active_run_ids(payload)
+        previous = self.store.get_worker(worker_id)
+        previous_instance = str(
+            (previous.metadata if previous else {}).get("instance_id") or ""
+        )
+        current_instance = str(metadata.get("instance_id") or "")
+        instance_changed = bool(
+            previous
+            and current_instance
+            and current_instance != previous_instance
+        )
+        if active_run_ids is not None and previous:
+            reason = (
+                "remote worker process instance changed"
+                if instance_changed
+                else "remote worker no longer reports the leased run as active"
+            )
+            self.store.requeue_unreported_jobs_for_worker(
+                worker_id,
+                active_run_ids,
+                reason,
+            )
+        worker = self.store.heartbeat_worker(
+            worker_id,
+            capacity,
+            lease_ttl_seconds,
+            metadata=metadata,
+            active_run_ids=active_run_ids,
+        )
+        self.store.recover_expired_leases()
+        return worker, capacity, lease_ttl_seconds
 
     def remote_worker_control(self, worker_id: str) -> dict[str, Any]:
         worker_id = normalize_worker_id(worker_id)
@@ -792,8 +848,21 @@ class RunManager:
             raw_data = {}
         if not isinstance(raw_data, dict):
             raise ValueError("event data must be an object")
+        worker_event_id = payload.get("worker_event_id")
+        if worker_event_id is not None and (
+            not isinstance(worker_event_id, str)
+            or not worker_event_id.strip()
+            or len(worker_event_id) > 128
+        ):
+            raise ValueError("worker_event_id must be a non-empty string")
+        if isinstance(worker_event_id, str):
+            for existing in reversed(self.store.events_since(run_id)):
+                if existing.data.get("worker_event_id") == worker_event_id:
+                    return existing.to_dict()
         data = dict(raw_data)
         data.setdefault("worker_id", worker_id)
+        if isinstance(worker_event_id, str):
+            data["worker_event_id"] = worker_event_id
         event = self.store.append_event(run_id, event_type.strip(), data)
         return event.to_dict()
 
@@ -821,6 +890,20 @@ class RunManager:
                 raise ValueError("artifact content or json is required")
         if len(content.encode("utf-8")) > MAX_REMOTE_ARTIFACT_BYTES:
             raise ValueError("artifact content exceeds remote upload limit")
+        worker_artifact_id = payload.get("worker_artifact_id")
+        if worker_artifact_id is not None and (
+            not isinstance(worker_artifact_id, str)
+            or not worker_artifact_id.strip()
+            or len(worker_artifact_id) > 128
+        ):
+            raise ValueError("worker_artifact_id must be a non-empty string")
+        if isinstance(worker_artifact_id, str):
+            for existing in reversed(self.store.events_since(run_id)):
+                if existing.data.get("worker_artifact_id") == worker_artifact_id:
+                    return {
+                        "artifact": {"name": str(existing.data.get("name") or name)},
+                        "event": existing.to_dict(),
+                    }
         path = (
             self.store.append_text(run_id, name.strip(), content)
             if mode == "append"
@@ -836,6 +919,7 @@ class RunManager:
                 "mode": mode,
                 "chunk_index": payload.get("chunk_index"),
                 "final": bool(payload.get("final")),
+                "worker_artifact_id": worker_artifact_id,
             },
         )
         return {"artifact": {"name": path.name}, "event": event.to_dict()}
@@ -1427,6 +1511,19 @@ def worker_metadata(payload: dict[str, Any], *, default_kind: str) -> dict[str, 
         if isinstance(value, (dict, list)):
             metadata[key] = value
     return metadata
+
+
+def remote_worker_active_run_ids(payload: dict[str, Any]) -> set[str] | None:
+    if "active_run_ids" not in payload:
+        return None
+    raw_run_ids = payload.get("active_run_ids")
+    if not isinstance(raw_run_ids, list):
+        raise ValueError("active_run_ids must be an array")
+    return {
+        value.strip()
+        for value in raw_run_ids
+        if isinstance(value, str) and value.strip()
+    }
 
 
 def worker_matches_run(worker: dict[str, Any], run: RunState) -> bool:

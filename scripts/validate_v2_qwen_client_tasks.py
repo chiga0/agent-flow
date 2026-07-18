@@ -183,10 +183,13 @@ def run_high_risk_approval(control: V2ControlPlane) -> dict[str, Any]:
     conversation = control.create_conversation(
         {
             "goal": (
-                "Deploy AgentFlow to production only if a real production target and credentials are explicitly present. "
-                "This acceptance workspace has neither. After human approval, use real qwen-code to execute a read-only "
-                "production-readiness gate: inspect deployment documentation and configuration, do not contact external "
-                "systems, do not modify files, and return NO_GO with concrete evidence when prerequisites are absent."
+                "Deploy AgentFlow to production only if a real production target "
+                "and credentials are explicitly present. This acceptance workspace "
+                "has neither. After human approval, use real qwen-code to execute a "
+                "read-only production-readiness gate: inspect deployment "
+                "documentation and configuration, do not contact external systems, "
+                "do not modify files, and return NO_GO with concrete evidence when "
+                "prerequisites are absent."
             ),
             "adapter": "qwen",
             "mode": "single",

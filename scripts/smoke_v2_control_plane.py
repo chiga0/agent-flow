@@ -35,7 +35,7 @@ def smoke_direct(args: argparse.Namespace) -> dict[str, Any]:
             "mode": args.mode,
             "channel": "ci",
             "adapter": args.adapter,
-            "metadata": {"smoke": True},
+            "metadata": smoke_metadata(args),
         },
         principal="ci-smoke",
         idempotency_key=args.idempotency_key
@@ -67,7 +67,7 @@ def smoke_http(args: argparse.Namespace) -> dict[str, Any]:
             "mode": args.mode,
             "channel": "smoke",
             "adapter": args.adapter,
-            "metadata": {"smoke": True},
+            "metadata": smoke_metadata(args),
         },
         headers={
             "Idempotency-Key": args.idempotency_key
@@ -100,6 +100,13 @@ def wait_for(fetch: Any, timeout: int) -> dict[str, Any]:
             raise RuntimeError(f"task ended as {last['status']}: {last}")
         time.sleep(0.1)
     raise TimeoutError(f"task did not complete within {timeout}s: {last}")
+
+
+def smoke_metadata(args: argparse.Namespace) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"smoke": True}
+    if args.execution_unit_id:
+        metadata["execution_unit_id"] = args.execution_unit_id
+    return metadata
 
 
 def assert_task_completed(task: dict[str, Any]) -> None:
@@ -194,6 +201,11 @@ def parse_args() -> argparse.Namespace:
         choices=["auto", "fake", "qwen", "codex", "claude", "opencode"],
     )
     parser.add_argument("--expect-execution-mode")
+    parser.add_argument(
+        "--execution-unit-id",
+        default="",
+        help="Pin the smoke task to one registered execution unit.",
+    )
     parser.add_argument(
         "--idempotency-key",
         default="",

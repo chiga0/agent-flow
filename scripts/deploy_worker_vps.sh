@@ -12,6 +12,7 @@ APP_DIR="${APP_DIR:-/opt/agentflow}"
 STATE_DIR="${STATE_DIR:-/var/lib/cloud-agents-worker}"
 REPO_URL="${REPO_URL:-https://github.com/chiga0/agent-flow.git}"
 REPO_REF="${REPO_REF:-main}"
+REPO_UPDATE="${REPO_UPDATE:-1}"
 NODE_PACKAGE="${NODE_PACKAGE:-@qwen-code/qwen-code@0.19.11}"
 NODE_VERSION="${NODE_VERSION:-22.22.1}"
 QWEN_SETTINGS_FILE="${QWEN_SETTINGS_FILE:-}"
@@ -23,7 +24,10 @@ RUN_WORKER_LEASE_TTL_SECONDS="${RUN_WORKER_LEASE_TTL_SECONDS:-60}"
 RUN_WORKER_POLL_INTERVAL_SECONDS="${RUN_WORKER_POLL_INTERVAL_SECONDS:-2}"
 RUN_WORKER_HEARTBEAT_INTERVAL_SECONDS="${RUN_WORKER_HEARTBEAT_INTERVAL_SECONDS:-10}"
 RUN_WORKER_RUN_WAIT_TIMEOUT_SECONDS="${RUN_WORKER_RUN_WAIT_TIMEOUT_SECONDS:-300}"
-RUN_WORKER_METADATA_JSON="${RUN_WORKER_METADATA_JSON:-{}}"
+RUN_WORKER_METADATA_JSON="${RUN_WORKER_METADATA_JSON:-}"
+if [[ -z "$RUN_WORKER_METADATA_JSON" ]]; then
+  RUN_WORKER_METADATA_JSON='{}'
+fi
 QWEN_SERVE_URL="${QWEN_SERVE_URL:-}"
 QWEN_SERVE_TOKEN="${QWEN_SERVE_TOKEN:-}"
 QWEN_SERVE_ENV_FILE="${QWEN_SERVE_ENV_FILE:-}"
@@ -34,6 +38,7 @@ QWEN_SERVE_WORKSPACE="${QWEN_SERVE_WORKSPACE:-$STATE_DIR/workspace}"
 QWEN_SERVE_STARTUP_TIMEOUT_SECONDS="${QWEN_SERVE_STARTUP_TIMEOUT_SECONDS:-60}"
 DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS="${DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS:-30}"
 DEPLOY_COMMAND_TIMEOUT_SECONDS="${DEPLOY_COMMAND_TIMEOUT_SECONDS:-900}"
+DEPLOY_GIT_TIMEOUT_SECONDS="${DEPLOY_GIT_TIMEOUT_SECONDS:-120}"
 
 if [[ -z "$RUN_WORKER_CONTROL_URL" ]]; then
   echo "RUN_WORKER_CONTROL_URL is required" >&2
@@ -41,6 +46,10 @@ if [[ -z "$RUN_WORKER_CONTROL_URL" ]]; then
 fi
 if [[ -z "$RUN_WORKER_TOKEN" ]]; then
   echo "RUN_WORKER_TOKEN is required" >&2
+  exit 2
+fi
+if [[ ! -r "$SSH_KEY" ]]; then
+  echo "SSH key is not readable: $SSH_KEY" >&2
   exit 2
 fi
 if [[ -n "$QWEN_SETTINGS_FILE" && ! -f "$QWEN_SETTINGS_FILE" ]]; then
@@ -61,6 +70,7 @@ REMOTE_ENV=(
   "STATE_DIR=$(shell_quote "$STATE_DIR")"
   "REPO_URL=$(shell_quote "$REPO_URL")"
   "REPO_REF=$(shell_quote "$REPO_REF")"
+  "REPO_UPDATE=$(shell_quote "$REPO_UPDATE")"
   "NODE_PACKAGE=$(shell_quote "$NODE_PACKAGE")"
   "NODE_VERSION=$(shell_quote "$NODE_VERSION")"
   "HAS_QWEN_SETTINGS=$(shell_quote "$([[ -n "$QWEN_SETTINGS_FILE" ]] && echo 1 || echo 0)")"
@@ -83,6 +93,7 @@ REMOTE_ENV=(
   "QWEN_SERVE_WORKSPACE=$(shell_quote "$QWEN_SERVE_WORKSPACE")"
   "QWEN_SERVE_STARTUP_TIMEOUT_SECONDS=$(shell_quote "$QWEN_SERVE_STARTUP_TIMEOUT_SECONDS")"
   "DEPLOY_COMMAND_TIMEOUT_SECONDS=$(shell_quote "$DEPLOY_COMMAND_TIMEOUT_SECONDS")"
+  "DEPLOY_GIT_TIMEOUT_SECONDS=$(shell_quote "$DEPLOY_GIT_TIMEOUT_SECONDS")"
 )
 
 SSH_OPTIONS=(
@@ -111,7 +122,9 @@ if [[ -n "$QWEN_SETTINGS_FILE" ]]; then
     "$SSH_TARGET:$REMOTE_QWEN_SETTINGS_FILE"
 fi
 
-REMOTE_BOOTSTRAP="set -a; source $(shell_quote "$REMOTE_ENV_FILE"); rm -f $(shell_quote "$REMOTE_ENV_FILE"); set +a; exec bash -s"
+REMOTE_BOOTSTRAP="set -a; source $(shell_quote "$REMOTE_ENV_FILE")"
+REMOTE_BOOTSTRAP+="; rm -f $(shell_quote "$REMOTE_ENV_FILE")"
+REMOTE_BOOTSTRAP+="; set +a; exec bash -s"
 ssh \
   "${SSH_OPTIONS[@]}" \
   "$SSH_TARGET" \
@@ -166,8 +179,9 @@ install_node_package() {
       "$DEPLOY_COMMAND_TIMEOUT_SECONDS" \
       npm install -g "$package"; then
       return 0
+    else
+      exit_code=$?
     fi
-    exit_code=$?
     if (( attempt == 3 )); then
       return "$exit_code"
     fi
@@ -179,25 +193,79 @@ install_node_package() {
   done
 }
 
+run_git_with_retry() {
+  local label="$1"
+  shift
+  local attempt=1
+  local exit_code=0
+  while (( attempt <= 3 )); do
+    if run_timeout \
+      "$label attempt $attempt/3" \
+      "$DEPLOY_GIT_TIMEOUT_SECONDS" \
+      git -c http.version=HTTP/1.1 "$@"; then
+      return 0
+    else
+      exit_code=$?
+    fi
+    if (( attempt == 3 )); then
+      return "$exit_code"
+    fi
+    sleep $((attempt * 2))
+    attempt=$((attempt + 1))
+  done
+}
+
 if ! command -v git >/dev/null \
   || ! command -v python3 >/dev/null \
-  || ! command -v npm >/dev/null \
   || ! command -v curl >/dev/null \
-  || ! command -v openssl >/dev/null; then
+  || ! command -v openssl >/dev/null \
+  || ! command -v xz >/dev/null; then
   run_timeout "apt-get update" "$DEPLOY_COMMAND_TIMEOUT_SECONDS" apt-get update
   run_timeout \
     "install worker host packages" \
     "$DEPLOY_COMMAND_TIMEOUT_SECONDS" \
-    apt-get install -y ca-certificates curl git npm openssl python3
+    apt-get install -y ca-certificates curl git openssl python3 xz-utils
 fi
 
 NODE_MAJOR="$(node -p 'process.versions.node.split(`.`)[0]' 2>/dev/null || echo 0)"
-if (( NODE_MAJOR < 22 )); then
-  install_node_package "n"
+if (( NODE_MAJOR < 22 )) || ! command -v npm >/dev/null; then
+  case "$(uname -m)" in
+    x86_64|amd64) NODE_ARCH=x64 ;;
+    aarch64|arm64) NODE_ARCH=arm64 ;;
+    *) echo "unsupported Node.js architecture: $(uname -m)" >&2; exit 2 ;;
+  esac
+  NODE_ARCHIVE="node-v$NODE_VERSION-linux-$NODE_ARCH.tar.xz"
+  NODE_DOWNLOAD_ROOT="https://nodejs.org/dist/v$NODE_VERSION"
+  NODE_DOWNLOAD_DIR="$(mktemp -d)"
+  trap 'rm -rf "$NODE_DOWNLOAD_DIR"' EXIT
+  run_timeout \
+    "download Node.js $NODE_VERSION" \
+    "$DEPLOY_COMMAND_TIMEOUT_SECONDS" \
+    curl -fsSLo "$NODE_DOWNLOAD_DIR/$NODE_ARCHIVE" \
+      "$NODE_DOWNLOAD_ROOT/$NODE_ARCHIVE"
+  run_timeout \
+    "download Node.js checksums" \
+    "$DEPLOY_COMMAND_TIMEOUT_SECONDS" \
+    curl -fsSLo "$NODE_DOWNLOAD_DIR/SHASUMS256.txt" \
+      "$NODE_DOWNLOAD_ROOT/SHASUMS256.txt"
+  NODE_EXPECTED_SHA="$(
+    awk -v archive="$NODE_ARCHIVE" \
+      '$2 == archive {print $1; exit}' \
+      "$NODE_DOWNLOAD_DIR/SHASUMS256.txt"
+  )"
+  NODE_ACTUAL_SHA="$(sha256sum "$NODE_DOWNLOAD_DIR/$NODE_ARCHIVE" | awk '{print $1}')"
+  if [[ -z "$NODE_EXPECTED_SHA" || "$NODE_EXPECTED_SHA" != "$NODE_ACTUAL_SHA" ]]; then
+    echo "Node.js archive checksum verification failed" >&2
+    exit 3
+  fi
   run_timeout \
     "install Node.js $NODE_VERSION" \
     "$DEPLOY_COMMAND_TIMEOUT_SECONDS" \
-    n "$NODE_VERSION"
+    tar -xJf "$NODE_DOWNLOAD_DIR/$NODE_ARCHIVE" \
+      --strip-components=1 \
+      -C /usr/local
+  rm -rf "$NODE_DOWNLOAD_DIR"
+  trap - EXIT
   hash -r
 fi
 NODE_MAJOR="$(node -p 'process.versions.node.split(`.`)[0]' 2>/dev/null || echo 0)"
@@ -228,20 +296,48 @@ if [[ "$HAS_QWEN_SETTINGS" == "1" ]]; then
   rm -f "$QWEN_SETTINGS_REMOTE_FILE"
 fi
 
-if [[ ! -d "$APP_DIR/.git" ]]; then
-  run_timeout \
-    "clone runtime repository" \
-    "$DEPLOY_COMMAND_TIMEOUT_SECONDS" \
-    git clone --branch "$REPO_REF" --single-branch "$REPO_URL" "$APP_DIR"
-else
-  run_timeout \
+if [[ "$REPO_UPDATE" != "0" && "$REPO_UPDATE" != "1" ]]; then
+  echo "REPO_UPDATE must be 0 or 1" >&2
+  exit 2
+fi
+
+if [[ ! -d "$APP_DIR/.git" ]] \
+  || ! git -C "$APP_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  rm -rf "$APP_DIR"
+  mkdir -p "$(dirname "$APP_DIR")"
+  clone_attempt=1
+  clone_exit_code=0
+  while (( clone_attempt <= 3 )); do
+    rm -rf "$APP_DIR"
+    if run_timeout \
+      "clone runtime repository attempt $clone_attempt/3" \
+      "$DEPLOY_GIT_TIMEOUT_SECONDS" \
+      git -c http.version=HTTP/1.1 clone \
+        --depth 1 \
+        --branch "$REPO_REF" \
+        --single-branch \
+        "$REPO_URL" \
+        "$APP_DIR"; then
+      break
+    else
+      clone_exit_code=$?
+    fi
+    if (( clone_attempt == 3 )); then
+      exit "$clone_exit_code"
+    fi
+    sleep $((clone_attempt * 2))
+    clone_attempt=$((clone_attempt + 1))
+  done
+elif [[ "$REPO_UPDATE" == "1" ]]; then
+  run_git_with_retry \
     "fetch runtime repository" \
-    "$DEPLOY_COMMAND_TIMEOUT_SECONDS" \
-    git -C "$APP_DIR" fetch origin "$REPO_REF"
+    -C "$APP_DIR" fetch --depth 1 origin "$REPO_REF"
   run_timeout \
     "reset runtime repository" \
     "$DEPLOY_COMMAND_TIMEOUT_SECONDS" \
     git -C "$APP_DIR" reset --hard "origin/$REPO_REF"
+else
+  log_step "reuse existing runtime repository without network update"
 fi
 
 if [[ -z "$RUN_WORKER_ID" ]]; then
@@ -305,7 +401,14 @@ User=cloudagents
 Group=cloudagents
 WorkingDirectory=$QWEN_SERVE_WORKSPACE
 EnvironmentFile=/etc/cloud-agents-qwen.env
-ExecStart=$QWEN_BIN serve --hostname $QWEN_SERVE_HOST --port $QWEN_SERVE_PORT --workspace $QWEN_SERVE_WORKSPACE --max-sessions 1 --max-total-sessions 1 --no-web --require-auth
+ExecStart=$QWEN_BIN serve \
+  --hostname $QWEN_SERVE_HOST \
+  --port $QWEN_SERVE_PORT \
+  --workspace $QWEN_SERVE_WORKSPACE \
+  --max-sessions 1 \
+  --max-total-sessions 1 \
+  --no-web \
+  --require-auth
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
@@ -336,11 +439,13 @@ log_step "wait for qwen serve health"
 QWEN_HEALTH_DEADLINE=$((SECONDS + QWEN_SERVE_STARTUP_TIMEOUT_SECONDS))
 while true; do
   if [[ -n "$QWEN_SERVE_TOKEN" ]]; then
-    if curl -fsS -H "Authorization: Bearer $QWEN_SERVE_TOKEN" \
+    if curl -fsS --connect-timeout 2 --max-time 5 \
+      -H "Authorization: Bearer $QWEN_SERVE_TOKEN" \
       "$QWEN_SERVE_URL/health" >/dev/null; then
       break
     fi
-  elif curl -fsS "$QWEN_SERVE_URL/health" >/dev/null; then
+  elif curl -fsS --connect-timeout 2 --max-time 5 \
+    "$QWEN_SERVE_URL/health" >/dev/null; then
     break
   fi
   if (( SECONDS >= QWEN_HEALTH_DEADLINE )); then
@@ -394,8 +499,9 @@ if ! systemctl --no-pager --full status cloud-agents-worker; then
 fi
 
 log_step "wait for worker heartbeat registration"
+WORKER_DEADLINE=$((SECONDS + 45))
 while true; do
-  if curl -fsS \
+  if curl -fsS --connect-timeout 2 --max-time 5 \
     -H "Authorization: Bearer $RUN_WORKER_TOKEN" \
     "$RUN_WORKER_CONTROL_URL/workers/$RUN_WORKER_ID" >/dev/null; then
     break

@@ -54,6 +54,7 @@ case "$ACTION" in
         --email "$RUN_MANAGER_BOOTSTRAP_EMAIL" \
         --password "$RUN_MANAGER_BOOTSTRAP_PASSWORD" \
         --adapter auto \
+        --execution-unit-id local-dev \
         --expect-execution-mode real-cli \
         --goal "只读检查当前工作区根目录并用一句中文确认 Docker 中的真实 Qwen 可用，不要修改文件。" \
         --mode auto \

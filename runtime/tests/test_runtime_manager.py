@@ -5,6 +5,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -22,6 +23,131 @@ from runtime.cloud_agents_runtime.store import RunStore, utc_now_plus
 
 
 class RunManagerTest(unittest.TestCase):
+    def test_remote_worker_instance_change_reclaims_the_same_durable_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = RunManager(
+                Path(tmp),
+                worker_capacity=0,
+                worker_id="control-plane",
+            )
+            try:
+                run = manager.create_run(RunSpec(prompt="recover me", adapter="fake"))
+                first_payload = {
+                    "capacity": 1,
+                    "active_run_ids": [],
+                    "metadata": {"instance_id": "worker-instance-1"},
+                }
+                first_claim = manager.claim_remote_run("stable-worker", first_payload)
+                self.assertEqual(first_claim["run"]["run_id"], run.run_id)
+                manager.remote_worker_heartbeat(
+                    "stable-worker",
+                    {
+                        **first_payload,
+                        "active_run_ids": [run.run_id],
+                    },
+                )
+
+                recovered_claim = manager.claim_remote_run(
+                    "stable-worker",
+                    {
+                        "capacity": 1,
+                        "active_run_ids": [],
+                        "metadata": {"instance_id": "worker-instance-2"},
+                    },
+                )
+
+                self.assertEqual(recovered_claim["run"]["run_id"], run.run_id)
+                self.assertEqual(recovered_claim["job"]["attempts"], 2)
+                self.assertEqual(len(manager.store.list_runs()), 1)
+                event_types = [
+                    event.type for event in manager.store.events_since(run.run_id)
+                ]
+                self.assertIn("lease.retry_requested", event_types)
+            finally:
+                manager.shutdown()
+
+    def test_v2_remote_bridge_reuses_a_durable_run_after_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = RunManager(
+                Path(tmp),
+                adapters={"fake": FakeAdapter(), "qwen": FakeAdapter()},
+                worker_capacity=1,
+            )
+            try:
+                task_id = "task_recovered"
+                agent_task_id = "agent_recovered"
+                unit_id = "ecs-hz"
+                existing = manager.create_run(
+                    RunSpec(
+                        prompt="resume without duplicate execution",
+                        adapter="qwen",
+                        metadata={
+                            "created_from": "v2_remote_bridge",
+                            "v2_task_id": task_id,
+                            "v2_agent_task_id": agent_task_id,
+                            "execution_unit_id": unit_id,
+                            "worker_requirements": {
+                                "adapters": ["qwen"],
+                                "features": ["artifacts"],
+                                "labels": {"execution_unit_id": unit_id},
+                            },
+                        },
+                    )
+                )
+                worker_payload = {
+                    "capacity": 1,
+                    "labels": {"execution_unit_id": unit_id},
+                    "capabilities": {
+                        "adapters": ["qwen"],
+                        "features": ["artifacts", "claim", "events", "heartbeat"],
+                    },
+                }
+                result: dict[str, object] = {}
+
+                def execute_recovered() -> None:
+                    result.update(
+                        manager._execute_v2_agent_remotely(
+                            task_id,
+                            {
+                                "agent_task_id": agent_task_id,
+                                "adapter": "qwen",
+                            },
+                            "resume without duplicate execution",
+                            {"unit_id": unit_id},
+                        )
+                    )
+
+                with patch.object(
+                    manager.v2,
+                    "get_task",
+                    return_value={"status": "running"},
+                ):
+                    thread = threading.Thread(target=execute_recovered)
+                    thread.start()
+                    claim = manager.claim_remote_run("worker-hz", worker_payload)
+                    self.assertEqual(claim["run"]["run_id"], existing.run_id)
+                    manager.append_remote_worker_event(
+                        "worker-hz",
+                        existing.run_id,
+                        {"type": "message.delta", "data": {"text": "resumed"}},
+                    )
+                    manager.append_remote_worker_event(
+                        "worker-hz",
+                        existing.run_id,
+                        {"type": "run.completed", "data": {}},
+                    )
+                    thread.join(timeout=3)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(result["remote_run_id"], existing.run_id)
+                matching_runs = [
+                    run
+                    for run in manager.store.list_runs()
+                    if run.spec.metadata.get("v2_agent_task_id") == agent_task_id
+                ]
+                self.assertEqual(len(matching_runs), 1)
+            finally:
+                manager.shutdown()
+
     def test_v2_remote_bridge_uses_matching_worker_and_returns_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manager = RunManager(
@@ -394,6 +520,33 @@ class RunManagerTest(unittest.TestCase):
                     {"type": "run.started", "data": {"adapter": "qwen"}},
                 )
                 self.assertEqual(started["type"], "run.started")
+                progress_payload = {
+                    "type": "run.progress",
+                    "data": {"percent": 50},
+                    "worker_event_id": "worker-event-progress-1",
+                }
+                progress = manager.append_remote_worker_event(
+                    "vps-a",
+                    run.run_id,
+                    progress_payload,
+                )
+                repeated_progress = manager.append_remote_worker_event(
+                    "vps-a",
+                    run.run_id,
+                    progress_payload,
+                )
+                self.assertEqual(repeated_progress["id"], progress["id"])
+                self.assertEqual(
+                    len(
+                        [
+                            event
+                            for event in manager.store.events_since(run.run_id)
+                            if event.data.get("worker_event_id")
+                            == "worker-event-progress-1"
+                        ]
+                    ),
+                    1,
+                )
                 uploaded = manager.write_remote_worker_artifact(
                     "vps-a",
                     run.run_id,
@@ -404,7 +557,22 @@ class RunManagerTest(unittest.TestCase):
                 manager.write_remote_worker_artifact(
                     "vps-a",
                     run.run_id,
-                    {"name": "stream.log", "content": "part-1\n", "mode": "append"},
+                    {
+                        "name": "stream.log",
+                        "content": "part-1\n",
+                        "mode": "append",
+                        "worker_artifact_id": "worker-artifact-part-1",
+                    },
+                )
+                manager.write_remote_worker_artifact(
+                    "vps-a",
+                    run.run_id,
+                    {
+                        "name": "stream.log",
+                        "content": "part-1\n",
+                        "mode": "append",
+                        "worker_artifact_id": "worker-artifact-part-1",
+                    },
                 )
                 streamed = manager.write_remote_worker_artifact(
                     "vps-a",

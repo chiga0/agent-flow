@@ -393,7 +393,11 @@ class V2ControlPlaneTest(unittest.TestCase):
         projected = control.conversation_for_task(task["task_id"], principal="user_1")
         updated = control.update_conversation(
             projected["conversation_id"],
-            {"title": "Pinned legacy conversation", "pinned": True, "version": projected["version"]},
+            {
+                "title": "Pinned legacy conversation",
+                "pinned": True,
+                "version": projected["version"],
+            },
             principal="user_1",
         )
 
@@ -791,8 +795,12 @@ class V2ControlPlaneTest(unittest.TestCase):
         script.write_text(
             "#!/usr/bin/env python3\n"
             "import json, os, pathlib, sys\n"
-            f"pathlib.Path({str(capture)!r}).write_text(json.dumps({{'args': sys.argv[1:], 'cwd': os.getcwd(), 'real_cli': os.environ.get('V2_ENABLE_REAL_CLI_ADAPTERS'), 'auto_adapter': os.environ.get('V2_AUTO_ADAPTER')}}))\n"
-            "print(json.dumps([{'type': 'result', 'is_error': False, 'result': '真实 Qwen 验证完成'}]))\n",
+            "payload = {'args': sys.argv[1:], 'cwd': os.getcwd(), "
+            "'real_cli': os.environ.get('V2_ENABLE_REAL_CLI_ADAPTERS'), "
+            "'auto_adapter': os.environ.get('V2_AUTO_ADAPTER')}\n"
+            f"pathlib.Path({str(capture)!r}).write_text(json.dumps(payload))\n"
+            "print(json.dumps([{'type': 'result', 'is_error': False, "
+            "'result': '真实 Qwen 验证完成'}]))\n",
             encoding="utf-8",
         )
         script.chmod(0o755)
@@ -865,7 +873,8 @@ class V2ControlPlaneTest(unittest.TestCase):
         script.write_text(
             "#!/usr/bin/env python3\n"
             "import json\n"
-            "print(json.dumps([{'type': 'result', 'is_error': True, 'result': 'authentication failed'}]))\n",
+            "print(json.dumps([{'type': 'result', 'is_error': True, "
+            "'result': 'authentication failed'}]))\n",
             encoding="utf-8",
         )
         script.chmod(0o755)
@@ -903,10 +912,13 @@ class V2ControlPlaneTest(unittest.TestCase):
             f"sentinel = pathlib.Path({str(allow_success)!r})\n"
             f"log = pathlib.Path({str(invocation_log)!r})\n"
             "prompt = sys.argv[sys.argv.index('--prompt') + 1]\n"
-            "role = next((name for name in ('brain', 'builder', 'reviewer') if f'Your role: {name}' in prompt), 'agent')\n"
+            "role = next((name for name in ('brain', 'builder', 'reviewer')\n"
+            "    if f'Your role: {name}' in prompt), 'agent')\n"
             "with log.open('a', encoding='utf-8') as stream: stream.write(role + '\\n')\n"
             "failed = role == 'builder' and not sentinel.exists()\n"
-            "print(json.dumps([{'type': 'result', 'is_error': failed, 'result': ('builder failed safely' if failed else role + ' verified')}]))\n",
+            "result = 'builder failed safely' if failed else role + ' verified'\n"
+            "print(json.dumps([{'type': 'result', 'is_error': failed, "
+            "'result': result}]))\n",
             encoding="utf-8",
         )
         script.chmod(0o755)

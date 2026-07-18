@@ -91,7 +91,10 @@ class AdditionalEdgeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "positive integer"):
             resolve_int({"pids": object()}, ("pids",), 10, "default")
 
-        self.assertEqual(resolve_timeout_seconds({"timeout": "5"}, None, 10), (5, "requested.timeout"))
+        self.assertEqual(
+            resolve_timeout_seconds({"timeout": "5"}, None, 10),
+            (5, "requested.timeout"),
+        )
         self.assertEqual(
             resolve_timeout_seconds({}, "6", 10),
             (6, "run_spec.timeout_seconds"),
@@ -278,7 +281,8 @@ class AdditionalEdgeTest(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 function(value)
-        self.assertEqual(ExecutorLease("e", "r", "qwen", "shared", token="x").to_dict()["token"], "configured")
+        lease = ExecutorLease("e", "r", "qwen", "shared", token="x")
+        self.assertEqual(lease.to_dict()["token"], "configured")
 
         with tempfile.TemporaryDirectory() as tmp:
             store = RunStore(Path(tmp))
