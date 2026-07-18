@@ -82,6 +82,7 @@ CASES = (
     {
         "name": "code-audit",
         "mode": "single",
+        "evidence_groups": (("worker.py",), ("风险", "risk"), ("修复", "建议")),
         "goal": (
             "对 /opt/agentflow-worker/runtime/cloud_agents_runtime/worker.py 做只读代码审计；"
             "至少指出三个有代码位置依据的可靠性或安全风险，按严重度排序，并给出可执行修复建议。"
@@ -91,6 +92,14 @@ CASES = (
     {
         "name": "ops-inspection",
         "mode": "single",
+        "evidence_groups": (
+            ("负载", "load"),
+            ("内存", "memory"),
+            ("磁盘", "disk"),
+            ("cloud-agents-worker",),
+            ("cloud-agents-qwen",),
+            ("4210",),
+        ),
         "goal": (
             "对当前 ECS 做只读运维巡检：检查系统负载、可用内存、磁盘、"
             "cloud-agents-worker 与 cloud-agents-qwen 服务状态及 4210 监听地址；"
@@ -100,6 +109,14 @@ CASES = (
     {
         "name": "multi-stage-research",
         "mode": "multi-agent",
+        "evidence_groups": (
+            ("sqlite",),
+            ("nas",),
+            ("ecs",),
+            ("安全", "security"),
+            ("容量", "capacity"),
+            ("阶段", "phase"),
+        ),
         "goal": (
             "完成一项多阶段研究：结合 /opt/agentflow-worker/docs 与 runtime 源码，"
             "分析 AgentFlow 从 SQLite 单机控制面演进到 NAS 主控加两个 ECS 执行单元时的"
@@ -109,6 +126,11 @@ CASES = (
     {
         "name": "file-generation",
         "mode": "single",
+        "evidence_groups": (
+            ("generated-deliverable.md",),
+            ("验收", "checklist"),
+            ("生成时间", "generated"),
+        ),
         "goal": (
             "生成一份中文 Markdown 交付物到"
             " /var/lib/cloud-agents-worker/workspace/e2e/generated-deliverable.md。"
@@ -122,7 +144,7 @@ CASES = (
 def create_conversation(
     client: Client,
     *,
-    case: dict[str, str],
+    case: dict[str, Any],
     unit_id: str,
     round_index: int,
 ) -> tuple[dict[str, Any], str]:
@@ -200,7 +222,10 @@ def wait_for_task(client: Client, task_id: str) -> dict[str, Any]:
 
 
 def assert_remote_result(
-    task: dict[str, Any], unit_id: str, worker_id: str
+    task: dict[str, Any],
+    unit_id: str,
+    worker_id: str,
+    evidence_groups: tuple[tuple[str, ...], ...] = (),
 ) -> dict[str, Any]:
     if task.get("status") != "completed":
         raise RuntimeError(f"task {task.get('task_id')} ended as {task.get('status')}")
@@ -211,6 +236,7 @@ def assert_remote_result(
     if not agents:
         raise RuntimeError("task has no agent results")
     remote_runs: list[str] = []
+    response_parts: list[str] = []
     for agent in agents:
         adapter = dict(agent.get("result", {}).get("adapter") or {})
         if adapter.get("execution_mode") != "remote-worker":
@@ -221,9 +247,26 @@ def assert_remote_result(
             raise RuntimeError(f"agent worker mismatch: {adapter}")
         if not adapter.get("success"):
             raise RuntimeError(f"remote Qwen execution failed: {adapter}")
+        response = str(
+            adapter.get("message")
+            or adapter.get("summary")
+            or agent.get("result", {}).get("final_summary")
+            or ""
+        ).strip()
+        if len(response) < 120:
+            raise RuntimeError("remote Qwen response is too short to be useful")
+        response_parts.append(response)
         remote_runs.append(str(adapter.get("remote_run_id") or ""))
     if not all(remote_runs):
         raise RuntimeError("remote run evidence is incomplete")
+    response_text = "\n".join(response_parts).casefold()
+    missing_groups = [
+        group
+        for group in evidence_groups
+        if not any(term.casefold() in response_text for term in group)
+    ]
+    if missing_groups:
+        raise RuntimeError(f"remote Qwen semantic evidence is missing: {missing_groups}")
     return {
         "task_id": task["task_id"],
         "strategy": task.get("plan", {}).get("strategy"),
@@ -232,6 +275,8 @@ def assert_remote_result(
         "event_count": len(
             task.get("timeline") or task.get("events") or []
         ),
+        "response_chars": len(response_text),
+        "semantic_evidence": "passed",
     }
 
 
@@ -241,6 +286,11 @@ def run_high_risk_case(
     case = {
         "name": "high-risk-approval",
         "mode": "single",
+        "evidence_groups": (
+            ("approved-release-plan.md",),
+            ("禁止", "forbid"),
+            ("复读", "read back", "verified"),
+        ),
         "goal": (
             "模拟部署到生产的高风险审批链路：本次只允许生成发布计划到"
             " /var/lib/cloud-agents-worker/workspace/e2e/approved-release-plan.md，"
@@ -270,7 +320,12 @@ def run_high_risk_case(
     if decided.get("status") != "approved":
         raise RuntimeError(f"approval decision failed: {decided}")
     task = wait_for_task(client, task_id)
-    result = assert_remote_result(task, unit_id, worker_id)
+    result = assert_remote_result(
+        task,
+        unit_id,
+        worker_id,
+        case["evidence_groups"],
+    )
     result["approval_id"] = approval["approval_id"]
     result["approval_status"] = decided["status"]
     return result
@@ -301,7 +356,12 @@ def main() -> int:
                 client, case=case, unit_id=args.unit_id, round_index=round_index
             )
             task = wait_for_task(client, task_id)
-            result = assert_remote_result(task, args.unit_id, args.worker_id)
+            result = assert_remote_result(
+                task,
+                args.unit_id,
+                args.worker_id,
+                case["evidence_groups"],
+            )
             result.update({"case": case["name"], "round": round_index})
             results.append(result)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))

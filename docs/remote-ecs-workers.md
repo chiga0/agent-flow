@@ -139,6 +139,7 @@ python3 scripts/validate_remote_execution_units.py \
 - Task 产物中的 `adapter.execution_mode` 是 `remote-worker`。
 - `remote_run_id` 对应队列中的 Run，`worker_id` 是目标 ECS worker。
 - Run 具有 `message.delta`、`run.completed` 和远端上传产物。
+- 每个场景的 Qwen 结果达到最低长度并通过语义证据检查，不只依赖 completed 状态。
 - tunnel 或 worker 重启后，心跳恢复且新任务仍能完成。
 
 常见问题：
@@ -150,6 +151,10 @@ python3 scripts/validate_remote_execution_units.py \
 | 任务被本地执行 | worker 标签与执行单元 `unit_id` 是否一致 |
 | workspace mismatch | metadata 中的 `workspace` 是否为 ECS 真实绝对路径 |
 | 2C2G OOM | capacity 保持 1，停掉重复 Qwen daemon，检查 `MemoryCurrent` |
+
+脚本最终输出 `"ok": true` 时，每个场景还会包含
+`"semantic_evidence": "passed"`。语义校验覆盖代码位置与风险、运维指标与服务、
+研究权衡、文件复读和高风险操作边界，避免空泛结果产生假绿。
 
 停止通道：
 
