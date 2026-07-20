@@ -49,7 +49,7 @@
 | --- | --- |
 | Temporal 深度接入 | 已接入 V2 task dispatcher/worker/activity；审批信号仍需继续深化 |
 | V2 Remote Worker | 已完成 Agent Task lease、隔离 workspace、实时事件/artifact、取消、审批投递、重试与失联回收 |
-| HA/压力验证 | 已提供 HA Compose 配置校验和并发任务延迟/吞吐验证脚本；多副本控制面仍依赖共享 Postgres 领域存储迁移 |
+| HA/压力验证 | V2 领域已支持 PostgreSQL 共享状态、跨控制面租约竞争 smoke、HA Compose 校验和并发吞吐验证；完整 HTTP 多副本仍需迁移 V1 RunStore/Auth 状态 |
 | 执行单元调度策略 | 基于资源、标签、租户、adapter、成本选择 unit |
 | Docker/ECS/NAS 生产化 | workspace 隔离、secret 注入、资源限制、日志回收 |
 | Worker 水平扩展 | 多 worker 副本、健康检查、drain/resume、迁移 |

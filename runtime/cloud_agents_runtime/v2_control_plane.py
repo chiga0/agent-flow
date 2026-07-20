@@ -7,7 +7,6 @@ import os
 import secrets
 import shlex
 import shutil
-import sqlite3
 import subprocess
 import threading
 import time
@@ -18,6 +17,7 @@ from urllib import request
 from urllib.error import URLError
 from uuid import uuid4
 
+from .database import RuntimeDatabase
 from .events import utc_now
 
 
@@ -62,10 +62,11 @@ class V2ControlPlane:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "control_plane.db"
-        self._db = sqlite3.connect(self.db_path, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
+        database_url = os.environ.get("V2_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        self._db = RuntimeDatabase(self.db_path, database_url)
         self._lock = threading.RLock()
         self._threads: dict[str, threading.Thread] = {}
+        self._db.task_lock("agentflow-v2-schema")
         self._init_db()
         self._ensure_defaults()
         self._recover_open_tasks()
@@ -98,7 +99,7 @@ class V2ControlPlane:
             ],
             "adapters": self.adapter_catalog(),
             "runtime": {
-                "durable_engine": "local-sqlite-runner",
+                "durable_engine": f"{self._db.dialect}-runner",
                 "production_target": "temporal",
                 "event_source": "v2_events",
             },
@@ -1222,9 +1223,11 @@ class V2ControlPlane:
         return {
             "profile": profile,
             "database": {
-                "driver": "postgres" if database_url else "sqlite",
+                "driver": self._db.dialect,
                 "configured": bool(database_url),
                 "url_env": "V2_DATABASE_URL" if os.environ.get("V2_DATABASE_URL") else None,
+                "shared_v2_domain_state": self._db.dialect == "postgres",
+                "multi_control_plane_ready": self._db.dialect == "postgres",
             },
             "queue": {
                 "driver": "redis" if queue_url else "sqlite-lease",
@@ -1232,7 +1235,8 @@ class V2ControlPlane:
                 "url_env": "V2_QUEUE_URL" if os.environ.get("V2_QUEUE_URL") else None,
             },
             "workers": {
-                "horizontal_scale": bool(queue_url),
+                "horizontal_scale": bool(queue_url) and self._db.dialect == "postgres",
+                "requires_remote_execution_units": self._db.dialect == "postgres",
                 "concurrency": int(os.environ.get("V2_WORKER_CONCURRENCY") or "1"),
                 "role": os.environ.get("V2_PROCESS_ROLE") or "runtime",
             },
@@ -2037,7 +2041,7 @@ class V2ControlPlane:
             ),
         )
 
-    def _workflow_run(self, task_id: str) -> sqlite3.Row | None:
+    def _workflow_run(self, task_id: str) -> Any | None:
         return self._db.execute(
             """
             SELECT * FROM v2_workflow_runs
@@ -2426,11 +2430,12 @@ class V2ControlPlane:
 
     def _queued_remote_agents_locked(self, worker_id: str) -> list[dict[str, Any]]:
         rows = self._db.execute(
-            """
+            f"""
             SELECT a.* FROM v2_agent_tasks a
             JOIN v2_tasks t ON t.task_id = a.task_id
             WHERE a.status = 'queued' AND t.status IN ('queued', 'running')
             ORDER BY t.created_at ASC, a.order_index ASC
+            {self._db.for_update_skip_locked()}
             """
         ).fetchall()
         agents = []
@@ -2480,7 +2485,7 @@ class V2ControlPlane:
         worker_id: str,
         agent_task_id: str,
         token: str,
-    ) -> sqlite3.Row:
+    ) -> Any:
         row = self._db.execute(
             """
             SELECT * FROM v2_agent_leases
@@ -2694,13 +2699,13 @@ class V2ControlPlane:
             return None
         return self.get_task(row["task_id"])
 
-    def _task_row(self, task_id: str) -> sqlite3.Row | None:
+    def _task_row(self, task_id: str) -> Any | None:
         return self._db.execute(
             "SELECT * FROM v2_tasks WHERE task_id = ?",
             (task_id,),
         ).fetchone()
 
-    def _task_summary_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+    def _task_summary_from_row(self, row: Any) -> dict[str, Any]:
         task_id = row["task_id"]
         return {
             "task_id": task_id,
@@ -2776,6 +2781,7 @@ class V2ControlPlane:
         }
 
     def _next_sequence_locked(self, task_id: str) -> int:
+        self._db.task_lock(task_id)
         row = self._db.execute(
             """
             SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
@@ -3339,7 +3345,7 @@ def failure_summary(exc: Exception) -> dict[str, Any]:
     }
 
 
-def event_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def event_from_row(row: Any) -> dict[str, Any]:
     return {
         "event_id": row["event_id"],
         "task_id": row["task_id"],
@@ -3351,7 +3357,7 @@ def event_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def agent_task_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def agent_task_from_row(row: Any) -> dict[str, Any]:
     return {
         "agent_task_id": row["agent_task_id"],
         "task_id": row["task_id"],
@@ -3371,7 +3377,7 @@ def agent_task_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def unit_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def unit_from_row(row: Any) -> dict[str, Any]:
     return {
         "unit_id": row["unit_id"],
         "kind": row["kind"],
@@ -3386,7 +3392,7 @@ def unit_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def permission_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def permission_from_row(row: Any) -> dict[str, Any]:
     return {
         "permission_id": row["permission_id"],
         "task_id": row["task_id"],
@@ -3401,7 +3407,7 @@ def permission_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def channel_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def channel_from_row(row: Any) -> dict[str, Any]:
     return {
         "channel_id": row["channel_id"],
         "platform": row["platform"],
@@ -3412,7 +3418,7 @@ def channel_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def channel_message_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def channel_message_from_row(row: Any) -> dict[str, Any]:
     return {
         "message_id": row["message_id"],
         "channel_id": row["channel_id"],
@@ -3430,7 +3436,7 @@ def channel_message_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def tenant_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def tenant_from_row(row: Any) -> dict[str, Any]:
     return {
         "tenant_id": row["tenant_id"],
         "name": row["name"],
@@ -3442,7 +3448,7 @@ def tenant_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def project_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def project_from_row(row: Any) -> dict[str, Any]:
     return {
         "project_id": row["project_id"],
         "tenant_id": row["tenant_id"],
@@ -3454,7 +3460,7 @@ def project_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def project_member_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def project_member_from_row(row: Any) -> dict[str, Any]:
     return {
         "project_id": row["project_id"],
         "user_id": row["user_id"],
@@ -3465,7 +3471,7 @@ def project_member_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def tenant_user_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def tenant_user_from_row(row: Any) -> dict[str, Any]:
     return {
         "tenant_id": row["tenant_id"],
         "user_id": row["user_id"],
@@ -3477,7 +3483,7 @@ def tenant_user_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def rbac_policy_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def rbac_policy_from_row(row: Any) -> dict[str, Any]:
     return {
         "tenant_id": row["tenant_id"],
         "role": row["role"],
@@ -3487,7 +3493,7 @@ def rbac_policy_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def workflow_run_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def workflow_run_from_row(row: Any) -> dict[str, Any]:
     return {
         "workflow_run_id": row["workflow_run_id"],
         "task_id": row["task_id"],
@@ -3500,7 +3506,7 @@ def workflow_run_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def workflow_step_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def workflow_step_from_row(row: Any) -> dict[str, Any]:
     return {
         "step_id": row["step_id"],
         "workflow_run_id": row["workflow_run_id"],
@@ -3519,7 +3525,7 @@ def workflow_step_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def artifact_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def artifact_from_row(row: Any) -> dict[str, Any]:
     return {
         "artifact_id": row["artifact_id"],
         "task_id": row["task_id"],
@@ -3534,7 +3540,7 @@ def artifact_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def evaluation_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def evaluation_from_row(row: Any) -> dict[str, Any]:
     return {
         "evaluation_id": row["evaluation_id"],
         "task_id": row["task_id"],
@@ -3547,7 +3553,7 @@ def evaluation_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def replay_from_row(row: sqlite3.Row) -> dict[str, Any]:
+def replay_from_row(row: Any) -> dict[str, Any]:
     return {
         "replay_id": row["replay_id"],
         "task_id": row["task_id"],

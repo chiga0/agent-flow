@@ -153,4 +153,9 @@ aflow 的审计不是附加日志，而是任务事实源的一部分：
 - “本机控制面 + 云端只做反向代理/隧道”是可完整验收的混合拓扑。
 - “本机/NAS 控制面 + 云端执行 V2 Task”已接入 Remote Worker lease 协议：Worker 主动心跳和认领 Agent Task，在独立目录执行 adapter，实时回传事件和 artifact，并处理取消、审批、失败重试和租约过期回收。Execution Unit 仅注册但没有 Worker 心跳时，仍不能视为可执行。
 
-当前 HA compose 已提供 Postgres、Redis、Temporal 和多 Worker 拓扑及压测工具；控制面领域数据切换到共享 Postgres 的迁移仍需在正式多副本控制面前完成，因此现阶段生产建议保持单控制面、多远程 Worker。部署选择与证据要求见[场景化部署与验收](deployment-scenarios.md)。
+当前 HA compose 已提供 Postgres、Redis、Temporal 和多 Worker 拓扑及压测工具。
+V2 Task、Event、Agent Lease、Permission、Workflow 和 Artifact 元数据已经可以切换到
+共享 PostgreSQL，并通过 advisory lock 与 `FOR UPDATE SKIP LOCKED` 处理跨控制面竞争。
+登录、旧 Run/Mission 和部分运维状态仍使用 V1 SQLite `RunStore`，因此整站生产建议
+仍是单 HTTP 控制面、多远程 Worker；纯 V2 API 可以进行多控制面验证。部署选择与
+证据要求见[场景化部署与验收](deployment-scenarios.md)。

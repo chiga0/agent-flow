@@ -242,7 +242,13 @@ docker compose -f deploy/docker-compose.runtime.yml up -d --build
 
 ## 5. 快速路径 C：HA profile
 
-HA profile 适合团队长期运行，目标是 Postgres 持久化、Redis 队列、Temporal workflow、多 worker 水平扩展和备份恢复。
+HA profile 适合团队长期运行。V2 Task、Event、Lease、Permission、Workflow 与
+Artifact 元数据使用 PostgreSQL 共享存储，Redis/Temporal 提供外部队列与工作流，
+多个远程 worker 可以安全竞争任务租约。
+
+当前多 runtime HTTP 副本仍有一个边界：登录、旧版 Run/Mission 和部分运维状态仍在
+各副本的 SQLite `RunStore` 中。因此推荐先保持一个 runtime HTTP 控制面并横向扩展
+remote worker；只有纯 V2 API 流量可以在共享 PostgreSQL 下进行多控制面验证。
 
 ```bash
 cp deploy/runtime.ha.env.example .env
@@ -279,6 +285,12 @@ V2_BACKUP_TARGET=/data/backups
 ```bash
 docker compose --env-file .env -f deploy/docker-compose.ha.yml up -d --build
 docker compose --env-file .env -f deploy/docker-compose.ha.yml ps
+```
+
+验证 V2 PostgreSQL 共享状态和双控制面租约竞争：
+
+```bash
+V2_DATABASE_URL="$V2_DATABASE_URL" python3 scripts/smoke_postgres_v2.py
 ```
 
 2C2G VPS 不建议直接跑这个 profile。更稳的方式是把 HA profile 放在 NAS、工作站或更大云主机上，2C2G VPS 只做公网边缘或 `capacity=1` worker。

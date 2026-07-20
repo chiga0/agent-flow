@@ -10,6 +10,20 @@ on:
 jobs:
   runtime:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: agentflow_ci
+          POSTGRES_USER: agentflow
+          POSTGRES_PASSWORD: agentflow-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentflow -d agentflow_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,6 +72,12 @@ jobs:
           PYTHONPATH=runtime python3 scripts/smoke_v2_control_plane.py \
             --artifact-root "$RUNNER_TEMP/agentflow-v2-smoke" \
             --timeout 10
+
+      - name: PostgreSQL multi-control-plane smoke
+        env:
+          V2_DATABASE_URL: >-
+            postgresql://agentflow:agentflow-ci-password@127.0.0.1:5432/agentflow_ci
+        run: python3 scripts/smoke_postgres_v2.py
 
       - name: Local/NAS one-command acceptance
         run: |
