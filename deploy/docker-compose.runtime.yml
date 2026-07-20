@@ -3,6 +3,12 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.runtime
+      args:
+        NODE_BASE_IMAGE: ${NODE_IMAGE:-node:22-slim}
+        PYTHON_BASE_IMAGE: ${PYTHON_IMAGE:-python:3.13-slim}
+        QWEN_NODE_PACKAGE: ${QWEN_NODE_PACKAGE:-@qwen-code/qwen-code@0.19.3}
+        CODEX_NODE_PACKAGE: ${CODEX_NODE_PACKAGE:-@openai/codex@0.144.5}
+        OPENCODE_NODE_PACKAGE: ${OPENCODE_NODE_PACKAGE:-opencode-ai@1.18.3}
     user: "${RUNTIME_UID:-1000}:${RUNTIME_GID:-1000}"
     environment:
       HOME: /data/artifacts/.home

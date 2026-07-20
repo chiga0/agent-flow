@@ -1,0 +1,15 @@
+.git
+.env
+.env.*
+.runtime
+.aflow
+.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+runtime/artifacts
+web/node_modules
+web/coverage
+web/playwright-report
+web/test-results
+web/*.tsbuildinfo

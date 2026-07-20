@@ -965,6 +965,23 @@ class V2ControlPlaneTest(unittest.TestCase):
         )
         self.assertEqual(failure_summary(RuntimeError())["category"], "runtime")
 
+        legacy = control.create_task(
+            {"goal": "Legacy failed task without a failure summary"},
+            principal="owner@example.com",
+        )
+        wait_for_status(control, legacy["task_id"], "completed")
+        with control._lock:
+            control._set_task_status_locked(legacy["task_id"], "failed")
+            control._append_event_locked(
+                legacy["task_id"], "task.failed", "orchestrator", {}
+            )
+            control._db.commit()
+        legacy_result = control.get_task(legacy["task_id"])["result"]
+        self.assertEqual(
+            legacy_result["summary"], "The task failed before producing a result."
+        )
+        self.assertTrue(legacy_result["failure"]["retryable"])
+
     def test_plan_optional_path(self):
         control = V2ControlPlane(self.tmp_path())
         task = control.create_task({"goal": "Delete plan for fallback"}, principal="user_1")

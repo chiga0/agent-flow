@@ -2760,19 +2760,29 @@ class V2ControlPlane:
         artifacts = self.artifacts(task_id)
         evaluations = self.evaluations(task_id)
         if row["status"] == "failed":
+            fallback_failure = {
+                "reason": "The task failed before producing a result.",
+                "impact": "No final result is available.",
+                "next_action": "Retry the task or inspect the audit events.",
+                "retryable": True,
+            }
             failed_events = [
                 event for event in self.events(task_id) if event["type"] == "task.failed"
             ]
-            failure = (
+            recorded_failure = (
                 failed_events[-1]["payload"].get("failure_summary")
                 if failed_events
-                else {
-                    "reason": "The task failed before producing a result.",
-                    "impact": "No final result is available.",
-                    "next_action": "Retry the task or inspect the audit events.",
-                    "retryable": True,
-                }
+                else None
             )
+            failure = dict(fallback_failure)
+            if isinstance(recorded_failure, dict):
+                failure.update(
+                    {
+                        key: value
+                        for key, value in recorded_failure.items()
+                        if value is not None
+                    }
+                )
             return {
                 "summary": failure["reason"],
                 "failure": failure,
