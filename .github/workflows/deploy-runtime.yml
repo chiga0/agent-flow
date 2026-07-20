@@ -371,7 +371,7 @@ jobs:
           esac
           echo "starting qwen deep acceptance with timeout=${QWEN_ACCEPTANCE_TIMEOUT}s"
           timeout --kill-after=30s "${hard_timeout}s" \
-            python3 scripts/validate_qwen_mission.py "${args[@]}" &
+            python3 -u scripts/validate_qwen_mission.py "${args[@]}" &
           acceptance_pid="$!"
           (
             while kill -0 "$acceptance_pid" 2>/dev/null; do
@@ -395,15 +395,9 @@ jobs:
           wait "$heartbeat_pid" 2>/dev/null || true
           if [[ "$acceptance_status" -ne 0 ]]; then
             echo "qwen deep acceptance failed with status $acceptance_status"
-            auth_header="Authorization: Bearer $RUN_MANAGER_TOKEN"
-            echo "queue snapshot:"
-            curl -fsS --max-time 10 -H "$auth_header" \
-              http://127.0.0.1:8765/queue || true
-            echo
-            echo "executor snapshot:"
-            curl -fsS --max-time 10 -H "$auth_header" \
-              http://127.0.0.1:8765/executors || true
-            echo
+            # validate_qwen_mission.py already emits bounded, recursively redacted
+            # queue/executor diagnostics. Never dump the raw control-plane payload:
+            # historical executor commands can contain inline ephemeral tokens.
           fi
           exit "$acceptance_status"
           REMOTE

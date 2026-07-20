@@ -75,6 +75,10 @@ python3 scripts/validate_qwen_mission.py \
   --timeout 600
 ```
 
+若同时启用 `--validate-mission --mission-task-count 5`，上述 timeout 是 single run
+和整个 mission 的共享总预算。capacity=1 的低配 VPS 会串行跑任务，建议先使用 2400 秒；
+看到任务数持续从 0/5 增长说明链路仍在推进，不应按单次 smoke 的 600 秒预算判死。
+
 ## CI 部署失败
 
 先看失败在哪一步。

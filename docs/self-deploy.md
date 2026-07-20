@@ -189,3 +189,21 @@ python3 scripts/validate_qwen_mission.py \
 ```
 
 qwen 失败时不要立刻判断平台坏了。先看 qwen settings、executor stderr、机器资源、权限审批和 executor strategy。
+
+验证多任务真实链路时显式开启 mission。`shared` worker 的 capacity 为 1 时，
+任务会串行执行；超时是整次验收（single run 与 mission 共用）的总预算，不是单任务预算。
+5-task 链路建议从 2400 秒开始，再依据本机/NAS 的实测耗时收紧：
+
+```bash
+python3 scripts/validate_qwen_mission.py \
+  --base-url http://127.0.0.1:8765 \
+  --token "$RUN_MANAGER_TOKEN" \
+  --validate-single-run \
+  --validate-mission \
+  --mission-task-count 5 \
+  --expect-executor-strategy shared \
+  --timeout 2400
+```
+
+成功标准不是进程退出码本身：single run 必须包含事件、原始事件、诊断与成本产物；
+mission 必须完成全部任务，并包含 `mission.completed` 与 `final_report.md`。

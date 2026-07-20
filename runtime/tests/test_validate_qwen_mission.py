@@ -6,7 +6,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from scripts.validate_qwen_mission import main, validate_single_run
+from scripts.validate_qwen_mission import main, redact, validate_single_run
 
 
 class ValidateQwenMissionTest(unittest.TestCase):
@@ -176,6 +176,29 @@ class ValidateQwenMissionTest(unittest.TestCase):
                 )
             ],
         )
+
+    def test_executor_snapshot_redacts_inline_tokens_in_commands(self) -> None:
+        payload = {
+            "executor_registry": {
+                "executors": [
+                    {
+                        "command": [
+                            "docker",
+                            "-e",
+                            "QWEN_SERVER_TOKEN=ephemeral-secret-token",
+                        ],
+                        "token": "top-level-secret-token",
+                    }
+                ]
+            }
+        }
+
+        rendered = repr(redact(payload))
+
+        self.assertIn("QWEN_SERVER_TOKEN=<redacted>", rendered)
+        self.assertIn("'token': '<redacted>'", rendered)
+        self.assertNotIn("ephemeral-secret-token", rendered)
+        self.assertNotIn("top-level-secret-token", rendered)
 
 
 class CompletedRunClient:

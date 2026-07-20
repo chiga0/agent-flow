@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from enum import IntEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from runtime.cloud_agents_runtime.adapters.base import RuntimeAdapter
 from runtime.cloud_agents_runtime.adapters.fake import FakeAdapter
@@ -23,6 +23,7 @@ from runtime.cloud_agents_runtime.adapters.qwen import (
     parse_int,
     parse_json_or_text,
 )
+from runtime.cloud_agents_runtime.access import AccessManager, roles_allow, scopes_allow
 from runtime.cloud_agents_runtime.auth import (
     AuthConfig,
     hash_password,
@@ -73,6 +74,8 @@ from runtime.cloud_agents_runtime.manager import (
 )
 from runtime.cloud_agents_runtime.missions import build_task_definitions, run_status_to_task_status
 from runtime.cloud_agents_runtime.models import (
+    AccessProject,
+    ApiToken,
     AuthSession,
     AuthUser,
     ExecutorLease,
@@ -122,6 +125,28 @@ from test_runtime_server import request_json, running_fake_qwen, running_runtime
 
 
 class RuntimeEdgeTest(unittest.TestCase):
+    def test_access_and_secret_projection_guards(self) -> None:
+        self.assertFalse(scopes_allow("runs:read", "runs:read"))
+        self.assertFalse(scopes_allow([None, "events:read"], "runs:read"))
+        self.assertTrue(scopes_allow([None, "runs:*"], "runs:write"))
+        self.assertFalse(roles_allow("operator", "runs:read"))
+        with self.assertRaisesRegex(ValueError, "active or archived"):
+            AccessProject.from_payload({"id": "project", "status": "invalid"})
+        with self.assertRaisesRegex(ValueError, "list of strings"):
+            ApiToken.create(
+                {"id": "token", "scopes": "runs:read"},
+                plain_token="secret",
+                default_principal="operator",
+            )
+        lease = ExecutorLease("exec", "run", "qwen", "shared", token="secret")
+        self.assertEqual(lease.to_dict()["token"], "configured")
+        access = AccessManager(Mock(), default_principal="default")
+        self.assertEqual(
+            access.principal_from_headers({"x-forwarded-user": "remote"}),
+            "remote",
+        )
+        self.assertIsNone(access.authenticate_bearer("Bearer "))
+
     def test_task_projection_helper_edges(self) -> None:
         events = [
             RuntimeEvent("permission.requested", "run_1", 1, {"permission_id": "p1"}),
