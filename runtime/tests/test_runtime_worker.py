@@ -6,6 +6,7 @@ import time
 import unittest
 import urllib.parse
 import os
+import subprocess
 from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
@@ -191,6 +192,134 @@ class RemoteWorkerDaemonTest(unittest.TestCase):
                 )["events"]
                 messages = [event for event in events if event["type"] == "agent.message"]
                 self.assertEqual(len(messages), 2)
+
+    def test_remote_worker_completes_real_repository_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "projects" / "calculator"
+            repo.mkdir(parents=True)
+            (repo / "calculator.py").write_text(
+                "def add(left, right):\n    return left + right\n", encoding="utf-8"
+            )
+            (repo / "test_calculator.py").write_text(
+                "import unittest\n"
+                "from calculator import add\n\n"
+                "class CalculatorTest(unittest.TestCase):\n"
+                "    def test_add(self):\n"
+                "        self.assertEqual(add(2, 3), 5)\n\n"
+                "if __name__ == '__main__':\n"
+                "    unittest.main()\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repo),
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            initial_head = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            script = root / "fake-codex"
+            script.write_text(
+                "#!/bin/sh\n"
+                "cat > agent-request.json\n"
+                "printf 'def add(left, right):\\n    return left + right\\n\\n"
+                "def subtract(left, right):\\n    return left - right\\n' "
+                "> calculator.py\n"
+                "printf '# Calculator\\n\\nSupports add and subtract.\\n' > README.md\n"
+                "printf 'implemented calculator changes\\n'\n",
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+
+            with running_runtime(
+                artifact_root=root / "control", token="secret", worker_capacity=0
+            ) as base_url:
+                headers = {"authorization": "Bearer secret"}
+                request_json(
+                    f"{base_url}/v2/workers/mac-worker/heartbeat",
+                    method="POST",
+                    payload={"kind": "remote-worker", "adapters": ["codex"]},
+                    headers=headers,
+                )
+                goal = (
+                    "Add subtraction support to the calculator, update its README, "
+                    "preserve addition behavior, and run the full unit test suite."
+                )
+                task = request_json(
+                    f"{base_url}/v2/tasks",
+                    method="POST",
+                    payload={
+                        "goal": goal,
+                        "mode": "single",
+                        "adapter": "codex",
+                        "workspace": {
+                            "source_path": str(repo),
+                            "ref": "HEAD",
+                            "test_command": ["python3", "-m", "unittest", "-v"],
+                        },
+                    },
+                    headers=headers,
+                )
+                worker = RemoteWorkerDaemon(
+                    RemoteWorkerConfig(
+                        control_url=base_url,
+                        token="secret",
+                        worker_id="mac-worker",
+                        heartbeat_interval_seconds=0.02,
+                        artifact_root=root / "worker",
+                    )
+                )
+                with patch.dict(
+                    os.environ,
+                    {
+                        "V2_ENABLE_REAL_CLI_ADAPTERS": "1",
+                        "V2_CODEX_CLI_COMMAND": str(script),
+                        "V2_WORKSPACE_ROOTS": str(repo.parent),
+                    },
+                ):
+                    self.assertTrue(worker.run_once(wait=True))
+
+                completed = request_json(
+                    f"{base_url}/v2/tasks/{task['task_id']}", headers=headers
+                )
+                self.assertEqual(completed["status"], "completed")
+                self.assertEqual(completed["plan"]["agent_tasks"][0]["goal"], goal)
+                artifacts = request_json(
+                    f"{base_url}/v2/tasks/{task['task_id']}/artifacts", headers=headers
+                )["artifacts"]
+                by_name = {artifact["name"]: artifact for artifact in artifacts}
+                self.assertTrue(by_name["test_results"]["content"]["passed"])
+                self.assertIn("README.md", by_name["git_patch"]["content"]["text"])
+                self.assertTrue(by_name["git_commit"]["content"]["hash"])
+                self.assertEqual(
+                    subprocess.run(
+                        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    ).stdout.strip(),
+                    initial_head,
+                )
+                self.assertFalse((repo / "README.md").exists())
 
     def test_remote_worker_executes_v2_agent_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -376,7 +376,48 @@ Web 验收：
 4. 执行 Cancel，确认远程 worker 收到取消。
 5. 对异常 run 执行 Retry，确认回到队列。
 
-## 8. 监控建议
+## 8. 真实仓库生产验收
+
+当前唯一推荐的生产链路是“Docker Runtime + Mac 主机 Worker + NAS Git 仓库”。Runtime 不需要挂载项目目录，Worker 使用主机已有的 Agent CLI 凭据和 NAS 挂载。
+
+```bash
+cd /opt/agentflow  # macOS 按实际仓库路径替换
+export RUN_WORKER_CONTROL_URL=http://127.0.0.1:8765
+export RUN_WORKER_TOKEN="$(awk -F= '$1=="RUN_MANAGER_TOKEN"{print $2}' .env.local)"
+export RUN_WORKER_ID=mac-local-worker
+export RUN_WORKER_CAPACITY=1
+export RUN_WORKER_ARTIFACT_ROOT="$PWD/.aflow/worker-data"
+export V2_WORKER_ADAPTERS=qwen
+export V2_ENABLE_REAL_CLI_ADAPTERS=1
+export V2_QWEN_CODE_COMMAND=qwen
+export V2_WORKSPACE_ROOTS=/Volumes/AIProjects
+PYTHONPATH=runtime python3 -m cloud_agents_runtime.worker
+```
+
+多个允许根目录用 `:` 分隔。禁止配置 `/`、整个用户主目录或整个 NAS 根目录。
+
+在 Client 创建任务：
+
+- Mode：`Single`。
+- Adapter：只选择已经在 Mac 终端验证过的一个 CLI。
+- Repository path：例如 `/Volumes/AIProjects/example`。
+- Git ref：`HEAD` 或明确的 branch/commit。
+- Verification command：仓库已有测试命令，例如 `python3 -m unittest -v`。
+- Goal：一个真实缺陷，要求至少修改业务代码、测试或文档中的两个文件。
+
+Worker 校验路径 allowlist 后，从指定 ref 创建 `aflow/<task>/<agent>/attempt-N` 分支和独立 worktree。Agent 输出与验证输出进入 Task Chat。只有测试退出码为 0 且产生变更时才提交隔离分支，并登记 `test_results`、`git_patch` 和 `git_commit` artifacts。
+
+验收时确认：
+
+1. Task 为 `real-cli`，不是 `protocol-simulated`。
+2. Chat 刷新后仍能看到 Agent 和 `[verify]` 输出。
+3. patch 包含预期文件，测试结果 `passed=true`。
+4. commit hash 非空且位于 `aflow/*` 分支。
+5. 原仓库 HEAD、当前分支和工作目录均未改变。
+
+这条 Case 未通过前，只修复该链路，不新增执行后端、多 Agent、渠道或 HA 能力。
+
+## 9. 监控建议
 
 控制面需要外部监控，不要只依赖本机服务自检：
 
@@ -394,7 +435,7 @@ Web 验收：
 - qwen/node/python 进程 RSS。
 - systemd service restart count。
 
-## 9. 回滚与恢复
+## 10. 回滚与恢复
 
 控制面恢复顺序：
 

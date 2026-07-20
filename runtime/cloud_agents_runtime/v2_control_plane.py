@@ -130,6 +130,13 @@ class V2ControlPlane:
                 SUPPORTED_ADAPTERS,
                 "auto",
             )
+            workspace = normalize_workspace_contract(
+                payload.get("workspace") or payload.get("repo")
+            )
+            if workspace and requested_adapter in {"auto", "fake"}:
+                raise ValueError(
+                    "real repository tasks require an explicit real CLI adapter"
+                )
             project_id = str(payload.get("project_id") or "project_default")
             tenant_id = str(payload.get("tenant_id") or "tenant_default")
             title = summarize_goal(goal)
@@ -141,6 +148,8 @@ class V2ControlPlane:
             )
             adapter = str(dispatch["adapter"])
             metadata = dict(payload.get("metadata") or {})
+            if workspace:
+                metadata["workspace"] = workspace
             metadata.update(
                 {
                     "source": payload.get("source") or channel,
@@ -500,11 +509,7 @@ class V2ControlPlane:
                         "goal": agent["goal"],
                         "depends_on": agent["depends_on"],
                         "artifact_contract": agent["artifact_contract"],
-                        "workspace": {
-                            "strategy": "isolated-directory",
-                            "task_id": task_id,
-                            "agent_task_id": agent["agent_task_id"],
-                        },
+                        "workspace": self._workspace_contract_for_task(task_id),
                     }
                 }
             self._db.commit()
@@ -1567,26 +1572,26 @@ class V2ControlPlane:
                 (
                     "brain",
                     "Plan the work",
-                    "Clarify scope, risks, and execution order",
+                    f"Plan this user goal without changing files: {goal}",
                     [],
                 ),
                 (
                     "builder",
                     "Execute the work",
-                    "Produce the requested deliverable",
+                    f"Implement this user goal in the assigned workspace: {goal}",
                     ["brain"],
                 ),
                 (
                     "reviewer",
                     "Review and package",
-                    "Evaluate output and prepare summary",
+                    f"Review the implementation for this user goal and report gaps: {goal}",
                     ["builder"],
                 ),
             ]
         else:
             strategy = "single-agent-fast-path"
             agent_specs = [
-                ("agent", "Complete the task", "Finish the user goal directly", []),
+                ("agent", "Complete the task", goal, []),
             ]
         plan_id = f"plan_{uuid4().hex}"
         graph = {
@@ -1679,8 +1684,18 @@ class V2ControlPlane:
         }
 
     def _strategy_for(self, goal: str, mode: str) -> str:
+        if mode == "single":
+            return "single-agent-fast-path"
         complex_task = mode in {"multi-agent", "workflow"} or len(goal) > 160
         return "orchestrator-workers" if complex_task else "single-agent-fast-path"
+
+    def _workspace_contract_for_task(self, task_id: str) -> dict[str, Any]:
+        row = self._task_row(task_id)
+        metadata = json_loads(row["metadata_json"]) if row is not None else {}
+        workspace = metadata.get("workspace") if isinstance(metadata, dict) else None
+        if isinstance(workspace, dict):
+            return dict(workspace)
+        return {"strategy": "isolated-directory"}
 
     def _dispatch_decision(
         self,
@@ -3277,6 +3292,40 @@ def summarize_goal(goal: str) -> str:
 def normalize_choice(value: Any, allowed: set[str], default: str) -> str:
     choice = str(value or default).strip().lower()
     return choice if choice in allowed else default
+
+
+def normalize_workspace_contract(value: Any) -> dict[str, Any]:
+    if value is None or value == "":
+        return {}
+    if isinstance(value, str):
+        source_path = value.strip()
+        if not source_path:
+            return {}
+        return {
+            "strategy": "git-worktree",
+            "source_path": source_path,
+            "ref": "HEAD",
+            "require_changes": True,
+        }
+    if not isinstance(value, dict):
+        raise ValueError("workspace must be a path or object")
+    source_path = str(value.get("source_path") or value.get("path") or "").strip()
+    if not source_path:
+        raise ValueError("workspace.source_path is required")
+    test_command = value.get("test_command")
+    if test_command is not None and not isinstance(test_command, (str, list)):
+        raise ValueError("workspace.test_command must be a command string or argv list")
+    if isinstance(test_command, list) and not all(
+        isinstance(item, str) and item for item in test_command
+    ):
+        raise ValueError("workspace.test_command argv must contain non-empty strings")
+    return {
+        "strategy": "git-worktree",
+        "source_path": source_path,
+        "ref": str(value.get("ref") or "HEAD").strip(),
+        "test_command": test_command,
+        "require_changes": bool(value.get("require_changes", True)),
+    }
 
 
 def json_dumps(value: Any) -> str:

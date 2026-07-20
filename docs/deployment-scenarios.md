@@ -6,9 +6,9 @@
 
 | 场景 | 推荐用途 | 控制面与 Web | Agent 执行 | 结论 |
 | --- | --- | --- | --- | --- |
-| 本机电脑或 NAS | 首次上手、个人长期使用、家庭实验室 | 本机/NAS Docker | 当前可在同一 Runtime 容器执行 | **首选** |
+| 本机电脑或 NAS | 首次上手、个人长期使用、家庭实验室 | 本机/NAS Docker | Mac 主机 Worker 在隔离 worktree 执行 | **首选** |
 | 单台 VPS | 演示、低并发公网访问 | VPS Docker/systemd | 同机执行，2C2G 固定并发 1 | 可用但资源余量小 |
-| 本机/NAS + 云端 | 本地保存状态、云端提供公网入口或后续扩展 | 本机/NAS | 现阶段先同机执行；云 VPS 可做反代/隧道 | 进阶，需理解现行边界 |
+| 本机/NAS + 云端 | 本地保存状态、云端提供公网入口 | 本机/NAS | Mac Worker 执行；云 VPS 只做反代/隧道 | 推荐生产拓扑 |
 
 ## 2. 通用四级验收
 
@@ -93,7 +93,9 @@ PYTHONPATH=runtime python3 scripts/smoke_v2_control_plane.py \
 flowchart LR
   User["浏览器 / IM"] --> Edge["云 VPS / Tunnel 公网入口"]
   Edge --> VPN["Tailscale / WireGuard / Cloudflare Tunnel"]
-  VPN --> Runtime["本机或 NAS：Runtime + Web + 状态 + 同机 Agent"]
+  VPN --> Runtime["本机或 NAS：Runtime + Web + 状态"]
+  Runtime --> Worker["Mac Worker：Agent CLI + Git worktree + tests"]
+  Worker --> Projects["NAS：Git repositories + snapshots"]
 ```
 
 这样低配 VPS 只承担 TLS、域名和流量入口，状态与重计算留在本机/NAS。先验证：
@@ -103,16 +105,11 @@ flowchart LR
 - fake 与真实 Agent 均在本机/NAS完成；
 - 数据目录备份可恢复。
 
-### 现行跨机执行边界
+### 真实仓库执行边界
 
-当前产品 Task 路径（`/v2/tasks`）会选择 Execution Unit 并记录调度信息，但真实 CLI 子进程仍在 Runtime 所在环境启动。仓库中的 Remote Worker lease/heartbeat 链路主要服务 Runtime Run API；它尚不能被视为“V2 Task 已在另一台云主机端到端执行”的生产证明。
+V2 Remote Worker 已支持 Task 领取、实时事件、artifact、取消、租约重试和独立 workspace。真实代码任务必须额外提交 `workspace.source_path`、`ref` 和验证命令；Mac Worker 会校验 `V2_WORKSPACE_ROOTS`，从指定 ref 创建独立 `aflow/*` 分支和 Git worktree，验证成功后回传测试、patch 和 commit。源检出目录不会被直接修改。
 
-因此目前不要仅凭 Admin 中注册了云 Execution Unit，就宣称已完成分布式执行。生产化的本机控制面 + 云端 V2 Agent worker 还需要补齐并验证：任务领取协议、workspace/secret 下发、事件与 artifact 回传、取消/重试、断线恢复和版本兼容。
-
-在这之前有两个安全选择：
-
-1. 云端只做公网入口，真实 Agent 留在本机/NAS；这是当前推荐方案。
-2. 将整套 Runtime 部署到云端，让 Agent 与控制面同机；这是单 VPS 方案，不属于真正分布式执行。
+当前默认只走 Single Agent 真实仓库链路。不要把自动多 Agent、云端重型执行或多控制面 HA 加入首个生产 Case。完整命令见[本地电脑或 NAS 作为 aflow 主控的部署教程](implementation/local-nas-control-plane-deployment.md)。
 
 ## 6. 发布门禁
 

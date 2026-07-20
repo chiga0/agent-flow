@@ -110,9 +110,12 @@ export function ProductClientPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [goal, setGoal] = useState("");
-  const [mode, setMode] = useState("auto");
+  const [mode, setMode] = useState("single");
   const [channel, setChannel] = useState("web");
   const [adapter, setAdapter] = useState("auto");
+  const [workspacePath, setWorkspacePath] = useState("");
+  const [workspaceRef, setWorkspaceRef] = useState("HEAD");
+  const [testCommand, setTestCommand] = useState("");
   const tasks = useQuery({
     queryKey: ["v2", "tasks"],
     queryFn: runtimeApi.v2Tasks,
@@ -145,6 +148,9 @@ export function ProductClientPage() {
   const availableAdapters = Array.from(
     new Set(units.flatMap((unit) => unit.adapters)),
   );
+  const repositoryTaskReady =
+    !workspacePath.trim() ||
+    (adapter !== "auto" && adapter !== "fake" && Boolean(testCommand.trim()));
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -156,6 +162,16 @@ export function ProductClientPage() {
       mode,
       channel,
       adapter,
+      ...(workspacePath.trim()
+        ? {
+            workspace: {
+              source_path: workspacePath.trim(),
+              ref: workspaceRef.trim() || "HEAD",
+              test_command: testCommand.trim() || undefined,
+              require_changes: true,
+            },
+          }
+        : {}),
       metadata: { product_surface: "client" },
     });
   };
@@ -195,7 +211,7 @@ export function ProductClientPage() {
               </div>
             </div>
             <Button
-              disabled={createTask.isPending || !goal.trim()}
+              disabled={createTask.isPending || !goal.trim() || !repositoryTaskReady}
               type="submit"
               variant="primary"
             >
@@ -212,6 +228,43 @@ export function ProductClientPage() {
               onChange={(event) => setGoal(event.target.value)}
             />
           </Field>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Repository path (optional)">
+              <Input
+                placeholder="/Volumes/NAS/projects/my-repo"
+                value={workspacePath}
+                onChange={(event) => setWorkspacePath(event.target.value)}
+              />
+            </Field>
+            <Field label="Git ref">
+              <Input
+                placeholder="HEAD"
+                value={workspaceRef}
+                onChange={(event) => setWorkspaceRef(event.target.value)}
+              />
+            </Field>
+          </div>
+
+          <Field label="Verification command (required for repository tasks)">
+            <Input
+              placeholder="npm test"
+              value={testCommand}
+              onChange={(event) => setTestCommand(event.target.value)}
+            />
+          </Field>
+          {workspacePath.trim() && !repositoryTaskReady ? (
+            <div className="text-sm text-destructive">
+              Repository tasks require a real Agent CLI and a verification command.
+            </div>
+          ) : null}
+          {createTask.isError ? (
+            <div className="text-sm text-destructive">
+              {createTask.error instanceof Error
+                ? createTask.error.message
+                : "Task creation failed"}
+            </div>
+          ) : null}
 
           <div className="flex flex-wrap gap-2">
             {taskTemplates.map((template) => (

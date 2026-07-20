@@ -59,6 +59,25 @@ https://<你的域名>/cloud-agents/#/admin
 
 fake 任务通过后，再尝试 `qwen` 或其他真实 adapter。真实 adapter 依赖 CLI 命令、模型配置、机器资源、workspace 隔离和权限策略，排障复杂度明显更高。
 
+### 真实仓库任务
+
+真实代码任务不要让 Runtime 容器直接访问整个 NAS。保持 Runtime 运行，再在 Mac 主机启动容量为 1 的 Worker，并只允许项目根目录：
+
+```bash
+export RUN_WORKER_CONTROL_URL=http://127.0.0.1:8765
+export RUN_WORKER_TOKEN="$(awk -F= '$1=="RUN_MANAGER_TOKEN"{print $2}' .env.local)"
+export RUN_WORKER_ID=mac-local-worker
+export RUN_WORKER_CAPACITY=1
+export RUN_WORKER_ARTIFACT_ROOT="$PWD/.aflow/worker-data"
+export V2_WORKER_ADAPTERS=qwen
+export V2_ENABLE_REAL_CLI_ADAPTERS=1
+export V2_QWEN_CODE_COMMAND=qwen
+export V2_WORKSPACE_ROOTS=/Volumes/AIProjects
+PYTHONPATH=runtime python3 -m cloud_agents_runtime.worker
+```
+
+Client 中选择 `Single` 和对应 Agent，填写 Repository path、Git ref 和项目原有测试命令。Worker 会创建独立 `aflow/*` 分支和 worktree；成功标准是 Chat 有实时输出，Artifacts 同时存在测试结果、patch 和 commit，且源检出目录没有变化。不要在这条链路通过前启用多 Agent 或 HA。
+
 ## 3. 真实 Agent 验证顺序
 
 建议按这个顺序逐步打开能力：

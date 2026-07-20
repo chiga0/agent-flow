@@ -8,7 +8,7 @@ aflow 当前最推荐的部署形态是：先在本机或 NAS 用 Docker Compose
 | --- | --- | --- |
 | 本机/NAS 一体化 | 最推荐 | `make local-up && make local-demo`，依赖最少、反馈最快 |
 | GitHub Actions + VPS | 演示/低并发 | push main 后测试、构建、部署；依赖稳定 SSH 和公网资源 |
-| 本机/NAS + 云端 | 进阶 | 当前优先让云端承担公网入口；跨机 V2 Agent 执行仍需额外集成验证 |
+| 本机/NAS + 云端 | 推荐 | 云端只承担公网入口；Mac Worker 在 NAS 仓库的隔离 worktree 中执行 |
 
 如果你只有一台 2C2G VPS，可以先跑通，但不要期待它同时承载 qwen、构建、多个 run 和公网管理台都很稳定。正式使用建议至少把 worker 拆出去，或者把控制面放到更稳定的机器。
 
@@ -118,7 +118,7 @@ http://<RUNTIME_PUBLIC_HOST>/cloud-agents/
 - 本地电脑/NAS/大 VPS：aflow Runtime + Web + SQLite/artifact。
 - 小 VPS：公网 Nginx、TLS、Tunnel 或私网边缘。
 
-现行 `/v2/tasks` 的真实 CLI 仍在 Runtime 所在环境启动。Remote Worker 链路不能直接作为“云端已经执行 V2 Task”的证明；完整边界与验收证据见[场景化部署与验收](deployment-scenarios.md)。
+现行 `/v2/tasks` 可由 Mac Remote Worker 领取，并在 `V2_WORKSPACE_ROOTS` 允许的真实仓库上创建隔离 worktree，回传实时事件、测试结果、patch 和 commit。完整边界与验收证据见[场景化部署与验收](deployment-scenarios.md)。
 
 完整教程见：[本地电脑或 NAS 作为 aflow 主控的部署教程](implementation/local-nas-control-plane-deployment.md)。
 
@@ -129,7 +129,7 @@ http://<RUNTIME_PUBLIC_HOST>/cloud-agents/
 - 控制面负责状态、审计、Web、队列。
 - 云端入口不保存 Runtime master token，也不能绕过登录。
 - Runtime 端口只通过防火墙、VPN 或 Tunnel 暴露。
-- 真正的跨机 V2 worker 上线前必须验证领取、事件、artifact、取消和断线恢复。
+- 上线前必须用目标仓库验证领取、worktree 隔离、事件、测试、patch/commit、取消和断线恢复。
 
 ## 纯本地开发
 

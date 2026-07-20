@@ -199,6 +199,42 @@ class V2ControlPlaneTest(unittest.TestCase):
             ["brain", "builder", "reviewer"],
         )
 
+    def test_single_repository_task_preserves_goal_and_workspace_contract(self):
+        control = V2ControlPlane(self.tmp_path())
+        control._db.execute("DELETE FROM v2_execution_units")
+        control._db.commit()
+        control.heartbeat_execution_worker("mac-worker", {"adapters": ["codex"]})
+        goal = "Implement and verify a bounded repository change. " * 6
+        workspace = {
+            "source_path": "/Volumes/AIProjects/example",
+            "ref": "main",
+            "test_command": ["python3", "-m", "unittest"],
+        }
+
+        task = control.create_task(
+            {
+                "goal": goal,
+                "mode": "single",
+                "adapter": "codex",
+                "workspace": workspace,
+            },
+            principal="user_1",
+        )
+        claim = control.claim_remote_agent_task(
+            "mac-worker", {"adapters": ["codex"]}
+        )["assignment"]
+
+        assert claim is not None
+        self.assertEqual(task["plan"]["strategy"], "single-agent-fast-path")
+        self.assertEqual(claim["goal"], goal.strip())
+        self.assertEqual(claim["workspace"]["source_path"], workspace["source_path"])
+        self.assertEqual(claim["workspace"]["test_command"], workspace["test_command"])
+        with self.assertRaisesRegex(ValueError, "explicit real CLI adapter"):
+            control.create_task(
+                {"goal": "unsafe default", "workspace": workspace},
+                principal="user_1",
+            )
+
     def test_dispatch_selects_requested_adapter_unit_and_channel(self):
         control = V2ControlPlane(self.tmp_path())
 

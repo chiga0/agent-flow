@@ -389,7 +389,7 @@ class RemoteWorkerDaemon:
         adapter = str(assignment.get("adapter") or "fake")
         protocol = "internal" if adapter == "fake" else "ACP/A2A"
         workspace = self._agent_workspace(assignment)
-        workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
+        workspace_manifest: dict[str, Any] = {}
         heartbeat_stop = threading.Event()
         heartbeat = threading.Thread(
             target=self._v2_heartbeat_loop,
@@ -399,6 +399,16 @@ class RemoteWorkerDaemon:
         )
         heartbeat.start()
         try:
+            workspace, workspace_manifest = self._prepare_agent_workspace(assignment)
+            self.client.v2_agent_event(
+                self.config.worker_id,
+                agent_task_id,
+                {
+                    "lease_token": lease_token,
+                    "type": "workspace.prepared",
+                    "payload": workspace_manifest,
+                },
+            )
             envelope = {
                 "protocol": "agentflow-v2-acp-a2a",
                 "protocol_version": "2026-07",
@@ -410,6 +420,7 @@ class RemoteWorkerDaemon:
                 "context": {
                     "depends_on": assignment.get("depends_on") or [],
                     "artifact_contract": assignment.get("artifact_contract") or {},
+                    "workspace": workspace_manifest,
                 },
             }
             if adapter == "fake":
@@ -425,6 +436,29 @@ class RemoteWorkerDaemon:
                 )
             if context.cancelled.is_set():
                 raise RuntimeError("cancelled by control plane")
+            verification = self._run_workspace_verification(context, workspace)
+            delivery = self._finalize_git_workspace(assignment, workspace)
+            artifacts = [
+                {
+                    "name": "worker_execution",
+                    "kind": "metadata",
+                    "content": {
+                        **workspace_manifest,
+                        "attempt": assignment.get("attempt"),
+                    },
+                }
+            ]
+            if verification:
+                artifacts.append(
+                    {"name": "test_results", "kind": "test", "content": verification}
+                )
+            if delivery:
+                artifacts.extend(
+                    [
+                        {"name": "git_patch", "kind": "patch", "content": delivery["patch"]},
+                        {"name": "git_commit", "kind": "git", "content": delivery["commit"]},
+                    ]
+                )
             self.client.v2_finish_agent(
                 self.config.worker_id,
                 agent_task_id,
@@ -435,16 +469,7 @@ class RemoteWorkerDaemon:
                     "protocol": protocol,
                     "execution_mode": execution_mode,
                     "exit_code": exit_code,
-                    "artifacts": [
-                        {
-                            "name": "worker_execution",
-                            "kind": "metadata",
-                            "content": {
-                                "workspace": str(workspace),
-                                "attempt": assignment.get("attempt"),
-                            },
-                        }
-                    ],
+                    "artifacts": artifacts,
                 },
             )
         except Exception as exc:  # noqa: BLE001 - report execution failures
@@ -584,7 +609,167 @@ class RemoteWorkerDaemon:
         root = self.config.artifact_root or Path(".aflow-worker")
         task_id = safe_path_segment(str(assignment["task_id"]))
         agent_task_id = safe_path_segment(str(assignment["agent_task_id"]))
-        return root.resolve() / "v2" / task_id / agent_task_id
+        attempt = max(1, int(assignment.get("attempt") or 1))
+        return root.resolve() / "v2" / task_id / agent_task_id / f"attempt-{attempt}"
+
+    def _prepare_agent_workspace(
+        self, assignment: dict[str, Any]
+    ) -> tuple[Path, dict[str, Any]]:
+        destination = self._agent_workspace(assignment)
+        contract = assignment.get("workspace")
+        if not isinstance(contract, dict) or not contract.get("source_path"):
+            destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+            return destination, {
+                "strategy": "isolated-directory",
+                "path": str(destination),
+            }
+
+        source = Path(str(contract["source_path"])).expanduser().resolve()
+        allowed_roots = workspace_roots_from_env()
+        if not allowed_roots:
+            raise RuntimeError(
+                "V2_WORKSPACE_ROOTS must allow the requested repository root"
+            )
+        if not any(path_is_within(source, root) for root in allowed_roots):
+            raise PermissionError(f"workspace source is outside V2_WORKSPACE_ROOTS: {source}")
+        if not source.is_dir():
+            raise ValueError(f"workspace source is not a directory: {source}")
+        git_head = git_worker_output(source, "rev-parse", str(contract.get("ref") or "HEAD"))
+        git_worker_output(source, "rev-parse", "--is-inside-work-tree")
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if destination.exists():
+            raise RuntimeError(f"workspace already exists: {destination}")
+        branch = workspace_branch_name(assignment)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(source),
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                str(destination),
+                git_head,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return destination, {
+            "strategy": "git-worktree",
+            "path": str(destination),
+            "source_path": str(source),
+            "ref": str(contract.get("ref") or "HEAD"),
+            "base_commit": git_head,
+            "branch": branch,
+        }
+
+    def _run_workspace_verification(
+        self, context: ActiveAgentContext, workspace: Path
+    ) -> dict[str, Any]:
+        contract = context.assignment.get("workspace")
+        command_value = contract.get("test_command") if isinstance(contract, dict) else None
+        if not command_value:
+            return {}
+        command = command_value if isinstance(command_value, list) else shlex.split(command_value)
+        if not command:
+            raise ValueError("workspace test command is empty")
+        timeout = max(1, int(os.environ.get("V2_WORKSPACE_TEST_TIMEOUT_SECONDS") or 1800))
+        completed = subprocess.run(
+            command,
+            cwd=workspace,
+            env=self._sanitized_worker_env(),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        output = (completed.stdout + completed.stderr).strip()
+        for line in output.splitlines()[-200:]:
+            self.client.v2_agent_event(
+                self.config.worker_id,
+                str(context.assignment["agent_task_id"]),
+                {
+                    "lease_token": context.assignment["lease_token"],
+                    "type": "agent.message",
+                    "payload": {
+                        "message": f"[verify] {line[:760]}",
+                        "execution_mode": "workspace-verification",
+                        "partial": True,
+                    },
+                },
+            )
+        result = {
+            "command": command,
+            "exit_code": completed.returncode,
+            "output": output[-20000:],
+            "passed": completed.returncode == 0,
+        }
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"workspace verification failed with code {completed.returncode}: {output[-800:]}"
+            )
+        return result
+
+    def _finalize_git_workspace(
+        self, assignment: dict[str, Any], workspace: Path
+    ) -> dict[str, dict[str, Any]]:
+        contract = assignment.get("workspace")
+        if not isinstance(contract, dict) or not contract.get("source_path"):
+            return {}
+        status = git_worker_output(workspace, "status", "--short")
+        subprocess.run(
+            ["git", "-C", str(workspace), "add", "-A"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        patch = git_worker_output(workspace, "diff", "--cached", "--binary")
+        if not patch and contract.get("require_changes", True):
+            raise RuntimeError("agent completed without producing repository changes")
+        commit_hash = ""
+        if patch:
+            message = f"aflow: {str(assignment.get('goal') or 'agent task')[:72]}"
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(workspace),
+                    "-c",
+                    "user.name=aflow",
+                    "-c",
+                    "user.email=aflow@localhost",
+                    "commit",
+                    "-m",
+                    message,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            commit_hash = git_worker_output(workspace, "rev-parse", "HEAD")
+        max_patch_bytes = max(1024, int(os.environ.get("V2_MAX_PATCH_BYTES") or 1048576))
+        encoded = patch.encode("utf-8")
+        truncated = len(encoded) > max_patch_bytes
+        if truncated:
+            patch = encoded[:max_patch_bytes].decode("utf-8", errors="replace")
+        return {
+            "patch": {
+                "text": patch,
+                "bytes": len(encoded),
+                "truncated": truncated,
+                "status_before_commit": status,
+            },
+            "commit": {
+                "hash": commit_hash,
+                "branch": workspace_branch_name(assignment),
+                "base_commit": git_worker_output(workspace, "rev-parse", "HEAD^")
+                if commit_hash
+                else git_worker_output(workspace, "rev-parse", "HEAD"),
+                "workspace": str(workspace),
+            },
+        }
 
     def _sanitized_worker_env(self) -> dict[str, str]:
         allowed_prefixes = ("V2_", "QWEN_", "CODEX_", "ANTHROPIC_", "OPENAI_", "OPENCODE_")
@@ -813,6 +998,40 @@ def safe_path_segment(value: str) -> str:
     if not value or value in {".", ".."} or Path(value).name != value:
         raise ValueError("identifier is not a safe path segment")
     return value
+
+
+def workspace_roots_from_env() -> list[Path]:
+    raw = os.environ.get("V2_WORKSPACE_ROOTS") or ""
+    return [
+        Path(item.strip()).expanduser().resolve()
+        for item in raw.split(os.pathsep)
+        if item.strip()
+    ]
+
+
+def path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def workspace_branch_name(assignment: dict[str, Any]) -> str:
+    task_id = safe_path_segment(str(assignment["task_id"]))
+    agent_task_id = safe_path_segment(str(assignment["agent_task_id"]))
+    attempt = max(1, int(assignment.get("attempt") or 1))
+    return f"aflow/{task_id}/{agent_task_id}/attempt-{attempt}"
+
+
+def git_worker_output(path: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(path), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
 
 
 def quote_path(value: str) -> str:
