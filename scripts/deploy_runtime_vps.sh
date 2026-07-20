@@ -83,6 +83,7 @@ DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS="${DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS:-30}"
 DEPLOY_SCP_ATTEMPTS="${DEPLOY_SCP_ATTEMPTS:-4}"
 DEPLOY_SCP_RETRY_DELAY_SECONDS="${DEPLOY_SCP_RETRY_DELAY_SECONDS:-10}"
 DEPLOY_COMMAND_TIMEOUT_SECONDS="${DEPLOY_COMMAND_TIMEOUT_SECONDS:-900}"
+DEPLOY_NPM_INSTALL_TIMEOUT_SECONDS="${DEPLOY_NPM_INSTALL_TIMEOUT_SECONDS:-300}"
 DEPLOY_DOCKER_BUILD_TIMEOUT_SECONDS="${DEPLOY_DOCKER_BUILD_TIMEOUT_SECONDS:-1800}"
 DEPLOY_RUNTIME_PRINT_SECRETS="${DEPLOY_RUNTIME_PRINT_SECRETS:-1}"
 
@@ -227,6 +228,9 @@ append_remote_env QWEN_CONTAINER_NODE_PACKAGE "$QWEN_CONTAINER_NODE_PACKAGE"
 append_remote_env DEPLOY_RUNTIME_PRINT_SECRETS "$DEPLOY_RUNTIME_PRINT_SECRETS"
 append_remote_env BASIC_AUTH_FORCE_ROTATE "$BASIC_AUTH_FORCE_ROTATE"
 append_remote_env DEPLOY_COMMAND_TIMEOUT_SECONDS "$DEPLOY_COMMAND_TIMEOUT_SECONDS"
+append_remote_env \
+  DEPLOY_NPM_INSTALL_TIMEOUT_SECONDS \
+  "$DEPLOY_NPM_INSTALL_TIMEOUT_SECONDS"
 append_remote_env DEPLOY_DOCKER_BUILD_TIMEOUT_SECONDS "$DEPLOY_DOCKER_BUILD_TIMEOUT_SECONDS"
 
 ssh_cmd "${REMOTE_ENV[*]} bash -s" <<'REMOTE'
@@ -243,7 +247,7 @@ run_timeout() {
   local timeout_seconds="$2"
   shift 2
   log_step "$label"
-  timeout "$timeout_seconds" "$@"
+  timeout --kill-after=30s "$timeout_seconds" "$@"
 }
 
 node_package_name() {
@@ -256,28 +260,78 @@ node_package_name() {
   printf '%s\n' "$package"
 }
 
-remove_qwen_npm_staging_dirs() {
+node_package_version() {
+  local package="$1"
+  local package_name="$2"
+  if [[ "$package" == "$package_name" ]]; then
+    return 0
+  fi
+  printf '%s\n' "${package#"$package_name"@}"
+}
+
+installed_node_package_version() {
+  local package_name="$1"
   local npm_root=""
+  local manifest=""
   npm_root="$(npm root -g 2>/dev/null || true)"
-  if [[ -n "$npm_root" && -d "$npm_root/@qwen-code" ]]; then
-    find "$npm_root/@qwen-code" \
+  manifest="$npm_root/$package_name/package.json"
+  if [[ -z "$npm_root" || ! -f "$manifest" ]]; then
+    return 0
+  fi
+  node -e '
+    const fs = require("fs");
+    const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(String(manifest.version || ""));
+  ' "$manifest" 2>/dev/null || true
+}
+
+remove_npm_staging_dirs() {
+  local package_name="$1"
+  local npm_root=""
+  local package_parent=""
+  local package_basename=""
+  npm_root="$(npm root -g 2>/dev/null || true)"
+  package_parent="$npm_root/$(dirname "$package_name")"
+  package_basename="$(basename "$package_name")"
+  if [[ -n "$npm_root" && -d "$package_parent" ]]; then
+    find "$package_parent" \
       -maxdepth 1 \
       -type d \
-      -name '.qwen-code-*' \
+      -name ".$package_basename-*" \
       -exec rm -rf {} +
   fi
 }
 
 install_node_package() {
   local package="$1"
+  local executable="$2"
   local package_name=""
+  local requested_version=""
+  local installed_version=""
   local attempt=1
   local exit_code=0
   package_name="$(node_package_name "$package")"
+  if ! [[ "$package_name" =~ ^(@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+$ ]]; then
+    echo "invalid npm package name: $package_name" >&2
+    return 2
+  fi
+  requested_version="$(node_package_version "$package" "$package_name")"
+  installed_version="$(installed_node_package_version "$package_name")"
+  if [[ "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9._-]+)?$ \
+    && "$installed_version" == "$requested_version" \
+    && -n "$(command -v "$executable" 2>/dev/null || true)" ]]; then
+    log_step "node package $package_name@$installed_version already installed"
+    return 0
+  fi
   while (( attempt <= 3 )); do
     if run_timeout \
       "install node package $package attempt $attempt/3" \
-      "$DEPLOY_COMMAND_TIMEOUT_SECONDS" \
+      "$DEPLOY_NPM_INSTALL_TIMEOUT_SECONDS" \
+      env \
+      npm_config_fetch_retries=2 \
+      npm_config_fetch_timeout=120000 \
+      npm_config_fetch_retry_mintimeout=10000 \
+      npm_config_fetch_retry_maxtimeout=60000 \
       npm install -g "$package"; then
       return 0
     fi
@@ -286,9 +340,15 @@ install_node_package() {
       return "$exit_code"
     fi
     log_step "clean npm install state for $package_name"
-    remove_qwen_npm_staging_dirs
-    npm uninstall -g "$package_name" || true
-    npm cache verify || true
+    remove_npm_staging_dirs "$package_name"
+    run_timeout \
+      "uninstall partial node package $package_name" \
+      "$DEPLOY_NPM_INSTALL_TIMEOUT_SECONDS" \
+      npm uninstall -g "$package_name" || true
+    run_timeout \
+      "verify npm cache" \
+      "$DEPLOY_NPM_INSTALL_TIMEOUT_SECONDS" \
+      npm cache verify || true
     attempt=$((attempt + 1))
   done
 }
@@ -304,8 +364,8 @@ if ! command -v git >/dev/null \
     apt-get install -y git python3 npm nginx
 fi
 
-install_node_package "$NODE_PACKAGE"
-install_node_package "$CODEX_NODE_PACKAGE"
+install_node_package "$NODE_PACKAGE" qwen
+install_node_package "$CODEX_NODE_PACKAGE" codex
 QWEN_BIN="$(command -v qwen || true)"
 if [[ -z "$QWEN_BIN" ]]; then
   echo "qwen executable was not found after installing $NODE_PACKAGE" >&2
