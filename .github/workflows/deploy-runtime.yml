@@ -57,6 +57,11 @@ on:
         required: false
         default: false
         type: boolean
+      qwen_validate_repository:
+        description: "Run the real Qwen repository delivery acceptance"
+        required: false
+        default: false
+        type: boolean
       qwen_mission_task_count:
         description: "Number of lightweight qwen mission tasks when mission acceptance is enabled"
         required: false
@@ -71,6 +76,11 @@ on:
         description: "qwen acceptance timeout in seconds"
         required: false
         default: "600"
+        type: string
+      qwen_repository_timeout:
+        description: "real repository acceptance timeout in seconds"
+        required: false
+        default: "900"
         type: string
 
 permissions:
@@ -400,6 +410,66 @@ jobs:
             # historical executor commands can contain inline ephemeral tokens.
           fi
           exit "$acceptance_status"
+          REMOTE
+
+      - name: Qwen real repository acceptance on VPS
+        if: github.event_name == 'workflow_dispatch' && inputs.qwen_validate_repository
+        env:
+          RUNTIME_SSH_TARGET: ${{ secrets.RUNTIME_SSH_TARGET }}
+          APP_DIR: ${{ vars.RUNTIME_APP_DIR }}
+          QWEN_REPOSITORY_TIMEOUT: ${{ inputs.qwen_repository_timeout }}
+        run: |
+          set -euo pipefail
+          APP_DIR="${APP_DIR:-/opt/agentflow}"
+          ssh -i "$RUNNER_TEMP/runtime-deploy/ssh_key" \
+            -o StrictHostKeyChecking=accept-new \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            "$RUNTIME_SSH_TARGET" \
+            "APP_DIR='$APP_DIR' QWEN_REPOSITORY_TIMEOUT='$QWEN_REPOSITORY_TIMEOUT' bash -s" \
+            <<'REMOTE'
+          set -euo pipefail
+          if ! [[ "$QWEN_REPOSITORY_TIMEOUT" =~ ^[0-9]+$ ]] \
+            || (( QWEN_REPOSITORY_TIMEOUT < 60 )); then
+            echo "invalid qwen repository timeout: $QWEN_REPOSITORY_TIMEOUT"
+            exit 1
+          fi
+          RUN_MANAGER_TOKEN="$(
+            awk -F= '$1 == "RUN_MANAGER_TOKEN" {print $2}' /etc/cloud-agents-runtime.env
+          )"
+          STATE_DIR="$(
+            awk -F= '$1 == "RUN_MANAGER_ARTIFACT_ROOT" {print $2}' \
+              /etc/cloud-agents-runtime.env
+          )"
+          STATE_DIR="${STATE_DIR%/artifacts}"
+          CASE_PARENT="$STATE_DIR/repository-acceptance"
+          install -d -m 700 -o cloudagents -g cloudagents "$CASE_PARENT"
+          CASE_ROOT="$(mktemp -d "$CASE_PARENT/aflow-v2-repository-acceptance.XXXXXX")"
+          chown cloudagents:cloudagents "$CASE_ROOT"
+          WORKER_ID="repository-acceptance-$(date +%s)-$$"
+          hard_timeout="$((QWEN_REPOSITORY_TIMEOUT + 120))"
+          QWEN_COMMAND="qwen --yolo --max-wall-time ${QWEN_REPOSITORY_TIMEOUT}s"
+          QWEN_COMMAND="$QWEN_COMMAND --max-session-turns 30 --max-tool-calls 80"
+          cd "$APP_DIR"
+          echo "starting real repository acceptance with timeout=${QWEN_REPOSITORY_TIMEOUT}s"
+          timeout --kill-after=30s "${hard_timeout}s" \
+            runuser -u cloudagents -- env \
+              HOME=/home/cloudagents \
+              PATH="$PATH" \
+              PYTHONPATH="$APP_DIR" \
+              RUN_MANAGER_TOKEN="$RUN_MANAGER_TOKEN" \
+              V2_ENABLE_REAL_CLI_ADAPTERS=1 \
+              V2_WORKER_ADAPTERS=qwen \
+              V2_WORKSPACE_ROOTS="$CASE_ROOT" \
+              V2_AGENT_TIMEOUT_SECONDS="$QWEN_REPOSITORY_TIMEOUT" \
+              V2_WORKSPACE_TEST_TIMEOUT_SECONDS=300 \
+              V2_QWEN_CODE_COMMAND="$QWEN_COMMAND" \
+              QWEN_CODE_SUPPRESS_YOLO_WARNING=1 \
+              python3 -u scripts/validate_v2_repository_case.py \
+                --base-url http://127.0.0.1:8765 \
+                --work-root "$CASE_ROOT" \
+                --worker-id "$WORKER_ID" \
+                --timeout "$QWEN_REPOSITORY_TIMEOUT"
           REMOTE
 
       - name: Verify deployed revision
