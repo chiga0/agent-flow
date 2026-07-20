@@ -37,6 +37,7 @@ import {
   Field,
   Input,
   Metric,
+  Select,
   StatusBadge,
   Textarea,
 } from "./components/ui";
@@ -116,6 +117,7 @@ export function ProductClientPage() {
   const [workspacePath, setWorkspacePath] = useState("");
   const [workspaceRef, setWorkspaceRef] = useState("HEAD");
   const [testCommand, setTestCommand] = useState("");
+  const [executionUnitId, setExecutionUnitId] = useState("");
   const tasks = useQuery({
     queryKey: ["v2", "tasks"],
     queryFn: runtimeApi.v2Tasks,
@@ -148,9 +150,28 @@ export function ProductClientPage() {
   const availableAdapters = Array.from(
     new Set(units.flatMap((unit) => unit.adapters)),
   );
+  const repositoryUnits = units.filter(
+    (unit) =>
+      unit.status === "active" &&
+      unit.kind === "remote-worker" &&
+      adapter !== "auto" &&
+      adapter !== "fake" &&
+      unit.adapters.includes(adapter),
+  );
+  const selectedExecutionUnitId = repositoryUnits.some(
+    (unit) => unit.unit_id === executionUnitId,
+  )
+    ? executionUnitId
+    : repositoryUnits.length === 1
+      ? repositoryUnits[0].unit_id
+      : "";
   const repositoryTaskReady =
     !workspacePath.trim() ||
-    (adapter !== "auto" && adapter !== "fake" && Boolean(testCommand.trim()));
+    (mode === "single" &&
+      adapter !== "auto" &&
+      adapter !== "fake" &&
+      Boolean(selectedExecutionUnitId) &&
+      Boolean(testCommand.trim()));
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -165,6 +186,7 @@ export function ProductClientPage() {
       ...(workspacePath.trim()
         ? {
             workspace: {
+              execution_unit_id: selectedExecutionUnitId,
               source_path: workspacePath.trim(),
               ref: workspaceRef.trim() || "HEAD",
               test_command: testCommand.trim() || undefined,
@@ -253,9 +275,25 @@ export function ProductClientPage() {
               onChange={(event) => setTestCommand(event.target.value)}
             />
           </Field>
+          {workspacePath.trim() ? (
+            <Field label="Execution unit (required for repository tasks)">
+              <Select
+                value={selectedExecutionUnitId}
+                onChange={(event) => setExecutionUnitId(event.target.value)}
+              >
+                <option value="">Select the Mac/NAS worker</option>
+                {repositoryUnits.map((unit) => (
+                  <option key={unit.unit_id} value={unit.unit_id}>
+                    {unit.unit_id}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          ) : null}
           {workspacePath.trim() && !repositoryTaskReady ? (
             <div className="text-sm text-destructive">
-              Repository tasks require a real Agent CLI and a verification command.
+              Repository tasks require Single mode, a matching Mac/NAS worker, a real
+              Agent CLI, and a verification command.
             </div>
           ) : null}
           {createTask.isError ? (

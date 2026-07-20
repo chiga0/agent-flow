@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import codecs
+from collections import deque
 import json
 import os
+import queue
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import threading
@@ -52,6 +56,15 @@ class ActiveAgentContext:
     process: subprocess.Popen[str] | None = None
     cancelled: threading.Event = field(default_factory=threading.Event)
     applied_permissions: set[str] = field(default_factory=set)
+
+
+class WorkspaceVerificationError(RuntimeError):
+    def __init__(self, result: dict[str, Any]):
+        self.result = result
+        super().__init__(
+            f"workspace verification failed with code {result['exit_code']}: "
+            f"{str(result.get('output') or '')[-800:]}"
+        )
 
 
 class ControlPlaneClient:
@@ -326,6 +339,7 @@ class RemoteWorkerDaemon:
         self._active: list[threading.Thread] = []
         self._active_lock = threading.Lock()
         self._active_agents: dict[str, ActiveAgentContext] = {}
+        self._last_v2_cleanup = 0.0
 
     def stop(self) -> None:
         self._stop.set()
@@ -343,6 +357,7 @@ class RemoteWorkerDaemon:
 
     def claim_once(self) -> threading.Thread | None:
         self._reap_finished()
+        self._cleanup_expired_v2_workspaces()
         if self._active_count() >= self.config.capacity:
             self.client.heartbeat(self.config.worker_id, self._worker_payload())
             return None
@@ -473,6 +488,11 @@ class RemoteWorkerDaemon:
                 },
             )
         except Exception as exc:  # noqa: BLE001 - report execution failures
+            artifacts = []
+            if isinstance(exc, WorkspaceVerificationError):
+                artifacts.append(
+                    {"name": "test_results", "kind": "test", "content": exc.result}
+                )
             try:
                 self.client.v2_finish_agent(
                     self.config.worker_id,
@@ -482,6 +502,8 @@ class RemoteWorkerDaemon:
                         "lease_token": lease_token,
                         "error": str(exc),
                         "retryable": not context.cancelled.is_set(),
+                        "artifacts": artifacts,
+                        "workspace": workspace_manifest,
                     },
                 )
             except Exception:
@@ -514,6 +536,12 @@ class RemoteWorkerDaemon:
         command = shlex.split(os.environ.get(command_env or "", defaults.get(adapter, "")))
         executable = shutil.which(command[0]) if command else None
         if os.environ.get("V2_ENABLE_REAL_CLI_ADAPTERS") != "1" or not executable:
+            if isinstance(context.assignment.get("workspace"), dict) and context.assignment[
+                "workspace"
+            ].get("source_path"):
+                raise RuntimeError(
+                    f"{adapter} real CLI is required for repository tasks"
+                )
             return (
                 f"{adapter} protocol simulation completed for {envelope['goal']}",
                 "protocol-simulated",
@@ -528,37 +556,138 @@ class RemoteWorkerDaemon:
             bufsize=1,
             cwd=workspace,
             env=self._sanitized_worker_env(),
+            start_new_session=True,
         )
         context.process = process
         assert process.stdin is not None and process.stdout is not None
         process.stdin.write(json.dumps(envelope, ensure_ascii=False))
         process.stdin.close()
-        output: list[str] = []
-        for raw_line in process.stdout:
-            line = raw_line.rstrip()
-            if not line:
-                continue
-            output.append(line)
-            self.client.v2_agent_event(
-                self.config.worker_id,
-                str(context.assignment["agent_task_id"]),
-                {
-                    "lease_token": context.assignment["lease_token"],
-                    "type": "agent.message",
-                    "payload": {
-                        "message": line[:800],
-                        "protocol": "ACP/A2A",
-                        "execution_mode": "real-cli",
-                        "partial": True,
-                    },
-                },
-            )
-        process.stdout.close()
-        exit_code = process.wait()
-        summary = "\n".join(output).strip() or f"{adapter} completed with code {exit_code}"
+        timeout = max(1, int(os.environ.get("V2_AGENT_TIMEOUT_SECONDS") or 3600))
+        summary, exit_code, truncated = self._stream_agent_process(
+            context,
+            process,
+            timeout_seconds=timeout,
+            message_prefix="",
+            execution_mode="real-cli",
+        )
+        if truncated:
+            summary = f"[earlier output truncated]\n{summary}"
+        summary = summary.strip() or f"{adapter} completed with code {exit_code}"
         if exit_code != 0:
             raise RuntimeError(f"{adapter} CLI exited with code {exit_code}: {summary[:400]}")
         return summary[:4000], "real-cli", exit_code
+
+    def _stream_agent_process(
+        self,
+        context: ActiveAgentContext,
+        process: subprocess.Popen[str],
+        *,
+        timeout_seconds: int,
+        message_prefix: str,
+        execution_mode: str,
+    ) -> tuple[str, int, bool]:
+        assert process.stdout is not None
+        lines: queue.Queue[str | None] = queue.Queue(maxsize=256)
+
+        def read_output() -> None:
+            try:
+                decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+                while raw_chunk := os.read(process.stdout.fileno(), 4096):
+                    chunk = decoder.decode(raw_chunk)
+                    if chunk:
+                        lines.put(chunk)
+                final_chunk = decoder.decode(b"", final=True)
+                if final_chunk:
+                    lines.put(final_chunk)
+            finally:
+                lines.put(None)
+
+        reader = threading.Thread(target=read_output, name="agent-output", daemon=True)
+        reader.start()
+        deadline = time.monotonic() + timeout_seconds
+        max_bytes = max(4096, int(os.environ.get("V2_MAX_COMMAND_OUTPUT_BYTES") or 262144))
+        tail: deque[tuple[str, int]] = deque()
+        tail_bytes = 0
+        truncated = False
+        event_lines = 0
+        max_event_lines = max(
+            1, int(os.environ.get("V2_MAX_COMMAND_EVENT_LINES") or 5000)
+        )
+        try:
+            while True:
+                if context.cancelled.is_set():
+                    self._terminate_agent_process(process)
+                    raise RuntimeError("cancelled by control plane")
+                if time.monotonic() >= deadline:
+                    self._terminate_agent_process(process)
+                    raise TimeoutError(
+                        f"{execution_mode} timed out after {timeout_seconds} seconds"
+                    )
+                try:
+                    line = lines.get(timeout=0.2)
+                except queue.Empty:
+                    if process.poll() is not None and not reader.is_alive():
+                        break
+                    continue
+                if line is None:
+                    break
+                for output_line in line.splitlines() or [line]:
+                    if not output_line:
+                        continue
+                    output_line = self._redact_worker_output(output_line)
+                    encoded_size = len(
+                        output_line.encode("utf-8", errors="replace")
+                    ) + 1
+                    tail.append((output_line, encoded_size))
+                    tail_bytes += encoded_size
+                    while tail and tail_bytes > max_bytes:
+                        _removed, removed_size = tail.popleft()
+                        tail_bytes -= removed_size
+                        truncated = True
+                    if event_lines >= max_event_lines:
+                        truncated = True
+                        continue
+                    event_lines += 1
+                    message = f"{message_prefix}{output_line[:760]}"
+                    if event_lines == max_event_lines:
+                        message += " [event stream limit reached]"
+                    self.client.v2_agent_event(
+                        self.config.worker_id,
+                        str(context.assignment["agent_task_id"]),
+                        {
+                            "lease_token": context.assignment["lease_token"],
+                            "type": "agent.message",
+                            "payload": {
+                                "message": message,
+                                "protocol": "ACP/A2A",
+                                "execution_mode": execution_mode,
+                                "partial": True,
+                            },
+                        },
+                    )
+            return "\n".join(line for line, _size in tail), process.wait(), truncated
+        finally:
+            if process.poll() is None:
+                self._terminate_agent_process(process)
+            process.stdout.close()
+            context.process = None
+
+    @staticmethod
+    def _terminate_agent_process(process: subprocess.Popen[str]) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except (OSError, ProcessLookupError):
+            process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                process.kill()
+            process.wait(timeout=3)
 
     def _v2_heartbeat_loop(
         self,
@@ -577,7 +706,7 @@ class RemoteWorkerDaemon:
                     ):
                         context.cancelled.set()
                         if context.process is not None and context.process.poll() is None:
-                            context.process.terminate()
+                            self._terminate_agent_process(context.process)
                 for permission in control.get("permissions") or []:
                     if not isinstance(permission, dict):
                         continue
@@ -619,10 +748,18 @@ class RemoteWorkerDaemon:
         contract = assignment.get("workspace")
         if not isinstance(contract, dict) or not contract.get("source_path"):
             destination.mkdir(parents=True, exist_ok=True, mode=0o700)
-            return destination, {
+            manifest = {
                 "strategy": "isolated-directory",
                 "path": str(destination),
             }
+            self._write_workspace_manifest(destination, manifest)
+            return destination, manifest
+
+        bound_worker = str(contract.get("execution_unit_id") or "").strip()
+        if bound_worker and bound_worker != self.config.worker_id:
+            raise PermissionError(
+                f"workspace is bound to {bound_worker}, not {self.config.worker_id}"
+            )
 
         source = Path(str(contract["source_path"])).expanduser().resolve()
         allowed_roots = workspace_roots_from_env()
@@ -656,7 +793,7 @@ class RemoteWorkerDaemon:
             capture_output=True,
             text=True,
         )
-        return destination, {
+        manifest = {
             "strategy": "git-worktree",
             "path": str(destination),
             "source_path": str(source),
@@ -664,6 +801,114 @@ class RemoteWorkerDaemon:
             "base_commit": git_head,
             "branch": branch,
         }
+        self._write_workspace_manifest(destination, manifest)
+        return destination, manifest
+
+    def _write_workspace_manifest(
+        self, destination: Path, manifest: dict[str, Any]
+    ) -> None:
+        payload = {**manifest, "created_at_epoch": time.time()}
+        workspace_manifest_path(destination).write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        workspace_manifest_path(destination).chmod(0o600)
+
+    def _cleanup_expired_v2_workspaces(self) -> None:
+        now = time.time()
+        interval = max(
+            1, int(os.environ.get("V2_WORKSPACE_CLEANUP_INTERVAL_SECONDS") or 3600)
+        )
+        if now - self._last_v2_cleanup < interval:
+            return
+        self._last_v2_cleanup = now
+        retention = max(
+            0, int(os.environ.get("V2_WORKSPACE_RETENTION_SECONDS") or 604800)
+        )
+        branch_retention = max(
+            retention,
+            int(os.environ.get("V2_BRANCH_RETENTION_SECONDS") or 2592000),
+        )
+        root = (self.config.artifact_root or Path(".aflow-worker")).resolve() / "v2"
+        if not root.is_dir():
+            return
+        with self._active_lock:
+            active_paths = {
+                self._agent_workspace(context.assignment).resolve()
+                for context in self._active_agents.values()
+            }
+        for manifest_path in root.rglob("attempt-*.workspace.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                destination = Path(str(manifest["path"])).resolve()
+                destination.relative_to(root)
+                if destination in active_paths:
+                    continue
+                created_at = float(
+                    manifest.get("created_at_epoch") or manifest_path.stat().st_mtime
+                )
+                age = now - created_at
+                if manifest.get("strategy") == "git-worktree":
+                    source = Path(str(manifest["source_path"])).resolve()
+                    branch = str(manifest.get("branch") or "")
+                    if not branch.startswith("aflow/"):
+                        continue
+                    if destination.exists() and age >= retention:
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(source),
+                                "worktree",
+                                "remove",
+                                "--force",
+                                str(destination),
+                            ],
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                            timeout=60,
+                        )
+                        manifest["worktree_removed_at_epoch"] = now
+                        manifest_path.write_text(
+                            json.dumps(manifest, ensure_ascii=False, sort_keys=True),
+                            encoding="utf-8",
+                        )
+                    if age >= branch_retention and not destination.exists():
+                        deleted = subprocess.run(
+                            ["git", "-C", str(source), "branch", "-D", branch],
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                            timeout=60,
+                        )
+                        exists = subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(source),
+                                "show-ref",
+                                "--verify",
+                                "--quiet",
+                                f"refs/heads/{branch}",
+                            ],
+                            check=False,
+                            timeout=60,
+                        )
+                        if deleted.returncode == 0 or exists.returncode == 1:
+                            manifest_path.unlink(missing_ok=True)
+                elif age >= retention:
+                    if destination.exists():
+                        shutil.rmtree(destination)
+                    manifest_path.unlink(missing_ok=True)
+            except (
+                OSError,
+                ValueError,
+                KeyError,
+                json.JSONDecodeError,
+                subprocess.SubprocessError,
+            ):
+                continue
 
     def _run_workspace_verification(
         self, context: ActiveAgentContext, workspace: Path
@@ -676,40 +921,33 @@ class RemoteWorkerDaemon:
         if not command:
             raise ValueError("workspace test command is empty")
         timeout = max(1, int(os.environ.get("V2_WORKSPACE_TEST_TIMEOUT_SECONDS") or 1800))
-        completed = subprocess.run(
+        process = subprocess.Popen(
             command,
             cwd=workspace,
             env=self._sanitized_worker_env(),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=timeout,
-            check=False,
+            bufsize=1,
+            start_new_session=True,
         )
-        output = (completed.stdout + completed.stderr).strip()
-        for line in output.splitlines()[-200:]:
-            self.client.v2_agent_event(
-                self.config.worker_id,
-                str(context.assignment["agent_task_id"]),
-                {
-                    "lease_token": context.assignment["lease_token"],
-                    "type": "agent.message",
-                    "payload": {
-                        "message": f"[verify] {line[:760]}",
-                        "execution_mode": "workspace-verification",
-                        "partial": True,
-                    },
-                },
-            )
+        context.process = process
+        output, exit_code, truncated = self._stream_agent_process(
+            context,
+            process,
+            timeout_seconds=timeout,
+            message_prefix="[verify] ",
+            execution_mode="workspace-verification",
+        )
         result = {
             "command": command,
-            "exit_code": completed.returncode,
+            "exit_code": exit_code,
             "output": output[-20000:],
-            "passed": completed.returncode == 0,
+            "output_truncated": truncated or len(output) > 20000,
+            "passed": exit_code == 0,
         }
-        if completed.returncode != 0:
-            raise RuntimeError(
-                f"workspace verification failed with code {completed.returncode}: {output[-800:]}"
-            )
+        if exit_code != 0:
+            raise WorkspaceVerificationError(result)
         return result
 
     def _finalize_git_workspace(
@@ -725,11 +963,18 @@ class RemoteWorkerDaemon:
             capture_output=True,
             text=True,
         )
-        patch = git_worker_output(workspace, "diff", "--cached", "--binary")
-        if not patch and contract.get("require_changes", True):
+        max_patch_bytes = max(1024, int(os.environ.get("V2_MAX_PATCH_BYTES") or 1048576))
+        patch, patch_bytes, truncated = git_worker_output_limited(
+            workspace,
+            max_patch_bytes,
+            "diff",
+            "--cached",
+            "--binary",
+        )
+        if patch_bytes == 0 and contract.get("require_changes", True):
             raise RuntimeError("agent completed without producing repository changes")
         commit_hash = ""
-        if patch:
+        if patch_bytes:
             message = f"aflow: {str(assignment.get('goal') or 'agent task')[:72]}"
             subprocess.run(
                 [
@@ -749,15 +994,10 @@ class RemoteWorkerDaemon:
                 text=True,
             )
             commit_hash = git_worker_output(workspace, "rev-parse", "HEAD")
-        max_patch_bytes = max(1024, int(os.environ.get("V2_MAX_PATCH_BYTES") or 1048576))
-        encoded = patch.encode("utf-8")
-        truncated = len(encoded) > max_patch_bytes
-        if truncated:
-            patch = encoded[:max_patch_bytes].decode("utf-8", errors="replace")
         return {
             "patch": {
                 "text": patch,
-                "bytes": len(encoded),
+                "bytes": patch_bytes,
                 "truncated": truncated,
                 "status_before_commit": status,
             },
@@ -779,6 +1019,15 @@ class RemoteWorkerDaemon:
             for key, value in os.environ.items()
             if key in allowed_names or key.startswith(allowed_prefixes)
         }
+
+    @staticmethod
+    def _redact_worker_output(value: str) -> str:
+        redacted = value
+        secret_markers = ("KEY", "TOKEN", "SECRET", "PASSWORD")
+        for key, secret in os.environ.items():
+            if len(secret) >= 8 and any(marker in key.upper() for marker in secret_markers):
+                redacted = redacted.replace(secret, "[REDACTED]")
+        return redacted
 
     def _execute_run(self, run: RunState) -> None:
         store = RemoteWorkerRunStore(
@@ -1024,6 +1273,10 @@ def workspace_branch_name(assignment: dict[str, Any]) -> str:
     return f"aflow/{task_id}/{agent_task_id}/attempt-{attempt}"
 
 
+def workspace_manifest_path(destination: Path) -> Path:
+    return destination.parent / f"{destination.name}.workspace.json"
+
+
 def git_worker_output(path: Path, *args: str) -> str:
     completed = subprocess.run(
         ["git", "-C", str(path), *args],
@@ -1032,6 +1285,32 @@ def git_worker_output(path: Path, *args: str) -> str:
         text=True,
     )
     return completed.stdout.strip()
+
+
+def git_worker_output_limited(
+    path: Path, max_bytes: int, *args: str
+) -> tuple[str, int, bool]:
+    process = subprocess.Popen(
+        ["git", "-C", str(path), *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert process.stdout is not None
+    kept = bytearray()
+    total = 0
+    while chunk := process.stdout.read(65536):
+        total += len(chunk)
+        if len(kept) < max_bytes:
+            kept.extend(chunk[: max_bytes - len(kept)])
+    process.stdout.close()
+    exit_code = process.wait()
+    if exit_code != 0:
+        raise subprocess.CalledProcessError(
+            exit_code,
+            process.args,
+            output=bytes(kept),
+        )
+    return kept.decode("utf-8", errors="replace").strip(), total, total > max_bytes
 
 
 def quote_path(value: str) -> str:

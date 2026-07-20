@@ -135,10 +135,21 @@ class V2ControlPlaneTest(unittest.TestCase):
         failed = control.fail_remote_agent_task(
             "nas-a",
             second["agent_task_id"],
-            {"lease_token": second["lease_token"], "error": "permanent"},
+            {
+                "lease_token": second["lease_token"],
+                "error": "permanent",
+                "artifacts": [
+                    {
+                        "name": "test_results",
+                        "kind": "test",
+                        "content": {"passed": False, "exit_code": 1},
+                    }
+                ],
+            },
         )
         self.assertEqual(failed["status"], "failed")
         self.assertEqual(retry_task["task_id"], failed["task_id"])
+        self.assertFalse(control.artifacts(retry_task["task_id"])[0]["content"]["passed"])
 
         expired_task = control.create_task(
             {"goal": "Recover an expired lease", "adapter": "fake"},
@@ -206,6 +217,7 @@ class V2ControlPlaneTest(unittest.TestCase):
         control.heartbeat_execution_worker("mac-worker", {"adapters": ["codex"]})
         goal = "Implement and verify a bounded repository change. " * 6
         workspace = {
+            "execution_unit_id": "mac-worker",
             "source_path": "/Volumes/AIProjects/example",
             "ref": "main",
             "test_command": ["python3", "-m", "unittest"],
@@ -229,11 +241,75 @@ class V2ControlPlaneTest(unittest.TestCase):
         self.assertEqual(claim["goal"], goal.strip())
         self.assertEqual(claim["workspace"]["source_path"], workspace["source_path"])
         self.assertEqual(claim["workspace"]["test_command"], workspace["test_command"])
+        control.fail_remote_agent_task(
+            "mac-worker",
+            claim["agent_task_id"],
+            {
+                "lease_token": claim["lease_token"],
+                "error": "retry on the same base",
+                "workspace": {"base_commit": "a" * 40},
+            },
+        )
+        retried = control.claim_remote_agent_task(
+            "mac-worker", {"adapters": ["codex"]}
+        )["assignment"]
+        self.assertEqual(retried["workspace"]["ref"], "a" * 40)
         with self.assertRaisesRegex(ValueError, "explicit real CLI adapter"):
             control.create_task(
-                {"goal": "unsafe default", "workspace": workspace},
+                {"goal": "unsafe default", "mode": "single", "workspace": workspace},
                 principal="user_1",
             )
+        with self.assertRaisesRegex(ValueError, "mode=single"):
+            control.create_task(
+                {
+                    "goal": "unsafe multi agent",
+                    "mode": "multi-agent",
+                    "adapter": "codex",
+                    "workspace": workspace,
+                },
+                principal="user_1",
+            )
+        without_test = {**workspace, "test_command": ""}
+        with self.assertRaisesRegex(ValueError, "workspace.test_command"):
+            control.create_task(
+                {
+                    "goal": "missing verification",
+                    "mode": "single",
+                    "adapter": "codex",
+                    "workspace": without_test,
+                },
+                principal="user_1",
+            )
+
+    def test_repository_task_never_drifts_to_another_worker(self):
+        control = V2ControlPlane(self.tmp_path())
+        control._db.execute("DELETE FROM v2_execution_units")
+        control._db.commit()
+        control.heartbeat_execution_worker("nas-owner", {"adapters": ["codex"]})
+        control.heartbeat_execution_worker("other-mac", {"adapters": ["codex"]})
+        task = control.create_task(
+            {
+                "goal": "Change the bound repository only",
+                "mode": "single",
+                "adapter": "codex",
+                "workspace": {
+                    "execution_unit_id": "nas-owner",
+                    "source_path": "/Volumes/AIProjects/example",
+                    "ref": "HEAD",
+                    "test_command": ["python3", "-m", "unittest"],
+                },
+            },
+            principal="user_1",
+        )
+        self.assertIsNone(
+            control.claim_remote_agent_task("other-mac", {"adapters": ["codex"]})[
+                "assignment"
+            ]
+        )
+        claim = control.claim_remote_agent_task(
+            "nas-owner", {"adapters": ["codex"]}
+        )["assignment"]
+        self.assertEqual(claim["task_id"], task["task_id"])
 
     def test_dispatch_selects_requested_adapter_unit_and_channel(self):
         control = V2ControlPlane(self.tmp_path())
@@ -333,7 +409,8 @@ class V2ControlPlaneTest(unittest.TestCase):
         control._db.execute("DELETE FROM v2_execution_units")
         control._db.commit()
         control.register_execution_unit({"unit_id": "fake-only", "adapters": ["fake"]})
-        self.assertEqual(control._select_execution_unit("codex")["unit_id"], "fake-only")
+        with self.assertRaises(RuntimeError):
+            control._select_execution_unit("codex")
         control._db.execute("DELETE FROM v2_execution_units")
         control._db.commit()
         with self.assertRaises(RuntimeError):

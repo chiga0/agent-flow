@@ -23,6 +23,7 @@ from runtime.cloud_agents_runtime.worker import (
     host_resource_capacity,
     host_resource_metrics,
     parse_json_object,
+    workspace_manifest_path,
     main as worker_main,
 )
 from runtime.tests.test_runtime_server import request_json, running_runtime
@@ -78,13 +79,19 @@ class RemoteWorkerDaemonTest(unittest.TestCase):
             RemoteWorkerConfig(control_url="http://example.invalid", worker_id="worker"),
             client=client,
         )
-        worker._v2_heartbeat_loop(stop, context)
+        with patch.object(worker, "_terminate_agent_process") as terminate:
+            worker._v2_heartbeat_loop(stop, context)
 
         self.assertTrue(context.cancelled.is_set())
-        process.terminate.assert_called_once_with()
+        terminate.assert_called_once_with(process)
         client.v2_agent_event.assert_called_once()
         self.assertEqual(context.applied_permissions, {"permission-1"})
         self.assertNotIn("SECRET_TOKEN", worker._sanitized_worker_env())
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "secret-value-123"}):
+            self.assertEqual(
+                worker._redact_worker_output("key=secret-value-123"),
+                "key=[REDACTED]",
+            )
         with self.assertRaisesRegex(ValueError, "safe path segment"):
             worker._agent_workspace(context.assignment)
 
@@ -115,6 +122,42 @@ class RemoteWorkerDaemonTest(unittest.TestCase):
             )
         self.assertIn("simulate safely", summary)
         self.assertEqual((mode, exit_code), ("protocol-simulated", 0))
+
+        context.assignment["workspace"] = {"source_path": "/tmp/repository"}
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ, {"V2_ENABLE_REAL_CLI_ADAPTERS": "0"}
+        ), self.assertRaisesRegex(RuntimeError, "real CLI is required"):
+            worker._run_v2_cli(context, {"goal": "must be real"}, Path(tmp))
+
+    def test_v2_cli_timeout_terminates_silent_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "slow-agent"
+            script.write_text("#!/bin/sh\ncat >/dev/null\nsleep 30\n", encoding="utf-8")
+            script.chmod(0o755)
+            worker = RemoteWorkerDaemon(
+                RemoteWorkerConfig(control_url="http://example.invalid", worker_id="worker"),
+                client=SimpleNamespace(v2_agent_event=Mock()),
+            )
+            context = ActiveAgentContext(
+                assignment={
+                    "task_id": "task",
+                    "agent_task_id": "agent",
+                    "lease_token": "lease",
+                    "adapter": "codex",
+                    "workspace": {"source_path": str(root)},
+                }
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "V2_ENABLE_REAL_CLI_ADAPTERS": "1",
+                    "V2_CODEX_CLI_COMMAND": str(script),
+                    "V2_AGENT_TIMEOUT_SECONDS": "1",
+                },
+            ), self.assertRaisesRegex(TimeoutError, "timed out"):
+                worker._run_v2_cli(context, {"goal": "timeout"}, root)
+            self.assertIsNone(context.process)
 
     def test_control_plane_client_builds_optional_artifact_payloads(self) -> None:
         client = ControlPlaneClient("http://example.invalid", token="secret")
@@ -272,6 +315,7 @@ class RemoteWorkerDaemonTest(unittest.TestCase):
                         "mode": "single",
                         "adapter": "codex",
                         "workspace": {
+                            "execution_unit_id": "mac-worker",
                             "source_path": str(repo),
                             "ref": "HEAD",
                             "test_command": ["python3", "-m", "unittest", "-v"],
@@ -320,6 +364,101 @@ class RemoteWorkerDaemonTest(unittest.TestCase):
                     initial_head,
                 )
                 self.assertFalse((repo / "README.md").exists())
+
+    def test_v2_workspace_retention_removes_only_managed_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "projects" / "repo"
+            repo.mkdir(parents=True)
+            (repo / "README.md").write_text("managed\n", encoding="utf-8")
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repo),
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "commit",
+                    "-m",
+                    "initial",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            worker = RemoteWorkerDaemon(
+                RemoteWorkerConfig(
+                    control_url="http://example.invalid",
+                    worker_id="mac-worker",
+                    artifact_root=root / "worker",
+                ),
+                client=SimpleNamespace(),
+            )
+            assignment = {
+                "task_id": "task",
+                "agent_task_id": "agent",
+                "attempt": 1,
+                "workspace": {
+                    "execution_unit_id": "mac-worker",
+                    "source_path": str(repo),
+                    "ref": "HEAD",
+                },
+            }
+            with patch.dict(os.environ, {"V2_WORKSPACE_ROOTS": str(repo.parent)}):
+                wrong_assignment = {
+                    **assignment,
+                    "workspace": {
+                        **assignment["workspace"],
+                        "execution_unit_id": "other-worker",
+                    },
+                }
+                with self.assertRaisesRegex(PermissionError, "bound to other-worker"):
+                    worker._prepare_agent_workspace(wrong_assignment)
+                workspace, _manifest = worker._prepare_agent_workspace(assignment)
+                self.assertTrue(workspace.is_dir())
+                self.assertTrue(workspace_manifest_path(workspace).is_file())
+                worker._last_v2_cleanup = 0
+                with patch.dict(
+                    os.environ,
+                    {
+                        "V2_WORKSPACE_RETENTION_SECONDS": "0",
+                        "V2_BRANCH_RETENTION_SECONDS": "2592000",
+                        "V2_WORKSPACE_CLEANUP_INTERVAL_SECONDS": "1",
+                    },
+                ):
+                    worker._cleanup_expired_v2_workspaces()
+            self.assertFalse(workspace.exists())
+            self.assertTrue(workspace_manifest_path(workspace).exists())
+            branches = subprocess.run(
+                ["git", "-C", str(repo), "branch", "--list", "aflow/*"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            self.assertIn("aflow/task/agent/attempt-1", branches)
+            worker._last_v2_cleanup = 0
+            with patch.dict(
+                os.environ,
+                {
+                    "V2_WORKSPACE_RETENTION_SECONDS": "0",
+                    "V2_BRANCH_RETENTION_SECONDS": "0",
+                    "V2_WORKSPACE_CLEANUP_INTERVAL_SECONDS": "1",
+                },
+            ):
+                worker._cleanup_expired_v2_workspaces()
+            self.assertFalse(workspace_manifest_path(workspace).exists())
+            branches = subprocess.run(
+                ["git", "-C", str(repo), "branch", "--list", "aflow/*"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            self.assertNotIn("aflow/task/agent/attempt-1", branches)
 
     def test_remote_worker_executes_v2_agent_task(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

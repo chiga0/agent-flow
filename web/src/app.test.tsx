@@ -361,6 +361,30 @@ const v2Overview = {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     },
+    {
+      unit_id: "mac-local-worker",
+      kind: "remote-worker",
+      status: "active",
+      labels: { location: "mac" },
+      resources: { cpu: 2 },
+      adapters: ["codex"],
+      features: ["v2-agent-tasks"],
+      heartbeat_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+    {
+      unit_id: "nas-backup-worker",
+      kind: "remote-worker",
+      status: "active",
+      labels: { location: "nas" },
+      resources: { cpu: 2 },
+      adapters: ["codex"],
+      features: ["v2-agent-tasks"],
+      heartbeat_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
   ],
   channels: [
     {
@@ -1197,7 +1221,7 @@ describe("aflow console", () => {
     );
     expect(
       screen.getByText(
-        "Repository tasks require a real Agent CLI and a verification command.",
+        /Repository tasks require Single mode, a matching Mac\/NAS worker/,
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
@@ -1211,6 +1235,10 @@ describe("aflow console", () => {
       ),
       "python3 -m unittest -v",
     );
+    await user.selectOptions(
+      screen.getByLabelText("Execution unit (required for repository tasks)"),
+      "mac-local-worker",
+    );
     await user.click(screen.getByRole("button", { name: "Start" }));
 
     await waitFor(() =>
@@ -1219,7 +1247,7 @@ describe("aflow console", () => {
         expect.objectContaining({
           method: "POST",
           body: expect.stringMatching(
-            /Fix the calculator.*single.*codex.*source_path.*AIProjects.*main.*unittest/s,
+            /Fix the calculator.*single.*codex.*execution_unit_id.*mac-local-worker.*source_path.*AIProjects.*main.*unittest/s,
           ),
         }),
       ),

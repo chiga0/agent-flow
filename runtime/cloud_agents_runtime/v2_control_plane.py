@@ -133,10 +133,17 @@ class V2ControlPlane:
             workspace = normalize_workspace_contract(
                 payload.get("workspace") or payload.get("repo")
             )
-            if workspace and requested_adapter in {"auto", "fake"}:
-                raise ValueError(
-                    "real repository tasks require an explicit real CLI adapter"
-                )
+            if workspace:
+                if mode != "single":
+                    raise ValueError("real repository tasks require mode=single")
+                if requested_adapter in {"auto", "fake"}:
+                    raise ValueError(
+                        "real repository tasks require an explicit real CLI adapter"
+                    )
+                if not workspace.get("test_command"):
+                    raise ValueError(
+                        "real repository tasks require workspace.test_command"
+                    )
             project_id = str(payload.get("project_id") or "project_default")
             tenant_id = str(payload.get("tenant_id") or "tenant_default")
             title = summarize_goal(goal)
@@ -145,6 +152,10 @@ class V2ControlPlane:
                 requested_adapter=requested_adapter,
                 channel=channel,
                 strategy=strategy,
+                execution_unit_id=(
+                    str(workspace["execution_unit_id"]) if workspace else None
+                ),
+                require_remote=bool(workspace),
             )
             adapter = str(dispatch["adapter"])
             metadata = dict(payload.get("metadata") or {})
@@ -715,7 +726,32 @@ class V2ControlPlane:
                 return self.get_task(lease["task_id"])
             reason = str(payload.get("error") or "remote agent failed")[:1200]
             now = utc_now()
+            for item in payload.get("artifacts") or []:
+                if not isinstance(item, dict):
+                    continue
+                self._write_artifact_locked(
+                    lease["task_id"],
+                    agent_task_id,
+                    str(item.get("name") or "worker_failure")[:120],
+                    str(item.get("kind") or "failure")[:40],
+                    redact_secret_config(dict(item.get("content") or {})),
+                )
             retryable = bool(payload.get("retryable", True)) and int(lease["attempt"]) < 2
+            workspace_result = payload.get("workspace")
+            if retryable and isinstance(workspace_result, dict):
+                base_commit = str(workspace_result.get("base_commit") or "").strip()
+                if base_commit and task_row is not None:
+                    metadata = json_loads(task_row["metadata_json"])
+                    workspace = (
+                        metadata.get("workspace") if isinstance(metadata, dict) else None
+                    )
+                    if isinstance(workspace, dict):
+                        workspace["ref"] = base_commit
+                        self._db.execute(
+                            "UPDATE v2_tasks SET metadata_json = ?, updated_at = ? "
+                            "WHERE task_id = ?",
+                            (json_dumps(metadata), now, lease["task_id"]),
+                        )
             next_status = "queued" if retryable else "failed"
             self._db.execute(
                 "UPDATE v2_agent_tasks SET status = ?, updated_at = ? WHERE agent_task_id = ?",
@@ -1703,9 +1739,15 @@ class V2ControlPlane:
         requested_adapter: str,
         channel: str,
         strategy: str,
+        execution_unit_id: str | None = None,
+        require_remote: bool = False,
     ) -> dict[str, Any]:
         adapter = "fake" if requested_adapter == "auto" else requested_adapter
-        unit = self._select_execution_unit(adapter)
+        unit = self._select_execution_unit(
+            adapter,
+            execution_unit_id=execution_unit_id,
+            require_remote=require_remote,
+        )
         channel_config = self._channel_by_platform(channel)
         live_channel = channel_config["status"] == "configured"
         return {
@@ -1728,17 +1770,41 @@ class V2ControlPlane:
             "reason": self._dispatch_reason(requested_adapter, adapter, unit, channel_config),
         }
 
-    def _select_execution_unit(self, adapter: str) -> dict[str, Any]:
+    def _select_execution_unit(
+        self,
+        adapter: str,
+        *,
+        execution_unit_id: str | None = None,
+        require_remote: bool = False,
+    ) -> dict[str, Any]:
         active_units = [
             unit
             for unit in self.execution_units()
             if unit["status"] == "active" and self._execution_unit_available(unit)
         ]
+        if execution_unit_id:
+            unit = next(
+                (item for item in active_units if item["unit_id"] == execution_unit_id),
+                None,
+            )
+            if unit is None:
+                raise RuntimeError(
+                    f"execution unit {execution_unit_id} is not active or available"
+                )
+            features = set(unit.get("features") or [])
+            if require_remote and not (
+                unit.get("kind") == "remote-worker" or "remote-worker" in features
+            ):
+                raise ValueError(
+                    "real repository tasks require an explicit remote worker"
+                )
+            if adapter not in unit["adapters"]:
+                raise RuntimeError(
+                    f"execution unit {execution_unit_id} cannot run adapter {adapter}"
+                )
+            return unit
         for unit in active_units:
             if adapter in unit["adapters"]:
-                return unit
-        for unit in active_units:
-            if "fake" in unit["adapters"]:
                 return unit
         raise RuntimeError(f"no active execution unit can run adapter {adapter}")
 
@@ -2469,8 +2535,10 @@ class V2ControlPlane:
                 ),
                 None,
             )
+            workspace = metadata.get("workspace") if isinstance(metadata, dict) else None
             if selected_unit_id == worker_id or (
-                selected_unit is not None
+                not workspace
+                and selected_unit is not None
                 and not self._execution_unit_available(selected_unit)
             ):
                 agents.append(agent_task_from_row(row))
@@ -3301,17 +3369,17 @@ def normalize_workspace_contract(value: Any) -> dict[str, Any]:
         source_path = value.strip()
         if not source_path:
             return {}
-        return {
-            "strategy": "git-worktree",
-            "source_path": source_path,
-            "ref": "HEAD",
-            "require_changes": True,
-        }
+        raise ValueError(
+            "workspace must be an object with execution_unit_id and source_path"
+        )
     if not isinstance(value, dict):
         raise ValueError("workspace must be a path or object")
     source_path = str(value.get("source_path") or value.get("path") or "").strip()
     if not source_path:
         raise ValueError("workspace.source_path is required")
+    execution_unit_id = str(value.get("execution_unit_id") or "").strip()
+    if not execution_unit_id:
+        raise ValueError("workspace.execution_unit_id is required")
     test_command = value.get("test_command")
     if test_command is not None and not isinstance(test_command, (str, list)):
         raise ValueError("workspace.test_command must be a command string or argv list")
@@ -3321,6 +3389,7 @@ def normalize_workspace_contract(value: Any) -> dict[str, Any]:
         raise ValueError("workspace.test_command argv must contain non-empty strings")
     return {
         "strategy": "git-worktree",
+        "execution_unit_id": execution_unit_id,
         "source_path": source_path,
         "ref": str(value.get("ref") or "HEAD").strip(),
         "test_command": test_command,

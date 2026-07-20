@@ -107,9 +107,11 @@ flowchart LR
 
 ### 真实仓库执行边界
 
-V2 Remote Worker 已支持 Task 领取、实时事件、artifact、取消、租约重试和独立 workspace。真实代码任务必须额外提交 `workspace.source_path`、`ref` 和验证命令；Mac Worker 会校验 `V2_WORKSPACE_ROOTS`，从指定 ref 创建独立 `aflow/*` 分支和 Git worktree，验证成功后回传测试、patch 和 commit。源检出目录不会被直接修改。
+V2 Remote Worker 已支持 Task 领取、实时事件、artifact、取消、租约重试和独立 workspace。真实代码任务必须使用 Single 模式，并额外提交 `workspace.execution_unit_id`、`source_path`、`ref` 和验证命令；绑定 Worker 失联时任务不会漂移。Mac Worker 会校验 `V2_WORKSPACE_ROOTS`，从指定 ref 创建独立 `aflow/*` 分支和 Git worktree，验证成功后回传测试、patch 和 commit。源检出目录不会被直接修改。
 
 当前默认只走 Single Agent 真实仓库链路。不要把自动多 Agent、云端重型执行或多控制面 HA 加入首个生产 Case。完整命令见[本地电脑或 NAS 作为 aflow 主控的部署教程](implementation/local-nas-control-plane-deployment.md)。
+
+该推荐只针对单用户自托管：真实 CLI 的 shell/tool 权限由 CLI sandbox 和 Worker 专用操作系统账户负责。多用户或不可信任务不能共用这一主机账户，必须使用容器或虚拟机隔离。
 
 ## 6. 发布门禁
 

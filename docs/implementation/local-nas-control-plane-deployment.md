@@ -391,6 +391,13 @@ export V2_WORKER_ADAPTERS=qwen
 export V2_ENABLE_REAL_CLI_ADAPTERS=1
 export V2_QWEN_CODE_COMMAND=qwen
 export V2_WORKSPACE_ROOTS=/Volumes/AIProjects
+export V2_AGENT_TIMEOUT_SECONDS=3600
+export V2_WORKSPACE_TEST_TIMEOUT_SECONDS=1800
+export V2_MAX_COMMAND_OUTPUT_BYTES=262144
+export V2_MAX_COMMAND_EVENT_LINES=5000
+export V2_MAX_PATCH_BYTES=1048576
+export V2_WORKSPACE_RETENTION_SECONDS=604800
+export V2_BRANCH_RETENTION_SECONDS=2592000
 PYTHONPATH=runtime python3 -m cloud_agents_runtime.worker
 ```
 
@@ -400,6 +407,7 @@ PYTHONPATH=runtime python3 -m cloud_agents_runtime.worker
 
 - Mode：`Single`。
 - Adapter：只选择已经在 Mac 终端验证过的一个 CLI。
+- Execution Unit：选择拥有该仓库路径的明确 Mac/NAS Worker；失联时不自动漂移。
 - Repository path：例如 `/Volumes/AIProjects/example`。
 - Git ref：`HEAD` 或明确的 branch/commit。
 - Verification command：仓库已有测试命令，例如 `python3 -m unittest -v`。
@@ -414,6 +422,24 @@ Worker 校验路径 allowlist 后，从指定 ref 创建 `aflow/<task>/<agent>/a
 3. patch 包含预期文件，测试结果 `passed=true`。
 4. commit hash 非空且位于 `aflow/*` 分支。
 5. 原仓库 HEAD、当前分支和工作目录均未改变。
+
+首次前台验收通过后，把同一组变量写入权限为 `600` 的文件并安装 `launchd`；安装器会把 stdout/stderr 写到 `.aflow/logs`：
+
+```bash
+chmod 600 /absolute/path/to/aflow-worker.env
+python3 scripts/install_worker_launchd.py \
+  --repo "$PWD" \
+  --env-file /absolute/path/to/aflow-worker.env
+launchctl print "gui/$(id -u)/com.aflow.worker"
+# 停止并卸载：
+python3 scripts/install_worker_launchd.py --uninstall
+```
+
+Worker 默认每小时检查一次，清理超过 `V2_WORKSPACE_RETENTION_SECONDS` 的 V2 worktree，并在 `V2_BRANCH_RETENTION_SECONDS` 到期后删除对应 `aflow/*` 分支；只处理自身 artifact root 下带安全 manifest 的目录，控制面 artifacts 按独立 retention 保留。调整 retention 后应先在非生产仓库验证。
+
+### 安全边界
+
+这条精简链路面向单用户自托管。原始 qwen-code、Codex、OpenCode CLI 的工具调用权限由各 CLI 自身的 sandbox/approval 配置以及 Worker 的操作系统账户权限强制执行；Aflow 当前只负责进程、租约、事件和交付边界，不能把 UI 中的 permission 记录视为对任意原始 CLI shell 调用的强制拦截。Worker 应使用专用低权限账户，只授予项目根目录、artifact 目录和必要凭据的访问权；不要在持有个人 SSH Key、浏览器 Cookie 或整个 NAS 写权限的日常账户上运行。多用户或不可信租户场景必须改用容器/虚拟机隔离，不属于本阶段的 production-ready 范围。
 
 这条 Case 未通过前，只修复该链路，不新增执行后端、多 Agent、渠道或 HA 能力。
 

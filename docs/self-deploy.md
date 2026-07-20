@@ -118,7 +118,7 @@ http://<RUNTIME_PUBLIC_HOST>/cloud-agents/
 - 本地电脑/NAS/大 VPS：aflow Runtime + Web + SQLite/artifact。
 - 小 VPS：公网 Nginx、TLS、Tunnel 或私网边缘。
 
-现行 `/v2/tasks` 可由 Mac Remote Worker 领取，并在 `V2_WORKSPACE_ROOTS` 允许的真实仓库上创建隔离 worktree，回传实时事件、测试结果、patch 和 commit。完整边界与验收证据见[场景化部署与验收](deployment-scenarios.md)。
+现行 `/v2/tasks` 可显式绑定 Mac Remote Worker，并在 `V2_WORKSPACE_ROOTS` 允许的真实仓库上创建隔离 worktree，回传实时事件、测试结果、patch 和 commit。真实仓库任务强制 Single 模式、验证命令和真实 CLI，且禁止跨 Worker 漂移。完整边界与验收证据见[场景化部署与验收](deployment-scenarios.md)。
 
 完整教程见：[本地电脑或 NAS 作为 aflow 主控的部署教程](implementation/local-nas-control-plane-deployment.md)。
 

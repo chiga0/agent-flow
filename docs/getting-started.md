@@ -73,10 +73,30 @@ export V2_WORKER_ADAPTERS=qwen
 export V2_ENABLE_REAL_CLI_ADAPTERS=1
 export V2_QWEN_CODE_COMMAND=qwen
 export V2_WORKSPACE_ROOTS=/Volumes/AIProjects
+export V2_AGENT_TIMEOUT_SECONDS=3600
+export V2_WORKSPACE_TEST_TIMEOUT_SECONDS=1800
+export V2_MAX_COMMAND_OUTPUT_BYTES=262144
+export V2_MAX_COMMAND_EVENT_LINES=5000
+export V2_MAX_PATCH_BYTES=1048576
+export V2_WORKSPACE_RETENTION_SECONDS=604800
+export V2_BRANCH_RETENTION_SECONDS=2592000
 PYTHONPATH=runtime python3 -m cloud_agents_runtime.worker
 ```
 
-Client 中选择 `Single` 和对应 Agent，填写 Repository path、Git ref 和项目原有测试命令。Worker 会创建独立 `aflow/*` 分支和 worktree；成功标准是 Chat 有实时输出，Artifacts 同时存在测试结果、patch 和 commit，且源检出目录没有变化。不要在这条链路通过前启用多 Agent 或 HA。
+Client 中选择 `Single`、对应 Agent 和明确的 Mac/NAS Execution Unit，填写 Repository path、Git ref 和项目原有测试命令。仓库任务不会在 Worker 失联时漂移到另一台机器。Worker 会创建独立 `aflow/*` 分支和 worktree；成功标准是 Chat 有实时输出，Artifacts 同时存在测试结果、patch 和 commit，且源检出目录没有变化。不要在这条链路通过前启用多 Agent或 HA。
+
+长期运行时先把上述变量保存到权限为 `600` 的 env 文件，再安装 macOS 服务：
+
+```bash
+chmod 600 /absolute/path/to/aflow-worker.env
+python3 scripts/install_worker_launchd.py \
+  --repo "$PWD" \
+  --env-file /absolute/path/to/aflow-worker.env
+launchctl print "gui/$(id -u)/com.aflow.worker"
+tail -f .aflow/logs/worker.log .aflow/logs/worker.error.log
+# 停止并卸载：
+python3 scripts/install_worker_launchd.py --uninstall
+```
 
 ## 3. 真实 Agent 验证顺序
 
