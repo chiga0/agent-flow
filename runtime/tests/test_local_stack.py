@@ -5,6 +5,7 @@ import os
 import stat
 import tempfile
 import unittest
+import urllib.request
 from pathlib import Path
 from unittest import mock
 
@@ -113,6 +114,15 @@ class LocalStackTest(unittest.TestCase):
                 {"V2_LOCAL_EXECUTION_UNIT_ID": "test-runtime"},
                 require_real_cli=False,
             )
+
+    def test_api_request_wraps_transient_connection_reset(self):
+        with mock.patch.object(
+            urllib.request,
+            "urlopen",
+            side_effect=ConnectionResetError("peer reset"),
+        ):
+            with self.assertRaisesRegex(local_stack.StackError, "peer reset"):
+                local_stack.api_request({"RUN_MANAGER_TOKEN": "token"}, "/health")
 
 
 class LocalExecutionUnitEnvironmentTest(unittest.TestCase):

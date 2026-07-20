@@ -287,8 +287,9 @@ def api_request(
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise StackError(f"{path} returned HTTP {exc.code}: {body}") from exc
-    except urllib.error.URLError as exc:
-        raise StackError(f"cannot reach {DEFAULT_URL}{path}: {exc.reason}") from exc
+    except (urllib.error.URLError, OSError) as exc:
+        reason = getattr(exc, "reason", str(exc))
+        raise StackError(f"cannot reach {DEFAULT_URL}{path}: {reason}") from exc
 
 
 def health(env: dict[str, str]) -> dict[str, Any]:
