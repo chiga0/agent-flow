@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import os
 import stat
@@ -123,6 +124,18 @@ class LocalStackTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(local_stack.StackError, "peer reset"):
                 local_stack.api_request({"RUN_MANAGER_TOKEN": "token"}, "/health")
+
+    def test_down_without_environment_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            local_stack, "parse_args"
+        ) as parse_args, mock.patch.object(local_stack, "compose") as compose:
+            parse_args.return_value = argparse.Namespace(
+                command="down",
+                env_file=Path(directory) / ".env.local",
+            )
+
+            self.assertEqual(local_stack.main(), 0)
+            compose.assert_not_called()
 
 
 class LocalExecutionUnitEnvironmentTest(unittest.TestCase):

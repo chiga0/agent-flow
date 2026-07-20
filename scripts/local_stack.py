@@ -75,6 +75,9 @@ def main() -> int:
         compose(env_file, "logs", "--tail", str(args.tail), "-f")
         return 0
     if args.command == "down":
+        if not env_file.exists():
+            print(f"local stack is already down; environment not found: {env_file}")
+            return 0
         compose(env_file, "down", "--remove-orphans")
         return 0
     raise StackError(f"unknown command: {args.command}")

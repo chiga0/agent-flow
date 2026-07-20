@@ -647,26 +647,29 @@ class V2ControlPlane:
         *,
         write: bool = False,
     ) -> bool:
-        row = self._task_row(task_id)
-        if row is None:
-            raise KeyError(task_id)
-        role_set = set(roles or [])
-        if principal in {None, "api-token"} or role_set.intersection({"owner", "operator"}):
-            return True
-        if principal == row["created_by"]:
-            return True
-        member = self._db.execute(
-            """
-            SELECT role, status FROM v2_project_members
-            WHERE project_id = ? AND user_id = ?
-            """,
-            (row["project_id"], principal),
-        ).fetchone()
-        if member is None or member["status"] != "active":
-            return False
-        if not write:
-            return True
-        return member["role"] in {"owner", "editor", "member"}
+        with self._lock:
+            row = self._task_row(task_id)
+            if row is None:
+                raise KeyError(task_id)
+            role_set = set(roles or [])
+            if principal in {None, "api-token"} or role_set.intersection(
+                {"owner", "operator"}
+            ):
+                return True
+            if principal == row["created_by"]:
+                return True
+            member = self._db.execute(
+                """
+                SELECT role, status FROM v2_project_members
+                WHERE project_id = ? AND user_id = ?
+                """,
+                (row["project_id"], principal),
+            ).fetchone()
+            if member is None or member["status"] != "active":
+                return False
+            if not write:
+                return True
+            return member["role"] in {"owner", "editor", "member"}
 
     def can_access_project(
         self,
@@ -676,27 +679,33 @@ class V2ControlPlane:
         *,
         write: bool = False,
     ) -> bool:
-        project = self._db.execute(
-            "SELECT project_id FROM v2_projects WHERE project_id = ? AND status = 'active'",
-            (project_id,),
-        ).fetchone()
-        if project is None:
-            raise KeyError(project_id)
-        role_set = set(roles or [])
-        if principal in {None, "api-token"} or role_set.intersection({"owner", "operator"}):
-            return True
-        member = self._db.execute(
-            """
-            SELECT role, status FROM v2_project_members
-            WHERE project_id = ? AND user_id = ?
-            """,
-            (project_id, principal),
-        ).fetchone()
-        if member is None:
-            return project_id == "project_default" and write
-        if member["status"] != "active":
-            return False
-        return not write or member["role"] in {"owner", "editor", "member"}
+        with self._lock:
+            project = self._db.execute(
+                """
+                SELECT project_id FROM v2_projects
+                WHERE project_id = ? AND status = 'active'
+                """,
+                (project_id,),
+            ).fetchone()
+            if project is None:
+                raise KeyError(project_id)
+            role_set = set(roles or [])
+            if principal in {None, "api-token"} or role_set.intersection(
+                {"owner", "operator"}
+            ):
+                return True
+            member = self._db.execute(
+                """
+                SELECT role, status FROM v2_project_members
+                WHERE project_id = ? AND user_id = ?
+                """,
+                (project_id, principal),
+            ).fetchone()
+            if member is None:
+                return project_id == "project_default" and write
+            if member["status"] != "active":
+                return False
+            return not write or member["role"] in {"owner", "editor", "member"}
 
     def upsert_tenant(self, payload: dict[str, Any], *, principal: str) -> dict[str, Any]:
         now = utc_now()
