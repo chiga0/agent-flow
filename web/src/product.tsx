@@ -56,6 +56,7 @@ import {
   type V2Replay,
   type V2Project,
   type V2ProjectMember,
+  type V2Permission,
   type V2Tenant,
   type V2Task,
   type V2WorkflowStep,
@@ -525,6 +526,11 @@ export function ProductTaskPage() {
     queryFn: () => runtimeApi.v2TaskReplays(taskId),
     refetchInterval: 5000,
   });
+  const permissions = useQuery({
+    queryKey: ["v2", "tasks", taskId, "permissions"],
+    queryFn: () => runtimeApi.v2TaskPermissions(taskId),
+    refetchInterval: 1500,
+  });
   const liveWebshell = useV2WebshellEvents(
     taskId,
     webshellEvents.data?.events ?? [],
@@ -544,6 +550,9 @@ export function ProductTaskPage() {
         queryKey: ["v2", "tasks", taskId, "evaluations"],
       }),
       queryClient.invalidateQueries({ queryKey: ["v2", "tasks", taskId, "replays"] }),
+      queryClient.invalidateQueries({
+        queryKey: ["v2", "tasks", taskId, "permissions"],
+      }),
     ]);
   };
   const sendMessage = useMutation({
@@ -566,6 +575,15 @@ export function ProductTaskPage() {
   });
   const replayTask = useMutation({
     mutationFn: () => runtimeApi.v2ReplayTask(taskId),
+    onSuccess: refreshTaskDetail,
+  });
+  const cancelTask = useMutation({
+    mutationFn: () => runtimeApi.v2CancelTask(taskId),
+    onSuccess: refreshTaskDetail,
+  });
+  const resolvePermission = useMutation({
+    mutationFn: (input: { permissionId: string; decision: "allow_once" | "deny" }) =>
+      runtimeApi.v2ResolvePermission(taskId, input.permissionId, input.decision),
     onSuccess: refreshTaskDetail,
   });
   const current = task.data;
@@ -625,6 +643,18 @@ export function ProductTaskPage() {
             <RefreshCw className="h-4 w-4" />
             Retry
           </Button>
+          <Button
+            disabled={
+              cancelTask.isPending ||
+              !current ||
+              ["completed", "failed", "cancelled"].includes(current.status)
+            }
+            size="sm"
+            variant="secondary"
+            onClick={() => cancelTask.mutate()}
+          >
+            Cancel
+          </Button>
         </div>
       </div>
 
@@ -665,6 +695,15 @@ export function ProductTaskPage() {
           </div>
         </CardHeader>
         <CardBody className="grid gap-3">
+          <PermissionCards
+            permissions={(permissions.data?.permissions ?? []).filter(
+              (permission) => permission.status === "pending",
+            )}
+            pending={resolvePermission.isPending}
+            onResolve={(permissionId, decision) =>
+              resolvePermission.mutate({ permissionId, decision })
+            }
+          />
           <AgentSwitcher
             agents={agents}
             selectedAgentId={selectedAgentId}
@@ -867,6 +906,54 @@ export function ProductTaskPage() {
           </CardBody>
         </Card>
       </div>
+    </div>
+  );
+}
+
+function PermissionCards({
+  permissions,
+  pending,
+  onResolve,
+}: {
+  permissions: V2Permission[];
+  pending: boolean;
+  onResolve: (permissionId: string, decision: "allow_once" | "deny") => void;
+}) {
+  if (!permissions.length) return null;
+  return (
+    <div className="grid gap-2" aria-label="Pending permissions">
+      {permissions.map((permission) => (
+        <div
+          className="grid gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/30"
+          key={permission.permission_id}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="font-medium">Agent needs permission</div>
+              <div className="text-xs text-muted-foreground">
+                {String(permission.request.description ?? permission.request.tool ?? permission.permission_id)}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                disabled={pending}
+                size="sm"
+                variant="secondary"
+                onClick={() => onResolve(permission.permission_id, "deny")}
+              >
+                Deny
+              </Button>
+              <Button
+                disabled={pending}
+                size="sm"
+                onClick={() => onResolve(permission.permission_id, "allow_once")}
+              >
+                Allow once
+              </Button>
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

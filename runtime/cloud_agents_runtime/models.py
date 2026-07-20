@@ -411,6 +411,7 @@ class AuthUser:
     updated_at: str = field(default_factory=utc_now)
     last_login_at: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    token_version: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -429,6 +430,7 @@ class AuthSession:
     last_seen_at: str | None = None
     user_agent: str | None = None
     ip_address: str | None = None
+    token_version: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

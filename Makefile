@@ -1,4 +1,4 @@
-.PHONY: local-init local-doctor local-up local-status local-smoke local-demo local-logs local-down
+.PHONY: local-init local-doctor local-up local-status local-smoke local-demo local-load local-logs local-down
 
 local-init:
 	python3 scripts/local_stack.py init
@@ -17,6 +17,9 @@ local-smoke:
 
 local-demo:
 	python3 scripts/local_stack.py demo
+
+local-load:
+	python3 scripts/validate_ha_load.py --token "$${RUN_MANAGER_TOKEN:?set RUN_MANAGER_TOKEN}"
 
 local-logs:
 	python3 scripts/local_stack.py logs

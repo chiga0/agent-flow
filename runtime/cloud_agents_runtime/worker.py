@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import socket
+import subprocess
 import threading
 import time
 import urllib.error
@@ -42,6 +44,14 @@ class ActiveRunContext:
     adapter: RuntimeAdapter
     store: RemoteWorkerRunStore
     applied_controls: set[str] = field(default_factory=set)
+
+
+@dataclass
+class ActiveAgentContext:
+    assignment: dict[str, Any]
+    process: subprocess.Popen[str] | None = None
+    cancelled: threading.Event = field(default_factory=threading.Event)
+    applied_permissions: set[str] = field(default_factory=set)
 
 
 class ControlPlaneClient:
@@ -113,6 +123,50 @@ class ControlPlaneClient:
             payload["content"] = ""
         return self.request_json(
             f"/workers/{quote_path(worker_id)}/runs/{quote_path(run_id)}/artifacts",
+            method="POST",
+            payload=payload,
+        )
+
+    def v2_heartbeat(self, worker_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.request_json(
+            f"/v2/workers/{quote_path(worker_id)}/heartbeat",
+            method="POST",
+            payload=payload,
+        )
+
+    def v2_claim(self, worker_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.request_json(
+            f"/v2/workers/{quote_path(worker_id)}/claim",
+            method="POST",
+            payload=payload,
+        )
+
+    def v2_control(self, worker_id: str) -> dict[str, Any]:
+        return self.request_json(f"/v2/workers/{quote_path(worker_id)}/control")
+
+    def v2_agent_event(
+        self,
+        worker_id: str,
+        agent_task_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.request_json(
+            f"/v2/workers/{quote_path(worker_id)}/agent-tasks/{quote_path(agent_task_id)}/events",
+            method="POST",
+            payload=payload,
+        )
+
+    def v2_finish_agent(
+        self,
+        worker_id: str,
+        agent_task_id: str,
+        action: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        if action not in {"complete", "fail"}:
+            raise ValueError("unsupported V2 agent action")
+        return self.request_json(
+            f"/v2/workers/{quote_path(worker_id)}/agent-tasks/{quote_path(agent_task_id)}/{action}",
             method="POST",
             payload=payload,
         )
@@ -271,6 +325,7 @@ class RemoteWorkerDaemon:
         self._stop = threading.Event()
         self._active: list[threading.Thread] = []
         self._active_lock = threading.Lock()
+        self._active_agents: dict[str, ActiveAgentContext] = {}
 
     def stop(self) -> None:
         self._stop.set()
@@ -291,6 +346,26 @@ class RemoteWorkerDaemon:
         if self._active_count() >= self.config.capacity:
             self.client.heartbeat(self.config.worker_id, self._worker_payload())
             return None
+        v2_payload = self._v2_worker_payload()
+        self.client.v2_heartbeat(self.config.worker_id, v2_payload)
+        v2_claim = self.client.v2_claim(self.config.worker_id, v2_payload)
+        assignment = v2_claim.get("assignment")
+        if isinstance(assignment, dict):
+            agent_task_id = str(assignment["agent_task_id"])
+            context = ActiveAgentContext(assignment=assignment)
+            with self._active_lock:
+                self._active_agents[agent_task_id] = context
+            thread = threading.Thread(
+                target=self._execute_agent_task,
+                args=(context,),
+                name=f"remote-agent-{agent_task_id}",
+                daemon=True,
+            )
+            with self._active_lock:
+                self._active.append(thread)
+            thread.start()
+            return thread
+
         claim = self.client.claim(self.config.worker_id, self._worker_payload())
         run_payload = claim.get("run")
         if not isinstance(run_payload, dict):
@@ -306,6 +381,219 @@ class RemoteWorkerDaemon:
             self._active.append(thread)
         thread.start()
         return thread
+
+    def _execute_agent_task(self, context: ActiveAgentContext) -> None:
+        assignment = context.assignment
+        agent_task_id = str(assignment["agent_task_id"])
+        lease_token = str(assignment["lease_token"])
+        adapter = str(assignment.get("adapter") or "fake")
+        protocol = "internal" if adapter == "fake" else "ACP/A2A"
+        workspace = self._agent_workspace(assignment)
+        workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
+        heartbeat_stop = threading.Event()
+        heartbeat = threading.Thread(
+            target=self._v2_heartbeat_loop,
+            args=(heartbeat_stop, context),
+            name=f"remote-agent-heartbeat-{agent_task_id}",
+            daemon=True,
+        )
+        heartbeat.start()
+        try:
+            envelope = {
+                "protocol": "agentflow-v2-acp-a2a",
+                "protocol_version": "2026-07",
+                "task_id": assignment["task_id"],
+                "agent_task_id": agent_task_id,
+                "role": assignment.get("role"),
+                "adapter": adapter,
+                "goal": assignment.get("goal"),
+                "context": {
+                    "depends_on": assignment.get("depends_on") or [],
+                    "artifact_contract": assignment.get("artifact_contract") or {},
+                },
+            }
+            if adapter == "fake":
+                summary = (
+                    f"{assignment.get('role') or 'agent'} completed: "
+                    f"{assignment.get('goal') or ''}"
+                )
+                execution_mode = "fake"
+                exit_code = 0
+            else:
+                summary, execution_mode, exit_code = self._run_v2_cli(
+                    context, envelope, workspace
+                )
+            if context.cancelled.is_set():
+                raise RuntimeError("cancelled by control plane")
+            self.client.v2_finish_agent(
+                self.config.worker_id,
+                agent_task_id,
+                "complete",
+                {
+                    "lease_token": lease_token,
+                    "summary": summary,
+                    "protocol": protocol,
+                    "execution_mode": execution_mode,
+                    "exit_code": exit_code,
+                    "artifacts": [
+                        {
+                            "name": "worker_execution",
+                            "kind": "metadata",
+                            "content": {
+                                "workspace": str(workspace),
+                                "attempt": assignment.get("attempt"),
+                            },
+                        }
+                    ],
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - report execution failures
+            try:
+                self.client.v2_finish_agent(
+                    self.config.worker_id,
+                    agent_task_id,
+                    "fail",
+                    {
+                        "lease_token": lease_token,
+                        "error": str(exc),
+                        "retryable": not context.cancelled.is_set(),
+                    },
+                )
+            except Exception:
+                pass
+        finally:
+            heartbeat_stop.set()
+            heartbeat.join(timeout=2)
+            with self._active_lock:
+                self._active_agents.pop(agent_task_id, None)
+
+    def _run_v2_cli(
+        self,
+        context: ActiveAgentContext,
+        envelope: dict[str, Any],
+        workspace: Path,
+    ) -> tuple[str, str, int]:
+        adapter = str(context.assignment["adapter"])
+        command_env = {
+            "qwen": "V2_QWEN_CODE_COMMAND",
+            "codex": "V2_CODEX_CLI_COMMAND",
+            "claude": "V2_CLAUDE_CODE_COMMAND",
+            "opencode": "V2_OPENCODE_COMMAND",
+        }.get(adapter)
+        defaults = {
+            "qwen": "qwen",
+            "codex": "codex exec --skip-git-repo-check -",
+            "claude": "claude -p",
+            "opencode": "opencode run",
+        }
+        command = shlex.split(os.environ.get(command_env or "", defaults.get(adapter, "")))
+        executable = shutil.which(command[0]) if command else None
+        if os.environ.get("V2_ENABLE_REAL_CLI_ADAPTERS") != "1" or not executable:
+            return (
+                f"{adapter} protocol simulation completed for {envelope['goal']}",
+                "protocol-simulated",
+                0,
+            )
+        process = subprocess.Popen(
+            [executable, *command[1:]],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            cwd=workspace,
+            env=self._sanitized_worker_env(),
+        )
+        context.process = process
+        assert process.stdin is not None and process.stdout is not None
+        process.stdin.write(json.dumps(envelope, ensure_ascii=False))
+        process.stdin.close()
+        output: list[str] = []
+        for raw_line in process.stdout:
+            line = raw_line.rstrip()
+            if not line:
+                continue
+            output.append(line)
+            self.client.v2_agent_event(
+                self.config.worker_id,
+                str(context.assignment["agent_task_id"]),
+                {
+                    "lease_token": context.assignment["lease_token"],
+                    "type": "agent.message",
+                    "payload": {
+                        "message": line[:800],
+                        "protocol": "ACP/A2A",
+                        "execution_mode": "real-cli",
+                        "partial": True,
+                    },
+                },
+            )
+        process.stdout.close()
+        exit_code = process.wait()
+        summary = "\n".join(output).strip() or f"{adapter} completed with code {exit_code}"
+        if exit_code != 0:
+            raise RuntimeError(f"{adapter} CLI exited with code {exit_code}: {summary[:400]}")
+        return summary[:4000], "real-cli", exit_code
+
+    def _v2_heartbeat_loop(
+        self,
+        stop: threading.Event,
+        context: ActiveAgentContext,
+    ) -> None:
+        while not stop.is_set() and not self._stop.is_set():
+            try:
+                self.client.v2_heartbeat(self.config.worker_id, self._v2_worker_payload())
+                control = self.client.v2_control(self.config.worker_id)
+                for action in control.get("actions") or []:
+                    if (
+                        isinstance(action, dict)
+                        and action.get("agent_task_id") == context.assignment.get("agent_task_id")
+                        and action.get("type") == "cancel"
+                    ):
+                        context.cancelled.set()
+                        if context.process is not None and context.process.poll() is None:
+                            context.process.terminate()
+                for permission in control.get("permissions") or []:
+                    if not isinstance(permission, dict):
+                        continue
+                    if permission.get("agent_task_id") != context.assignment.get(
+                        "agent_task_id"
+                    ):
+                        continue
+                    permission_id = str(permission.get("permission_id") or "")
+                    if not permission_id or permission_id in context.applied_permissions:
+                        continue
+                    context.applied_permissions.add(permission_id)
+                    self.client.v2_agent_event(
+                        self.config.worker_id,
+                        str(context.assignment["agent_task_id"]),
+                        {
+                            "lease_token": context.assignment["lease_token"],
+                            "type": "permission.applied",
+                            "payload": {
+                                "permission_id": permission_id,
+                                "decision": permission.get("decision") or {},
+                            },
+                        },
+                    )
+            except Exception:
+                pass
+            stop.wait(self.config.heartbeat_interval_seconds)
+
+    def _agent_workspace(self, assignment: dict[str, Any]) -> Path:
+        root = self.config.artifact_root or Path(".aflow-worker")
+        task_id = safe_path_segment(str(assignment["task_id"]))
+        agent_task_id = safe_path_segment(str(assignment["agent_task_id"]))
+        return root.resolve() / "v2" / task_id / agent_task_id
+
+    def _sanitized_worker_env(self) -> dict[str, str]:
+        allowed_prefixes = ("V2_", "QWEN_", "CODEX_", "ANTHROPIC_", "OPENAI_", "OPENCODE_")
+        allowed_names = {"PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR"}
+        return {
+            key: value
+            for key, value in os.environ.items()
+            if key in allowed_names or key.startswith(allowed_prefixes)
+        }
 
     def _execute_run(self, run: RunState) -> None:
         store = RemoteWorkerRunStore(
@@ -450,6 +738,27 @@ class RemoteWorkerDaemon:
             "metadata": metadata,
         }
 
+    def _v2_worker_payload(self) -> dict[str, Any]:
+        payload = self._worker_payload()
+        metadata = dict(payload.get("metadata") or {})
+        capabilities = dict(metadata.get("capabilities") or {})
+        configured_adapters = [
+            item.strip()
+            for item in os.environ.get(
+                "V2_WORKER_ADAPTERS", "fake,qwen,codex,claude,opencode"
+            ).split(",")
+            if item.strip()
+        ]
+        return {
+            "kind": "remote-worker",
+            "status": "active",
+            "lease_ttl_seconds": self.config.lease_ttl_seconds,
+            "labels": metadata,
+            "resources": metadata.get("resources") or {},
+            "adapters": configured_adapters,
+            "features": [*(capabilities.get("features") or []), "v2-agent-tasks"],
+        }
+
     def _active_count(self) -> int:
         with self._active_lock:
             return sum(1 for thread in self._active if thread.is_alive())
@@ -498,6 +807,12 @@ def safe_child_file(parent: Path, name: str) -> Path:
     if candidate.name != name or name in {"", ".", ".."}:
         raise ValueError("artifact name must be a file name")
     return parent / name
+
+
+def safe_path_segment(value: str) -> str:
+    if not value or value in {".", ".."} or Path(value).name != value:
+        raise ValueError("identifier is not a safe path segment")
+    return value
 
 
 def quote_path(value: str) -> str:

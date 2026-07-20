@@ -34,6 +34,16 @@ jobs:
           docker compose --env-file deploy/runtime.local-nas.env.example
           -f deploy/docker-compose.runtime.yml config --quiet
 
+      - name: Validate HA Compose profile
+        env:
+          POSTGRES_PASSWORD: ci-postgres-password
+          RUN_MANAGER_TOKEN: ci-runtime-token
+          RUN_MANAGER_SESSION_SECRET: ci-session-secret
+          RUNTIME_BOOTSTRAP_PASSWORD: ci-bootstrap-password
+          RUN_WORKER_TOKEN: ci-worker-token
+          V2_DATABASE_URL: postgresql://agentflow:ci-postgres-password@postgres/agentflow
+        run: docker compose -f deploy/docker-compose.ha.yml config --quiet
+
       - name: Compile runtime
         run: python3 -m compileall -q runtime scripts
 

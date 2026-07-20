@@ -85,7 +85,7 @@ python3 scripts/local_stack.py demo --adapter codex --require-real-cli
 ```
 
 当前轻量 profile 中的执行单元是 Runtime 容器自身，任务也确实在该容器内执行。
-它不是远程 worker 的伪装；跨机器 V2 worker 协议仍应作为后续独立生产化工作。
+跨机器 V2 Worker 已支持 Agent Task 认领、租约心跳、独立 workspace、实时事件、artifact、取消、审批和失败重试。控制面与 Worker 使用同一个稳定 `RUN_WORKER_ID`/Execution Unit id，才能让调度结果和实际认领匹配。
 
 ### 3.2 手工 systemd 部署
 
@@ -267,6 +267,7 @@ V2_WORKFLOW_ENGINE=temporal
 TEMPORAL_TASK_QUEUE=agentflow-v2
 V2_WORKER_REPLICAS=2
 V2_WORKER_CONCURRENCY=2
+V2_WORKER_ADAPTERS=fake,qwen,codex,claude,opencode
 V2_BACKUP_ENABLED=1
 V2_BACKUP_TARGET=/data/backups
 ```
@@ -463,6 +464,19 @@ manager 注入。
 | artifact | 任务详情能预览或下载产物 |
 | audit | 能下载事件、diagnostics、audit bundle |
 | 备份 | 知道数据库、artifact、env secret 存在哪里 |
+| 并发验证 | `scripts/validate_ha_load.py` 达到预期吞吐且前后 health 均正常 |
+
+并发和 HA 验证命令：
+
+```bash
+python3 scripts/validate_ha_load.py \
+  --base-url http://127.0.0.1:8765 \
+  --token "$RUN_MANAGER_TOKEN" \
+  --tasks 20 \
+  --concurrency 4
+```
+
+输出包含总耗时、吞吐量和 p50/p95/max 延迟。上线前还应在目标机器执行 Worker 进程终止、租约过期重领、数据库备份恢复和磁盘耗尽告警演练；脚本通过不等同于多副本控制面已经完成。
 
 ## 12. 常见问题
 

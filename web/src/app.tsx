@@ -2438,6 +2438,8 @@ function AccessPage() {
   const [userPassword, setUserPassword] = useState("");
   const [userRole, setUserRole] = useState("member");
   const [userVerified, setUserVerified] = useState(true);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   const policy = useQuery({
     queryKey: ["access", "policy"],
     queryFn: runtimeApi.accessPolicy,
@@ -2504,6 +2506,15 @@ function AccessPage() {
       runtimeApi.resetAuthUserPassword(payload.email, payload.password),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["auth", "users"] });
+    },
+  });
+  const changePassword = useMutation({
+    mutationFn: runtimeApi.changePassword,
+    onSuccess: () => {
+      setCurrentPassword("");
+      setNewPassword("");
+      window.location.hash = "/admin-login";
+      window.location.reload();
     },
   });
   const principal = policy.data?.current_principal;
@@ -2576,6 +2587,55 @@ function AccessPage() {
           </CardBody>
         </Card>
       </div>
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <KeyRound className="h-4 w-4 text-primary" />
+            <CardTitle>{t("access.changeOwnPassword")}</CardTitle>
+          </div>
+          <Badge tone="info">{t("access.revokesSessions")}</Badge>
+        </CardHeader>
+        <CardBody className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+          <Field label={t("access.currentPassword")}>
+            <Input
+              autoComplete="current-password"
+              type="password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+            />
+          </Field>
+          <Field label={t("access.newStrongPassword")}>
+            <Input
+              autoComplete="new-password"
+              minLength={12}
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+            />
+          </Field>
+          <Button
+            className="self-end"
+            disabled={
+              changePassword.isPending ||
+              !currentPassword ||
+              newPassword.length < 12
+            }
+            onClick={() =>
+              changePassword.mutate({
+                current_password: currentPassword,
+                new_password: newPassword,
+              })
+            }
+          >
+            {t("access.updatePassword")}
+          </Button>
+          {changePassword.isError ? (
+            <div className="md:col-span-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+              {String(changePassword.error)}
+            </div>
+          ) : null}
+        </CardBody>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>{t("access.scopes")}</CardTitle>

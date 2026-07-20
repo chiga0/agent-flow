@@ -40,7 +40,7 @@
 | Admin 子页面拆分 | Tenants、Users、RBAC、Channels、Execution Units、HA 分区更清楚 |
 | Project membership | 已完成基础闭环；普通用户可在项目范围内共享 Task |
 | Artifact 授权 | 已完成 V2 Task/Artifact/Audit 统一项目访问判断 |
-| 用户自助安全 | 改密码、token_version、session 失效、CSRF |
+| 用户自助安全 | 已完成改密码、token_version、全 session 失效、浏览器 CSRF 与强密码门禁 |
 | 移动端审批 | 手机端完成权限处理和结果查看 |
 
 ## P2：生产级执行
@@ -48,6 +48,8 @@
 | 项 | 目标 |
 | --- | --- |
 | Temporal 深度接入 | 已接入 V2 task dispatcher/worker/activity；审批信号仍需继续深化 |
+| V2 Remote Worker | 已完成 Agent Task lease、隔离 workspace、实时事件/artifact、取消、审批投递、重试与失联回收 |
+| HA/压力验证 | 已提供 HA Compose 配置校验和并发任务延迟/吞吐验证脚本；多副本控制面仍依赖共享 Postgres 领域存储迁移 |
 | 执行单元调度策略 | 基于资源、标签、租户、adapter、成本选择 unit |
 | Docker/ECS/NAS 生产化 | workspace 隔离、secret 注入、资源限制、日志回收 |
 | Worker 水平扩展 | 多 worker 副本、健康检查、drain/resume、迁移 |

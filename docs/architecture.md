@@ -151,6 +151,6 @@ aflow 的审计不是附加日志，而是任务事实源的一部分：
 
 - “本机/NAS 一体化”和“单 VPS 一体化”是可完整验收的现行拓扑。
 - “本机控制面 + 云端只做反向代理/隧道”是可完整验收的混合拓扑。
-- “本机控制面 + 云端执行 V2 Task”仍是待生产化链路，不能仅凭 Execution Unit 注册状态宣称完成。
+- “本机/NAS 控制面 + 云端执行 V2 Task”已接入 Remote Worker lease 协议：Worker 主动心跳和认领 Agent Task，在独立目录执行 adapter，实时回传事件和 artifact，并处理取消、审批、失败重试和租约过期回收。Execution Unit 仅注册但没有 Worker 心跳时，仍不能视为可执行。
 
-后者需要在 Worker 协议中继续闭环 V2 Task 领取、workspace/secret 传递、实时事件和 artifact 回传、取消、重试及断线恢复。部署选择与证据要求见[场景化部署与验收](deployment-scenarios.md)。
+当前 HA compose 已提供 Postgres、Redis、Temporal 和多 Worker 拓扑及压测工具；控制面领域数据切换到共享 Postgres 的迁移仍需在正式多副本控制面前完成，因此现阶段生产建议保持单控制面、多远程 Worker。部署选择与证据要求见[场景化部署与验收](deployment-scenarios.md)。

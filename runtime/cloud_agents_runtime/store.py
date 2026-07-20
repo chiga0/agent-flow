@@ -732,6 +732,7 @@ class RunStore:
                     existing.email_verified_at = now
                 if rotate_password:
                     existing.password_hash = password_hash
+                    existing.token_version += 1
                 existing.updated_at = now
                 self._persist_auth_user(existing)
                 return existing
@@ -826,6 +827,7 @@ class RunStore:
             if user is None:
                 raise KeyError(normalized_email)
             user.password_hash = password_hash
+            user.token_version += 1
             user.updated_at = utc_now()
             self._persist_auth_user(user)
             return user
@@ -850,6 +852,7 @@ class RunStore:
                 last_seen_at=now,
                 user_agent=user_agent,
                 ip_address=ip_address,
+                token_version=user.token_version,
             )
             user.last_login_at = now
             user.updated_at = now
@@ -872,7 +875,9 @@ class RunStore:
                   u.display_name,
                   u.roles_json,
                   u.status,
-                  u.email_verified_at
+                  u.email_verified_at,
+                  u.token_version AS user_token_version,
+                  s.token_version AS session_token_version
                 from auth_sessions s
                 join auth_users u on u.email = s.user_email
                 where s.session_hash = ?
@@ -881,7 +886,12 @@ class RunStore:
             ).fetchone()
             if row is None:
                 return None
-            if row["revoked_at"] or row["expires_at"] <= utc_now() or row["status"] != "active":
+            if (
+                row["revoked_at"]
+                or row["expires_at"] <= utc_now()
+                or row["status"] != "active"
+                or row["user_token_version"] != row["session_token_version"]
+            ):
                 return None
             now = utc_now()
             self._db.execute(
@@ -899,6 +909,7 @@ class RunStore:
                 "auth_type": "session",
                 "session_id": row["session_id"],
                 "email_verified": bool(row["email_verified_at"]),
+                "csrf_token": hash_token(f"csrf:{session_token}"),
             }
 
     def revoke_auth_session(self, session_token: str | None) -> bool:
@@ -1335,7 +1346,8 @@ class RunStore:
               created_at text not null,
               updated_at text not null,
               last_login_at text,
-              metadata_json text not null
+              metadata_json text not null,
+              token_version integer not null default 1
             );
             create table if not exists auth_sessions (
               session_id text primary key,
@@ -1346,7 +1358,8 @@ class RunStore:
               revoked_at text,
               last_seen_at text,
               user_agent text,
-              ip_address text
+              ip_address text,
+              token_version integer not null default 1
             );
             create table if not exists permission_notifications (
               notification_id text primary key,
@@ -1417,6 +1430,8 @@ class RunStore:
             """
         )
         self._ensure_column("workers", "metadata_json", "text not null default '{}'")
+        self._ensure_column("auth_users", "token_version", "integer not null default 1")
+        self._ensure_column("auth_sessions", "token_version", "integer not null default 1")
         self._db.commit()
 
     def _ensure_column(self, table: str, column: str, definition: str) -> None:
@@ -1547,6 +1562,7 @@ class RunStore:
                     updated_at=row["updated_at"],
                     last_login_at=row["last_login_at"],
                     metadata=json.loads(row["metadata_json"]),
+                    token_version=row["token_version"],
                 )
             for row in self._db.execute(
                 "select * from permission_notifications order by created_at"
@@ -1828,8 +1844,9 @@ class RunStore:
             """
             insert into auth_users(
               email, display_name, password_hash, roles_json, status,
-              email_verified_at, created_at, updated_at, last_login_at, metadata_json
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              email_verified_at, created_at, updated_at, last_login_at, metadata_json,
+              token_version
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(email) do update set
               display_name=excluded.display_name,
               password_hash=excluded.password_hash,
@@ -1838,7 +1855,8 @@ class RunStore:
               email_verified_at=excluded.email_verified_at,
               updated_at=excluded.updated_at,
               last_login_at=excluded.last_login_at,
-              metadata_json=excluded.metadata_json
+              metadata_json=excluded.metadata_json,
+              token_version=excluded.token_version
             """,
             (
                 user.email,
@@ -1851,6 +1869,7 @@ class RunStore:
                 user.updated_at,
                 user.last_login_at,
                 json.dumps(user.metadata, ensure_ascii=False, sort_keys=True),
+                user.token_version,
             ),
         )
         self._db.commit()
@@ -1860,14 +1879,15 @@ class RunStore:
             """
             insert into auth_sessions(
               session_id, user_email, session_hash, created_at, expires_at,
-              revoked_at, last_seen_at, user_agent, ip_address
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              revoked_at, last_seen_at, user_agent, ip_address, token_version
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(session_id) do update set
               expires_at=excluded.expires_at,
               revoked_at=excluded.revoked_at,
               last_seen_at=excluded.last_seen_at,
               user_agent=excluded.user_agent,
-              ip_address=excluded.ip_address
+              ip_address=excluded.ip_address,
+              token_version=excluded.token_version
             """,
             (
                 session.session_id,
@@ -1879,6 +1899,7 @@ class RunStore:
                 session.last_seen_at,
                 session.user_agent,
                 session.ip_address,
+                session.token_version,
             ),
         )
         self._db.commit()

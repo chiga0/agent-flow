@@ -687,6 +687,21 @@ const fixtures: Record<string, unknown> = {
   "v2/tasks/task_v2_1/workflow": v2Workflow,
   "v2/tasks/task_v2_1/artifacts": v2Artifacts,
   "v2/tasks/task_v2_1/evaluations": v2Evaluations,
+  "v2/tasks/task_v2_1/permissions": {
+    permissions: [
+      {
+        permission_id: "perm_v2_1",
+        task_id: "task_v2_1",
+        agent_task_id: "at_brain",
+        worker_id: "nas-worker",
+        status: "pending",
+        request: { tool: "shell", description: "Run release checks" },
+        decision: {},
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ],
+  },
   "v2/tasks/task_v2_1/replays": { replays: [v2Replay] },
   "v2/admin/overview": v2Overview,
   "v2/admin/projects": {
@@ -1099,6 +1114,8 @@ describe("aflow console", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Plan DAG")).toBeInTheDocument();
     expect(screen.getByText("Agent Chat")).toBeInTheDocument();
+    expect(screen.getByText("Agent needs permission")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Deny" }));
     expect(screen.getByLabelText("Agent switcher")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /All output/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /brain/ })).toBeInTheDocument();
@@ -1140,6 +1157,10 @@ describe("aflow console", () => {
     );
     expect(fetch).toHaveBeenCalledWith(
       "/v2/tasks/task_v2_1/retry",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "/v2/tasks/task_v2_1/permissions/perm_v2_1",
       expect.objectContaining({ method: "POST" }),
     );
 
@@ -1433,6 +1454,12 @@ describe("aflow console", () => {
     expect((await screen.findAllByText("runs:*")).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "Export" }));
     expect(click).toHaveBeenCalled();
+    await user.type(screen.getByLabelText("Current password"), "secret-12345");
+    await user.type(
+      screen.getByLabelText("New password (12+ characters)"),
+      "updated-secret-12345",
+    );
+    await user.click(screen.getByRole("button", { name: "Update password" }));
     await user.clear(screen.getAllByLabelText("Project ID")[0]);
     await user.type(screen.getAllByLabelText("Project ID")[0], "team1");
     await user.clear(screen.getAllByLabelText("Display name")[1]);
@@ -3180,6 +3207,9 @@ async function fetchMock(input: RequestInfo | URL, init?: RequestInit) {
     authSessionAuthenticated = false;
     return jsonResponse({ authenticated: false });
   }
+  if (init?.method === "POST" && path === "auth/password") {
+    return jsonResponse({ error: "test keeps session active" }, 400);
+  }
   if (init?.method === "POST" && path === "runs") {
     await new Promise((resolve) => setTimeout(resolve, 10));
     return jsonResponse({ ...run, run_id: "run_created", status: "queued" });
@@ -3252,6 +3282,12 @@ async function fetchMock(input: RequestInfo | URL, init?: RequestInit) {
   }
   if (init?.method === "POST" && path === "v2/tasks/task_v2_1/replay") {
     return jsonResponse(v2Replay);
+  }
+  if (
+    init?.method === "POST" &&
+    path === "v2/tasks/task_v2_1/permissions/perm_v2_1"
+  ) {
+    return jsonResponse({ permission_id: "perm_v2_1", status: "resolved" });
   }
   if (path === "runs/run_created") {
     return jsonResponse({ ...run, run_id: "run_created", status: "queued" });

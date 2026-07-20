@@ -28,6 +28,7 @@ from runtime.cloud_agents_runtime.auth import (
     hash_password,
     is_authorized,
     normalize_email,
+    validate_password,
     verify_password,
 )
 from runtime.cloud_agents_runtime.events import RuntimeEvent
@@ -80,6 +81,9 @@ from runtime.cloud_agents_runtime.models import (
     RunSpec,
     RunState,
     clean_identifier,
+    clean_channel,
+    clean_notification_target,
+    clean_principal_id,
     hash_token,
 )
 from runtime.cloud_agents_runtime.notifications import (
@@ -329,6 +333,27 @@ class RuntimeEdgeTest(unittest.TestCase):
             normalize_email("not-an-email")
         self.assertFalse(verify_password("secret", "bad-hash"))
         self.assertFalse(verify_password(123, hash_password("secret")))
+        self.assertFalse(verify_password("secret", "scrypt$1$YQ==$YQ=="))
+        for password in ("short", " " * 12, "x" * 1025):
+            with self.assertRaises(ValueError):
+                validate_password(password)
+        self.assertEqual(validate_password("a-valid-password"), "a-valid-password")
+
+        disabled_auth = AuthConfig()
+        self.assertIsNone(disabled_auth.bootstrap_email_value)
+        self.assertFalse(disabled_auth.login_matches("owner", "password"))
+        self.assertIsNone(disabled_auth.resolve_login_email("unknown"))
+
+        for cleaner, value in (
+            (clean_principal_id, ""),
+            (clean_principal_id, "bad\x00principal"),
+            (clean_channel, ""),
+            (clean_channel, "BAD!"),
+            (clean_notification_target, ""),
+            (clean_notification_target, "bad\x00target"),
+        ):
+            with self.assertRaises(ValueError):
+                cleaner(value)
 
         auth = AuthConfig(
             login_user="legacy",

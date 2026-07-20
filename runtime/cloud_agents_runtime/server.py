@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import mimetypes
 import os
@@ -14,7 +15,7 @@ from urllib.parse import unquote, urlparse
 
 from . import __version__
 from .access import roles_allow, scopes_allow
-from .auth import AuthConfig, hash_password, is_authorized, verify_password
+from .auth import AuthConfig, hash_password, is_authorized, validate_password, verify_password
 from .executors import ExecutorConfig
 from .interop import (
     a2a_agent_card,
@@ -204,6 +205,21 @@ def make_handler(
                 len(parts) == 4
                 and parts[0] == "v2"
                 and parts[1] == "tasks"
+                and parts[3] == "permissions"
+            ):
+                if not self.authorize_v2_task(unquote(parts[2])):
+                    return
+                try:
+                    self.write_json(
+                        {"permissions": manager.v2.task_permissions(unquote(parts[2]))}
+                    )
+                except KeyError:
+                    self.write_error(HTTPStatus.NOT_FOUND, "task not found")
+                return
+            if (
+                len(parts) == 4
+                and parts[0] == "v2"
+                and parts[1] == "tasks"
                 and parts[3] == "replays"
             ):
                 if not self.authorize_v2_task(unquote(parts[2])):
@@ -263,6 +279,13 @@ def make_handler(
                 return
             if path == "/v2/admin/workflow-engines":
                 self.write_json(manager.v2.workflow_engine_status())
+                return
+            if (
+                len(parts) == 4
+                and parts[:2] == ["v2", "workers"]
+                and parts[3] == "control"
+            ):
+                self.write_json(manager.v2.remote_agent_control(unquote(parts[2])))
                 return
             if path == "/capabilities":
                 self.write_json(manager.capabilities())
@@ -593,6 +616,13 @@ def make_handler(
                 self.handle_login()
                 return
             if path == "/auth/logout":
+                identity = self.session_identity()
+                supplied_csrf = self.headers.get("x-csrf-token") or ""
+                if identity and self.browser_csrf_required() and not hmac.compare_digest(
+                    str(identity.get("csrf_token") or ""), supplied_csrf
+                ):
+                    self.write_error(HTTPStatus.FORBIDDEN, "invalid csrf token")
+                    return
                 manager.store.revoke_auth_session(
                     auth_config.session_token(self.headers.get("cookie"))
                 )
@@ -635,6 +665,28 @@ def make_handler(
                 return
             try:
                 payload = self.read_json()
+                if path == "/auth/password":
+                    new_password = validate_password(payload.get("new_password"))
+                    user = manager.store.get_auth_user(self.principal_id() or "")
+                    if user is None or not verify_password(
+                        payload.get("current_password"), user.password_hash
+                    ):
+                        self.write_error(HTTPStatus.FORBIDDEN, "current password is invalid")
+                        return
+                    manager.store.reset_auth_user_password(
+                        user.email, hash_password(new_password)
+                    )
+                    manager.store.revoke_auth_user_sessions(user.email)
+                    self.write_json(
+                        {"changed": True, "authenticated": False},
+                        headers={
+                            "set-cookie": auth_config.clear_session_cookie(
+                                cookie_path=self.cookie_path(),
+                                secure=self.is_secure_request(),
+                            )
+                        },
+                    )
+                    return
                 if (
                     len(parts) == 5
                     and parts[:3] == ["v2", "internal", "tasks"]
@@ -646,6 +698,60 @@ def make_handler(
                         self.write_error(HTTPStatus.NOT_FOUND, "task not found")
                         return
                     self.write_json(task, status=HTTPStatus.ACCEPTED)
+                    return
+                if (
+                    len(parts) == 4
+                    and parts[:2] == ["v2", "workers"]
+                    and parts[3] == "heartbeat"
+                ):
+                    unit = manager.v2.heartbeat_execution_worker(
+                        unquote(parts[2]), payload
+                    )
+                    self.write_json({"unit": unit}, status=HTTPStatus.ACCEPTED)
+                    return
+                if (
+                    len(parts) == 4
+                    and parts[:2] == ["v2", "workers"]
+                    and parts[3] == "claim"
+                ):
+                    claim = manager.v2.claim_remote_agent_task(
+                        unquote(parts[2]), payload
+                    )
+                    self.write_json(claim, status=HTTPStatus.ACCEPTED)
+                    return
+                if (
+                    len(parts) == 6
+                    and parts[:2] == ["v2", "workers"]
+                    and parts[3] == "agent-tasks"
+                    and parts[5] in {"events", "complete", "fail"}
+                ):
+                    worker_id = unquote(parts[2])
+                    agent_task_id = unquote(parts[4])
+                    try:
+                        if parts[5] == "events":
+                            result = {
+                                "event": manager.v2.append_remote_agent_event(
+                                    worker_id, agent_task_id, payload
+                                )
+                            }
+                            status = HTTPStatus.ACCEPTED
+                        elif parts[5] == "complete":
+                            result = manager.v2.complete_remote_agent_task(
+                                worker_id, agent_task_id, payload
+                            )
+                            status = HTTPStatus.ACCEPTED
+                        else:
+                            result = manager.v2.fail_remote_agent_task(
+                                worker_id, agent_task_id, payload
+                            )
+                            status = HTTPStatus.ACCEPTED
+                    except PermissionError as exc:
+                        self.write_error(HTTPStatus.CONFLICT, str(exc))
+                        return
+                    except KeyError:
+                        self.write_error(HTTPStatus.NOT_FOUND, "agent task not found")
+                        return
+                    self.write_json(result, status=status)
                     return
                 if len(parts) == 2 and parts[0] == "v2" and parts[1] == "tasks":
                     project_id = str(payload.get("project_id") or "project_default")
@@ -717,6 +823,43 @@ def make_handler(
                         self.write_error(HTTPStatus.BAD_REQUEST, str(exc))
                         return
                     self.write_json(task, status=HTTPStatus.ACCEPTED)
+                    return
+                if (
+                    len(parts) == 4
+                    and parts[:2] == ["v2", "tasks"]
+                    and parts[3] == "cancel"
+                ):
+                    if not self.authorize_v2_task(unquote(parts[2]), write=True):
+                        return
+                    try:
+                        task = manager.v2.cancel_task(
+                            unquote(parts[2]),
+                            principal=self.principal_id() or "api-token",
+                            reason=payload.get("reason"),
+                        )
+                    except KeyError:
+                        self.write_error(HTTPStatus.NOT_FOUND, "task not found")
+                        return
+                    self.write_json(task, status=HTTPStatus.ACCEPTED)
+                    return
+                if (
+                    len(parts) == 5
+                    and parts[:2] == ["v2", "tasks"]
+                    and parts[3] == "permissions"
+                ):
+                    if not self.authorize_v2_task(unquote(parts[2]), write=True):
+                        return
+                    try:
+                        permission = manager.v2.resolve_task_permission(
+                            unquote(parts[2]),
+                            unquote(parts[4]),
+                            payload,
+                            principal=self.principal_id() or "api-token",
+                        )
+                    except KeyError:
+                        self.write_error(HTTPStatus.NOT_FOUND, "permission not found")
+                        return
+                    self.write_json(permission, status=HTTPStatus.ACCEPTED)
                     return
                 if (
                     len(parts) == 4
@@ -1252,6 +1395,17 @@ def make_handler(
             session_identity = self.session_identity()
             if session_identity:
                 self.current_identity = session_identity
+                if (
+                    self.command in {"POST", "PUT", "PATCH", "DELETE"}
+                    and self.browser_csrf_required()
+                ):
+                    expected_csrf = str(session_identity.get("csrf_token") or "")
+                    supplied_csrf = self.headers.get("x-csrf-token") or ""
+                    if not expected_csrf or not hmac.compare_digest(
+                        expected_csrf, supplied_csrf
+                    ):
+                        self.write_error(HTTPStatus.FORBIDDEN, "invalid csrf token")
+                        return False
                 required_scope = required_scope_for(self.command, path)
                 if required_scope is None or roles_allow(
                     session_identity.get("roles"),
@@ -1353,8 +1507,8 @@ def make_handler(
 
         def create_auth_user(self, payload: dict[str, Any]) -> dict[str, Any]:
             email = payload.get("email")
-            password = payload.get("password")
-            if not isinstance(email, str) or not isinstance(password, str) or not password:
+            password = validate_password(payload.get("password"))
+            if not isinstance(email, str):
                 raise ValueError("email and password are required")
             roles = validate_auth_roles(payload.get("roles") or ["member"])
             user = manager.store.create_auth_user(
@@ -1388,9 +1542,7 @@ def make_handler(
                     manager.store.revoke_auth_user_sessions(email)
                 return user.to_dict()
             if action == "password":
-                password = payload.get("password")
-                if not isinstance(password, str) or not password:
-                    raise ValueError("password is required")
+                password = validate_password(payload.get("password"))
                 user = manager.store.reset_auth_user_password(email, hash_password(password))
                 manager.store.revoke_auth_user_sessions(email)
                 return user.to_dict()
@@ -1454,6 +1606,13 @@ def make_handler(
             if forwarded_for:
                 return forwarded_for.split(",", 1)[0].strip()
             return str(self.client_address[0])
+
+        def browser_csrf_required(self) -> bool:
+            return bool(
+                self.headers.get("origin")
+                or self.headers.get("sec-fetch-site")
+                or self.headers.get("x-csrf-token")
+            )
 
         def session_identity(self) -> dict[str, Any] | None:
             return manager.store.auth_session_identity(
@@ -1649,6 +1808,8 @@ def required_scope_for(method: str, path: str) -> str | None:
     if parts[0] == "auth":
         return "access:read" if method == "GET" else "access:write"
     if parts[0] == "v2":
+        if len(parts) >= 2 and parts[1] == "workers":
+            return "workers:read" if method == "GET" else "workers:write"
         if len(parts) >= 2 and parts[1] == "admin":
             return "access:read" if method == "GET" else "access:write"
         if method == "GET":

@@ -63,6 +63,8 @@ Tenant 是组织配置边界。owner 可以在 Admin 中：
 - 设置角色和 RBAC policy。
 - 配置租户可用 adapter、执行单元和 Channel。
 - 禁用用户或重置密码。
+- 当前用户可在 Access 页面自助修改密码；新密码至少 12 位，修改后 token version 递增并撤销全部已有会话。
+- 浏览器写请求使用 HttpOnly session cookie + CSRF token；API Token/Worker Bearer 调用不依赖浏览器 CSRF。
 
 角色建议：
 
@@ -97,6 +99,8 @@ Admin 中的 Workflow 页面用于查看当前 profile、task queue、worker 副
 - 定期备份和恢复演练。
 
 2C2G VPS 不建议作为完整 HA 节点。更合理的定位是公网入口或单 worker；控制面和数据库放在 NAS、工作站或更大云主机。
+
+压测前后都要检查 `/health`，并用 `scripts/validate_ha_load.py` 记录吞吐和 p95。当前推荐的生产拓扑是单控制面 + 多远程 Worker；在 V2 领域数据完全迁移到共享 Postgres 之前，不要把 Runtime 控制面直接扩成多副本。
 
 ## 7. 审计闭环
 

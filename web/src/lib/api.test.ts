@@ -120,6 +120,10 @@ describe("api helpers", () => {
     await runtimeApi.session();
     await runtimeApi.login({ email: "owner@example.com", password: "secret" });
     await runtimeApi.logout();
+    await runtimeApi.changePassword({
+      current_password: "secret-12345",
+      new_password: "secret-67890",
+    });
     await runtimeApi.workerControl("worker 1");
     await runtimeApi.drainWorker("worker 1");
     await runtimeApi.resumeWorker("worker 1");
@@ -183,10 +187,13 @@ describe("api helpers", () => {
     await runtimeApi.v2TaskWorkflow("task 1");
     await runtimeApi.v2TaskArtifacts("task 1");
     await runtimeApi.v2TaskEvaluations("task 1");
+    await runtimeApi.v2TaskPermissions("task 1");
     await runtimeApi.v2TaskReplays("task 1");
     await runtimeApi.v2CreateTask({ goal: "ship v2" });
     await runtimeApi.v2SubmitMessage("task 1", "continue");
     await runtimeApi.v2RetryTask("task 1");
+    await runtimeApi.v2CancelTask("task 1");
+    await runtimeApi.v2ResolvePermission("task 1", "perm 1", "allow_once");
     await runtimeApi.v2ReplayTask("task 1");
     await runtimeApi.v2AdminOverview();
     await runtimeApi.v2ExecutionUnits();
@@ -215,6 +222,7 @@ describe("api helpers", () => {
       "/auth/session",
       "/auth/login",
       "/auth/logout",
+      "/auth/password",
       "/workers/worker%201/control",
       "/workers/worker%201/drain",
       "/workers/worker%201/resume",
@@ -266,10 +274,13 @@ describe("api helpers", () => {
       "/v2/tasks/task%201/workflow",
       "/v2/tasks/task%201/artifacts",
       "/v2/tasks/task%201/evaluations",
+      "/v2/tasks/task%201/permissions",
       "/v2/tasks/task%201/replays",
       "/v2/tasks",
       "/v2/tasks/task%201/messages",
       "/v2/tasks/task%201/retry",
+      "/v2/tasks/task%201/cancel",
+      "/v2/tasks/task%201/permissions/perm%201",
       "/v2/tasks/task%201/replay",
       "/v2/admin/overview",
       "/v2/admin/execution-units",
@@ -291,6 +302,7 @@ describe("api helpers", () => {
     const methods = new Map(calls.map(([path, init]) => [path, init?.method]));
     expect(methods.get("/auth/login")).toBe("POST");
     expect(methods.get("/auth/logout")).toBe("POST");
+    expect(methods.get("/auth/password")).toBe("POST");
     expect(methods.get("/workers/worker%201/drain")).toBe("POST");
     expect(methods.get("/workers/worker%201/resume")).toBe("POST");
     expect(methods.get("/workers/worker%201/retry")).toBe("POST");
@@ -321,6 +333,8 @@ describe("api helpers", () => {
     expect(methods.get("/v2/tasks")).toBe("POST");
     expect(methods.get("/v2/tasks/task%201/messages")).toBe("POST");
     expect(methods.get("/v2/tasks/task%201/retry")).toBe("POST");
+    expect(methods.get("/v2/tasks/task%201/cancel")).toBe("POST");
+    expect(methods.get("/v2/tasks/task%201/permissions/perm%201")).toBe("POST");
     expect(methods.get("/v2/tasks/task%201/replay")).toBe("POST");
     expect(methods.get("/v2/admin/execution-units")).toBe("POST");
     expect(methods.get("/v2/admin/execution-units/discover")).toBe("POST");
@@ -345,6 +359,33 @@ describe("api helpers", () => {
     );
 
     await expect(runtimeApi.health()).rejects.toThrow("not allowed");
+  });
+
+  it("sends the session csrf token on browser mutations", async () => {
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((path: string, init?: RequestInit) => {
+        calls.push([path, init]);
+        return Promise.resolve(
+          new Response(
+            JSON.stringify(
+              path === "/auth/session"
+                ? { authenticated: true, csrf_token: "csrf-test" }
+                : { ok: true },
+            ),
+            { status: 200 },
+          ),
+        );
+      }),
+    );
+
+    await runtimeApi.session();
+    await runtimeApi.v2CancelTask("task-csrf");
+
+    expect(calls[1][1]?.headers).toMatchObject({
+      "x-csrf-token": "csrf-test",
+    });
   });
 
   it("builds hrefs from the current app base", async () => {

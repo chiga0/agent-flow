@@ -2,6 +2,7 @@ export type RunStatus =
   "created" | "queued" | "running" | "completed" | "failed" | "cancelled";
 
 const API_BASE = getApiBase();
+let csrfToken: string | null = null;
 
 export interface RunSpec {
   prompt?: string | null;
@@ -373,6 +374,7 @@ export interface AuthSession {
     roles: string[];
   } | null;
   auth_mode?: string;
+  csrf_token?: string | null;
 }
 
 export interface V2Progress {
@@ -457,6 +459,19 @@ export interface V2Event {
   actor: string;
   payload: Record<string, unknown>;
   created_at: string;
+}
+
+export interface V2Permission {
+  permission_id: string;
+  task_id: string;
+  agent_task_id: string;
+  worker_id: string;
+  status: "pending" | "resolved" | string;
+  request: Record<string, unknown>;
+  decision: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  delivered_at?: string | null;
 }
 
 export interface V2WorkflowRun {
@@ -632,18 +647,28 @@ export interface V2AdminOverview {
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     credentials: "same-origin",
     headers: {
       "content-type": "application/json",
+      ...(csrfToken && !["GET", "HEAD", "OPTIONS"].includes(method)
+        ? { "x-csrf-token": csrfToken }
+        : {}),
       ...(init?.headers ?? {}),
     },
   });
   if (!response.ok) {
     throw new Error((await response.text()) || response.statusText);
   }
-  return response.json() as Promise<T>;
+  const result = (await response.json()) as T;
+  if (path === "auth/session" || path === "auth/login") {
+    csrfToken = (result as AuthSession).csrf_token ?? null;
+  } else if (path === "auth/logout" || path === "auth/password") {
+    csrfToken = null;
+  }
+  return result;
 }
 
 export const runtimeApi = {
@@ -657,6 +682,11 @@ export const runtimeApi = {
     api<{ authenticated: boolean }>("auth/logout", {
       method: "POST",
       body: JSON.stringify({}),
+    }),
+  changePassword: (payload: { current_password: string; new_password: string }) =>
+    api<{ changed: boolean; authenticated: boolean }>("auth/password", {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
   health: () => api<{ ok: boolean; version: string }>("health"),
   v2Capabilities: () => api<Record<string, unknown>>("v2/capabilities"),
@@ -683,6 +713,10 @@ export const runtimeApi = {
     api<{ evaluations: V2Evaluation[] }>(
       `v2/tasks/${encodeURIComponent(taskId)}/evaluations`,
     ),
+  v2TaskPermissions: (taskId: string) =>
+    api<{ permissions: V2Permission[] }>(
+      `v2/tasks/${encodeURIComponent(taskId)}/permissions`,
+    ),
   v2TaskReplays: (taskId: string) =>
     api<{ replays: V2Replay[] }>(
       `v2/tasks/${encodeURIComponent(taskId)}/replays`,
@@ -703,6 +737,23 @@ export const runtimeApi = {
       method: "POST",
       body: JSON.stringify({}),
     }),
+  v2CancelTask: (taskId: string, reason = "cancelled by user") =>
+    api<V2Task>(`v2/tasks/${encodeURIComponent(taskId)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+  v2ResolvePermission: (
+    taskId: string,
+    permissionId: string,
+    decision: "allow_once" | "deny",
+  ) =>
+    api<V2Permission>(
+      `v2/tasks/${encodeURIComponent(taskId)}/permissions/${encodeURIComponent(permissionId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ decision }),
+      },
+    ),
   v2ReplayTask: (taskId: string) =>
     api<V2Replay>(`v2/tasks/${encodeURIComponent(taskId)}/replay`, {
       method: "POST",

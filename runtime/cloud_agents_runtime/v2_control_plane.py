@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import secrets
 import shlex
 import shutil
 import sqlite3
 import subprocess
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib import request
@@ -204,7 +207,8 @@ class V2ControlPlane:
             )
             self._db.commit()
             task = self.get_task(task_id)
-        self._ensure_runner(task_id)
+        if not self._task_uses_remote_unit(task_id):
+            self._ensure_runner(task_id)
         return task
 
     def list_tasks(
@@ -358,6 +362,392 @@ class V2ControlPlane:
             )
             self._db.commit()
             return next(unit for unit in self.execution_units() if unit["unit_id"] == unit_id)
+
+    def heartbeat_execution_worker(
+        self,
+        worker_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        worker_id = worker_id.strip()
+        if not worker_id:
+            raise ValueError("worker_id is required")
+        unit = self.register_execution_unit(
+            {
+                "unit_id": worker_id,
+                "kind": payload.get("kind") or "remote-worker",
+                "status": payload.get("status") or "active",
+                "labels": payload.get("labels") or payload.get("metadata") or {},
+                "resources": payload.get("resources") or {},
+                "adapters": payload.get("adapters") or ["fake"],
+                "features": list(
+                    dict.fromkeys(
+                        [*(payload.get("features") or []), "remote-worker", "v2-agent-tasks"]
+                    )
+                ),
+            }
+        )
+        with self._lock:
+            self._extend_worker_leases_locked(
+                worker_id,
+                int(payload.get("lease_ttl_seconds") or 60),
+            )
+            self._db.commit()
+        return unit
+
+    def claim_remote_agent_task(
+        self,
+        worker_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        adapters = {
+            str(item).strip()
+            for item in payload.get("adapters") or []
+            if str(item).strip()
+        }
+        lease_ttl = max(15, min(int(payload.get("lease_ttl_seconds") or 60), 600))
+        with self._lock:
+            self._reclaim_expired_agent_leases_locked()
+            unit = next(
+                (item for item in self.execution_units() if item["unit_id"] == worker_id),
+                None,
+            )
+            if unit is None or unit["status"] != "active":
+                return {"assignment": None, "reason": "worker_not_active"}
+            supported = adapters or set(unit["adapters"])
+            for agent in self._queued_remote_agents_locked(worker_id):
+                if agent["adapter"] not in supported:
+                    continue
+                if not self._dependencies_completed_locked(agent):
+                    continue
+                task_id = str(agent["task_id"])
+                token = secrets.token_urlsafe(32)
+                now = utc_now()
+                expires_at = lease_expiry(lease_ttl)
+                existing = self._db.execute(
+                    "SELECT attempt FROM v2_agent_leases WHERE agent_task_id = ?",
+                    (agent["agent_task_id"],),
+                ).fetchone()
+                attempt = int(existing["attempt"]) + 1 if existing else 1
+                self._db.execute(
+                    """
+                    INSERT INTO v2_agent_leases (
+                        agent_task_id, task_id, worker_id, lease_hash, status,
+                        attempt, expires_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(agent_task_id) DO UPDATE SET
+                        worker_id = excluded.worker_id,
+                        lease_hash = excluded.lease_hash,
+                        status = excluded.status,
+                        attempt = excluded.attempt,
+                        expires_at = excluded.expires_at,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        agent["agent_task_id"],
+                        task_id,
+                        worker_id,
+                        secret_hash(token),
+                        "active",
+                        attempt,
+                        expires_at,
+                        now,
+                        now,
+                    ),
+                )
+                task_row = self._task_row(task_id)
+                if task_row is not None and task_row["status"] == "queued":
+                    self._set_task_status_locked(task_id, "running")
+                    self._set_workflow_status_locked(task_id, "running")
+                    self._append_event_locked(
+                        task_id,
+                        "task.started",
+                        "orchestrator",
+                        {"runner": "remote-worker", "execution_unit_id": worker_id},
+                    )
+                step_id = self._start_workflow_step_locked(task_id, agent, now)
+                self._db.execute(
+                    """
+                    UPDATE v2_agent_tasks
+                    SET status = 'running', started_at = COALESCE(started_at, ?), updated_at = ?
+                    WHERE agent_task_id = ?
+                    """,
+                    (now, now, agent["agent_task_id"]),
+                )
+                self._append_event_locked(
+                    task_id,
+                    "agent_task.started",
+                    agent["role"],
+                    {
+                        "agent_task_id": agent["agent_task_id"],
+                        "adapter": agent["adapter"],
+                        "execution_unit_id": worker_id,
+                        "attempt": attempt,
+                    },
+                )
+                self._db.commit()
+                return {
+                    "assignment": {
+                        "task_id": task_id,
+                        "agent_task_id": agent["agent_task_id"],
+                        "step_id": step_id,
+                        "lease_token": token,
+                        "lease_expires_at": expires_at,
+                        "attempt": attempt,
+                        "worker_id": worker_id,
+                        "adapter": agent["adapter"],
+                        "role": agent["role"],
+                        "goal": agent["goal"],
+                        "depends_on": agent["depends_on"],
+                        "artifact_contract": agent["artifact_contract"],
+                        "workspace": {
+                            "strategy": "isolated-directory",
+                            "task_id": task_id,
+                            "agent_task_id": agent["agent_task_id"],
+                        },
+                    }
+                }
+            self._db.commit()
+            return {"assignment": None, "reason": "no_matching_agent_task"}
+
+    def remote_agent_control(self, worker_id: str) -> dict[str, Any]:
+        with self._lock:
+            self._reclaim_expired_agent_leases_locked()
+            rows = self._db.execute(
+                """
+                SELECT l.agent_task_id, l.task_id, l.expires_at, t.status AS task_status
+                FROM v2_agent_leases l
+                JOIN v2_tasks t ON t.task_id = l.task_id
+                WHERE l.worker_id = ? AND l.status = 'active'
+                ORDER BY l.updated_at ASC
+                """,
+                (worker_id,),
+            ).fetchall()
+            permissions = self._db.execute(
+                """
+                SELECT p.* FROM v2_permissions p
+                JOIN v2_agent_leases l ON l.agent_task_id = p.agent_task_id
+                WHERE l.worker_id = ? AND p.status = 'resolved' AND p.delivered_at IS NULL
+                ORDER BY p.updated_at ASC
+                """,
+                (worker_id,),
+            ).fetchall()
+            return {
+                "actions": [
+                    {
+                        "type": "cancel",
+                        "task_id": row["task_id"],
+                        "agent_task_id": row["agent_task_id"],
+                    }
+                    for row in rows
+                    if row["task_status"] == "cancelled"
+                ],
+                "permissions": [permission_from_row(row) for row in permissions],
+            }
+
+    def append_remote_agent_event(
+        self,
+        worker_id: str,
+        agent_task_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        with self._lock:
+            lease = self._require_agent_lease_locked(
+                worker_id,
+                agent_task_id,
+                str(payload.get("lease_token") or ""),
+            )
+            event_type = str(payload.get("type") or "agent.message")
+            data = redact_secret_config(dict(payload.get("payload") or {}))
+            agent = self._agent_task_row(agent_task_id)
+            if event_type == "permission.requested":
+                permission_id = str(data.get("permission_id") or f"perm_{uuid4().hex}")
+                now = utc_now()
+                self._db.execute(
+                    """
+                    INSERT INTO v2_permissions (
+                        permission_id, task_id, agent_task_id, worker_id, status,
+                        request_json, decision_json, created_at, updated_at, delivered_at
+                    ) VALUES (?, ?, ?, ?, 'pending', ?, '{}', ?, ?, NULL)
+                    ON CONFLICT(permission_id) DO NOTHING
+                    """,
+                    (
+                        permission_id,
+                        lease["task_id"],
+                        agent_task_id,
+                        worker_id,
+                        json_dumps(data),
+                        now,
+                        now,
+                    ),
+                )
+                data["permission_id"] = permission_id
+            event = self._append_event_locked(
+                lease["task_id"],
+                event_type,
+                agent["role"],
+                {"agent_task_id": agent_task_id, **data},
+            )
+            self._db.commit()
+            return event
+
+    def complete_remote_agent_task(
+        self,
+        worker_id: str,
+        agent_task_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        with self._lock:
+            lease = self._require_agent_lease_locked(
+                worker_id,
+                agent_task_id,
+                str(payload.get("lease_token") or ""),
+            )
+            task_row = self._task_row(lease["task_id"])
+            if task_row is not None and task_row["status"] == "cancelled":
+                raise PermissionError("task was cancelled")
+            agent = self._agent_task_row(agent_task_id)
+            summary = str(payload.get("summary") or payload.get("message") or "").strip()
+            if not summary:
+                raise ValueError("summary is required")
+            adapter_result = redact_secret_config(
+                {
+                    "adapter": agent["adapter"],
+                    "protocol": payload.get("protocol") or "ACP/A2A",
+                    "execution_mode": payload.get("execution_mode") or "real-cli",
+                    "exit_code": payload.get("exit_code", 0),
+                    "summary": summary[:4000],
+                    "worker_id": worker_id,
+                }
+            )
+            result = {
+                "final_summary": summary[:4000],
+                "quality": "contract-passed",
+                "adapter": adapter_result,
+            }
+            artifact = self._write_artifact_locked(
+                lease["task_id"],
+                agent_task_id,
+                "final_summary",
+                "summary",
+                result,
+            )
+            for item in payload.get("artifacts") or []:
+                if not isinstance(item, dict):
+                    continue
+                self._write_artifact_locked(
+                    lease["task_id"],
+                    agent_task_id,
+                    str(item.get("name") or "worker_artifact")[:120],
+                    str(item.get("kind") or "file")[:40],
+                    redact_secret_config(dict(item.get("content") or {})),
+                )
+            evaluation = self._write_evaluation_locked(
+                lease["task_id"],
+                agent_task_id,
+                "contract",
+                "passed",
+                {"checks": ["non_empty_summary"], "artifact_id": artifact["artifact_id"]},
+            )
+            completed_at = utc_now()
+            self._db.execute(
+                """
+                UPDATE v2_agent_tasks
+                SET status = 'completed', result_json = ?, completed_at = ?, updated_at = ?
+                WHERE agent_task_id = ?
+                """,
+                (json_dumps(result), completed_at, completed_at, agent_task_id),
+            )
+            self._finish_remote_step_locked(
+                lease["task_id"], agent_task_id, "completed", artifact, completed_at
+            )
+            self._db.execute(
+                """
+                UPDATE v2_agent_leases SET status = 'completed', updated_at = ?
+                WHERE agent_task_id = ?
+                """,
+                (completed_at, agent_task_id),
+            )
+            self._append_event_locked(
+                lease["task_id"],
+                "agent_task.completed",
+                agent["role"],
+                {
+                    "agent_task_id": agent_task_id,
+                    "result": result,
+                    "artifact_id": artifact["artifact_id"],
+                    "evaluation_id": evaluation["evaluation_id"],
+                    "execution_unit_id": worker_id,
+                },
+            )
+            self._complete_task_if_ready_locked(lease["task_id"])
+            self._db.commit()
+            return self.get_task(lease["task_id"])
+
+    def fail_remote_agent_task(
+        self,
+        worker_id: str,
+        agent_task_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        with self._lock:
+            lease = self._require_agent_lease_locked(
+                worker_id,
+                agent_task_id,
+                str(payload.get("lease_token") or ""),
+            )
+            task_row = self._task_row(lease["task_id"])
+            if task_row is not None and task_row["status"] == "cancelled":
+                now = utc_now()
+                self._db.execute(
+                    """
+                    UPDATE v2_agent_leases SET status = 'cancelled', updated_at = ?
+                    WHERE agent_task_id = ?
+                    """,
+                    (now, agent_task_id),
+                )
+                self._db.commit()
+                return self.get_task(lease["task_id"])
+            reason = str(payload.get("error") or "remote agent failed")[:1200]
+            now = utc_now()
+            retryable = bool(payload.get("retryable", True)) and int(lease["attempt"]) < 2
+            next_status = "queued" if retryable else "failed"
+            self._db.execute(
+                "UPDATE v2_agent_tasks SET status = ?, updated_at = ? WHERE agent_task_id = ?",
+                (next_status, now, agent_task_id),
+            )
+            self._db.execute(
+                "UPDATE v2_agent_leases SET status = ?, updated_at = ? WHERE agent_task_id = ?",
+                ("retry" if retryable else "failed", now, agent_task_id),
+            )
+            self._append_event_locked(
+                lease["task_id"],
+                "agent_task.retry_scheduled" if retryable else "agent_task.failed",
+                "remote-worker",
+                {
+                    "agent_task_id": agent_task_id,
+                    "worker_id": worker_id,
+                    "reason": reason,
+                    "attempt": lease["attempt"],
+                },
+            )
+            self._finish_remote_step_locked(
+                lease["task_id"],
+                agent_task_id,
+                "failed",
+                {"error": reason, "retrying": retryable},
+                now,
+            )
+            if not retryable:
+                self._set_task_status_locked(lease["task_id"], "failed")
+                self._set_workflow_status_locked(lease["task_id"], "failed")
+                self._append_event_locked(
+                    lease["task_id"],
+                    "task.failed",
+                    "orchestrator",
+                    {"error": reason, "failure_summary": failure_summary(RuntimeError(reason))},
+                )
+            self._db.commit()
+            return self.get_task(lease["task_id"])
 
     def discover_execution_units(self) -> dict[str, Any]:
         configured = os.environ.get("V2_EXECUTION_UNITS_JSON")
@@ -1006,8 +1396,100 @@ class V2ControlPlane:
                 {"attempt": attempt},
             )
             self._db.commit()
-        self._ensure_runner(task_id)
+        if not self._task_uses_remote_unit(task_id):
+            self._ensure_runner(task_id)
         return self.get_task(task_id)
+
+    def cancel_task(
+        self,
+        task_id: str,
+        *,
+        principal: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            row = self._task_row(task_id)
+            if row is None:
+                raise KeyError(task_id)
+            if row["status"] in TERMINAL_TASK_STATUSES:
+                return self.get_task(task_id)
+            now = utc_now()
+            self._set_task_status_locked(task_id, "cancelled")
+            self._set_workflow_status_locked(task_id, "cancelled")
+            self._db.execute(
+                """
+                UPDATE v2_agent_tasks
+                SET status = 'cancelled', completed_at = ?, updated_at = ?
+                WHERE task_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
+                """,
+                (now, now, task_id),
+            )
+            self._append_event_locked(
+                task_id,
+                "task.cancelled",
+                principal,
+                {"reason": reason or "cancelled by user"},
+            )
+            self._db.commit()
+            return self.get_task(task_id)
+
+    def resolve_task_permission(
+        self,
+        task_id: str,
+        permission_id: str,
+        payload: dict[str, Any],
+        *,
+        principal: str,
+    ) -> dict[str, Any]:
+        decision = str(payload.get("decision") or "").strip().lower()
+        if decision not in {"allow", "deny", "allow_once", "allow_always"}:
+            raise ValueError("decision must be allow, deny, allow_once, or allow_always")
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM v2_permissions WHERE permission_id = ? AND task_id = ?",
+                (permission_id, task_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(permission_id)
+            now = utc_now()
+            decision_payload = {
+                "decision": decision,
+                "decided_by": principal,
+                "reason": str(payload.get("reason") or "")[:500],
+            }
+            self._db.execute(
+                """
+                UPDATE v2_permissions
+                SET status = 'resolved', decision_json = ?, updated_at = ?
+                WHERE permission_id = ?
+                """,
+                (json_dumps(decision_payload), now, permission_id),
+            )
+            self._append_event_locked(
+                task_id,
+                "permission.resolved",
+                principal,
+                {"permission_id": permission_id, **decision_payload},
+            )
+            self._db.commit()
+            resolved = self._db.execute(
+                "SELECT * FROM v2_permissions WHERE permission_id = ?",
+                (permission_id,),
+            ).fetchone()
+            return permission_from_row(resolved)
+
+    def task_permissions(self, task_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            if self._task_row(task_id) is None:
+                raise KeyError(task_id)
+            rows = self._db.execute(
+                """
+                SELECT * FROM v2_permissions
+                WHERE task_id = ? ORDER BY created_at ASC
+                """,
+                (task_id,),
+            ).fetchall()
+            return [permission_from_row(row) for row in rows]
 
     def replay_task(self, task_id: str, *, principal: str) -> dict[str, Any]:
         with self._lock:
@@ -1228,7 +1710,11 @@ class V2ControlPlane:
         }
 
     def _select_execution_unit(self, adapter: str) -> dict[str, Any]:
-        active_units = [unit for unit in self.execution_units() if unit["status"] == "active"]
+        active_units = [
+            unit
+            for unit in self.execution_units()
+            if unit["status"] == "active" and self._execution_unit_available(unit)
+        ]
         for unit in active_units:
             if adapter in unit["adapters"]:
                 return unit
@@ -1236,6 +1722,20 @@ class V2ControlPlane:
             if "fake" in unit["adapters"]:
                 return unit
         raise RuntimeError(f"no active execution unit can run adapter {adapter}")
+
+    def _execution_unit_available(self, unit: dict[str, Any]) -> bool:
+        if unit.get("kind") != "remote-worker" and "remote-worker" not in set(
+            unit.get("features") or []
+        ):
+            return True
+        try:
+            heartbeat = datetime.fromisoformat(
+                str(unit["heartbeat_at"]).replace("Z", "+00:00")
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+        stale_seconds = max(30, int(os.environ.get("V2_WORKER_STALE_SECONDS") or 90))
+        return datetime.now(timezone.utc) - heartbeat <= timedelta(seconds=stale_seconds)
 
     def _channel_by_platform(self, platform: str) -> dict[str, Any]:
         for channel in self.channels():
@@ -1829,6 +2329,8 @@ class V2ControlPlane:
 
     def _ensure_runner(self, task_id: str) -> None:
         with self._lock:
+            if self._task_uses_remote_unit(task_id):
+                return
             thread = self._threads.get(task_id)
             if thread and thread.is_alive():
                 return
@@ -1901,7 +2403,202 @@ class V2ControlPlane:
             """
         ).fetchall()
         for row in rows:
-            self._ensure_runner(row["task_id"])
+            if not self._task_uses_remote_unit(row["task_id"]):
+                self._ensure_runner(row["task_id"])
+
+    def _task_uses_remote_unit(self, task_id: str) -> bool:
+        row = self._task_row(task_id)
+        if row is None:
+            return False
+        metadata = json_loads(row["metadata_json"])
+        dispatch = metadata.get("dispatch") if isinstance(metadata, dict) else None
+        unit_id = dispatch.get("execution_unit_id") if isinstance(dispatch, dict) else None
+        if not isinstance(unit_id, str):
+            return False
+        unit = self._db.execute(
+            "SELECT * FROM v2_execution_units WHERE unit_id = ?",
+            (unit_id,),
+        ).fetchone()
+        if unit is None:
+            return False
+        features = set(json_loads(unit["features_json"]))
+        return "remote-worker" in features or unit["kind"] == "remote-worker"
+
+    def _queued_remote_agents_locked(self, worker_id: str) -> list[dict[str, Any]]:
+        rows = self._db.execute(
+            """
+            SELECT a.* FROM v2_agent_tasks a
+            JOIN v2_tasks t ON t.task_id = a.task_id
+            WHERE a.status = 'queued' AND t.status IN ('queued', 'running')
+            ORDER BY t.created_at ASC, a.order_index ASC
+            """
+        ).fetchall()
+        agents = []
+        for row in rows:
+            task = self._task_row(row["task_id"])
+            metadata = json_loads(task["metadata_json"]) if task is not None else {}
+            dispatch = metadata.get("dispatch") if isinstance(metadata, dict) else {}
+            selected_unit_id = (
+                dispatch.get("execution_unit_id") if isinstance(dispatch, dict) else None
+            )
+            selected_unit = next(
+                (
+                    unit
+                    for unit in self.execution_units()
+                    if unit["unit_id"] == selected_unit_id
+                ),
+                None,
+            )
+            if selected_unit_id == worker_id or (
+                selected_unit is not None
+                and not self._execution_unit_available(selected_unit)
+            ):
+                agents.append(agent_task_from_row(row))
+        return agents
+
+    def _dependencies_completed_locked(self, agent: dict[str, Any]) -> bool:
+        for role in agent.get("depends_on") or []:
+            row = self._db.execute(
+                "SELECT status FROM v2_agent_tasks WHERE task_id = ? AND role = ?",
+                (agent["task_id"], role),
+            ).fetchone()
+            if row is None or row["status"] != "completed":
+                return False
+        return True
+
+    def _agent_task_row(self, agent_task_id: str) -> dict[str, Any]:
+        row = self._db.execute(
+            "SELECT * FROM v2_agent_tasks WHERE agent_task_id = ?",
+            (agent_task_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(agent_task_id)
+        return agent_task_from_row(row)
+
+    def _require_agent_lease_locked(
+        self,
+        worker_id: str,
+        agent_task_id: str,
+        token: str,
+    ) -> sqlite3.Row:
+        row = self._db.execute(
+            """
+            SELECT * FROM v2_agent_leases
+            WHERE agent_task_id = ? AND worker_id = ? AND status = 'active'
+            """,
+            (agent_task_id, worker_id),
+        ).fetchone()
+        if (
+            row is None
+            or not token
+            or not secrets.compare_digest(row["lease_hash"], secret_hash(token))
+        ):
+            raise PermissionError("invalid or expired agent lease")
+        if row["expires_at"] <= utc_now():
+            raise PermissionError("agent lease expired")
+        return row
+
+    def _extend_worker_leases_locked(self, worker_id: str, ttl_seconds: int) -> None:
+        self._db.execute(
+            """
+            UPDATE v2_agent_leases SET expires_at = ?, updated_at = ?
+            WHERE worker_id = ? AND status = 'active'
+            """,
+            (lease_expiry(max(15, min(ttl_seconds, 600))), utc_now(), worker_id),
+        )
+
+    def _reclaim_expired_agent_leases_locked(self) -> None:
+        rows = self._db.execute(
+            "SELECT * FROM v2_agent_leases WHERE status = 'active' AND expires_at <= ?",
+            (utc_now(),),
+        ).fetchall()
+        for lease in rows:
+            expired_at = utc_now()
+            next_status = "queued" if int(lease["attempt"]) < 2 else "failed"
+            self._db.execute(
+                """
+                UPDATE v2_agent_tasks SET status = ?, updated_at = ?
+                WHERE agent_task_id = ?
+                """,
+                (next_status, utc_now(), lease["agent_task_id"]),
+            )
+            self._db.execute(
+                """
+                UPDATE v2_agent_leases SET status = 'expired', updated_at = ?
+                WHERE agent_task_id = ?
+                """,
+                (expired_at, lease["agent_task_id"]),
+            )
+            self._db.execute(
+                """
+                UPDATE v2_workflow_steps
+                SET status = 'failed', output_json = ?, completed_at = ?, updated_at = ?
+                WHERE task_id = ? AND agent_task_id = ? AND status = 'running'
+                """,
+                (
+                    json_dumps(
+                        {
+                            "error": "worker lease expired",
+                            "retrying": next_status == "queued",
+                        }
+                    ),
+                    expired_at,
+                    expired_at,
+                    lease["task_id"],
+                    lease["agent_task_id"],
+                ),
+            )
+            self._append_event_locked(
+                lease["task_id"],
+                "agent_task.lease_expired",
+                "scheduler",
+                {
+                    "agent_task_id": lease["agent_task_id"],
+                    "worker_id": lease["worker_id"],
+                    "retrying": next_status == "queued",
+                },
+            )
+            if next_status == "failed":
+                self._set_task_status_locked(lease["task_id"], "failed")
+                self._set_workflow_status_locked(lease["task_id"], "failed")
+
+    def _finish_remote_step_locked(
+        self,
+        task_id: str,
+        agent_task_id: str,
+        status: str,
+        output: dict[str, Any],
+        completed_at: str,
+    ) -> None:
+        row = self._db.execute(
+            """
+            SELECT step_id FROM v2_workflow_steps
+            WHERE task_id = ? AND agent_task_id = ? AND status = 'running'
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (task_id, agent_task_id),
+        ).fetchone()
+        if row is not None:
+            self._complete_workflow_step_locked(row["step_id"], status, output, completed_at)
+
+    def _complete_task_if_ready_locked(self, task_id: str) -> None:
+        pending = self._db.execute(
+            """
+            SELECT COUNT(*) AS count FROM v2_agent_tasks
+            WHERE task_id = ? AND status != 'completed'
+            """,
+            (task_id,),
+        ).fetchone()["count"]
+        if int(pending) != 0:
+            return
+        self._set_task_status_locked(task_id, "completed")
+        self._set_workflow_status_locked(task_id, "completed")
+        self._append_event_locked(
+            task_id,
+            "task.completed",
+            "orchestrator",
+            {"summary": "Task completed by remote execution unit."},
+        )
 
     def _plan_for_task(self, task_id: str) -> dict[str, Any] | None:
         plan_row = self._db.execute(
@@ -2356,6 +3053,35 @@ class V2ControlPlane:
                     FOREIGN KEY(plan_id) REFERENCES v2_plans(plan_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS v2_agent_leases (
+                    agent_task_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    worker_id TEXT NOT NULL,
+                    lease_hash TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    attempt INTEGER NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(agent_task_id) REFERENCES v2_agent_tasks(agent_task_id),
+                    FOREIGN KEY(task_id) REFERENCES v2_tasks(task_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS v2_permissions (
+                    permission_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    agent_task_id TEXT NOT NULL,
+                    worker_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    request_json TEXT NOT NULL,
+                    decision_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    delivered_at TEXT,
+                    FOREIGN KEY(task_id) REFERENCES v2_tasks(task_id),
+                    FOREIGN KEY(agent_task_id) REFERENCES v2_agent_tasks(agent_task_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS v2_events (
                     event_id TEXT PRIMARY KEY,
                     task_id TEXT NOT NULL,
@@ -2512,6 +3238,10 @@ class V2ControlPlane:
                     ON v2_events(task_id, sequence);
                 CREATE INDEX IF NOT EXISTS idx_v2_agent_tasks_task
                     ON v2_agent_tasks(task_id, order_index);
+                CREATE INDEX IF NOT EXISTS idx_v2_agent_leases_worker
+                    ON v2_agent_leases(worker_id, status, expires_at);
+                CREATE INDEX IF NOT EXISTS idx_v2_permissions_worker
+                    ON v2_permissions(worker_id, status, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_v2_workflow_runs_task
                     ON v2_workflow_runs(task_id);
                 CREATE INDEX IF NOT EXISTS idx_v2_workflow_steps_task
@@ -2551,6 +3281,16 @@ def json_loads(value: str | None) -> Any:
     if not value:
         return {}
     return json.loads(value)
+
+
+def secret_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def lease_expiry(ttl_seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat(
+        timespec="milliseconds"
+    )
 
 
 def simulated_adapter_result(
@@ -2643,6 +3383,21 @@ def unit_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "heartbeat_at": row["heartbeat_at"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+    }
+
+
+def permission_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "permission_id": row["permission_id"],
+        "task_id": row["task_id"],
+        "agent_task_id": row["agent_task_id"],
+        "worker_id": row["worker_id"],
+        "status": row["status"],
+        "request": json_loads(row["request_json"]),
+        "decision": json_loads(row["decision_json"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "delivered_at": row["delivered_at"],
     }
 
 
@@ -2805,7 +3560,14 @@ def replay_from_row(row: sqlite3.Row) -> dict[str, Any]:
 
 def redact_secret_config(value: Any) -> Any:
     secret_keys = {
+        "api_key",
+        "apikey",
+        "authorization",
+        "cookie",
+        "password",
+        "private_key",
         "secret",
+        "session_secret",
         "token",
         "app_secret",
         "signing_secret",

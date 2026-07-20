@@ -31,6 +31,135 @@ def wait_for_status(control: V2ControlPlane, task_id: str, status: str) -> dict:
 
 
 class V2ControlPlaneTest(unittest.TestCase):
+    def test_stale_remote_dispatch_can_be_claimed_by_healthy_worker(self):
+        control = V2ControlPlane(self.tmp_path())
+        control._db.execute("DELETE FROM v2_execution_units")
+        control._db.commit()
+        control.heartbeat_execution_worker("stale-worker", {"adapters": ["fake"]})
+        task = control.create_task(
+            {"goal": "Recover before the first claim", "adapter": "fake"},
+            principal="owner@example.com",
+        )
+        control._db.execute(
+            "UPDATE v2_execution_units SET heartbeat_at = ? WHERE unit_id = ?",
+            ("2000-01-01T00:00:00Z", "stale-worker"),
+        )
+        control._db.commit()
+        control.heartbeat_execution_worker("healthy-worker", {"adapters": ["fake"]})
+        claim = control.claim_remote_agent_task(
+            "healthy-worker", {"adapters": ["fake"]}
+        )["assignment"]
+        assert claim is not None
+        self.assertEqual(claim["task_id"], task["task_id"])
+        self.assertEqual(claim["worker_id"], "healthy-worker")
+
+    def test_remote_agent_lease_permission_cancel_and_retry(self):
+        control = V2ControlPlane(self.tmp_path())
+        control._db.execute("DELETE FROM v2_execution_units")
+        control._db.commit()
+        control.heartbeat_execution_worker(
+            "nas-a", {"adapters": ["fake"], "lease_ttl_seconds": 30}
+        )
+        task = control.create_task(
+            {"goal": "Run a remote approval flow", "adapter": "fake"},
+            principal="owner@example.com",
+        )
+        claim = control.claim_remote_agent_task(
+            "nas-a", {"adapters": ["fake"], "lease_ttl_seconds": 30}
+        )["assignment"]
+        self.assertIsNotNone(claim)
+        assert claim is not None
+        with self.assertRaises(PermissionError):
+            control.append_remote_agent_event(
+                "nas-a",
+                claim["agent_task_id"],
+                {"lease_token": "wrong", "type": "agent.message"},
+            )
+        requested = control.append_remote_agent_event(
+            "nas-a",
+            claim["agent_task_id"],
+            {
+                "lease_token": claim["lease_token"],
+                "type": "permission.requested",
+                "payload": {"permission_id": "perm-v2", "tool": "shell"},
+            },
+        )
+        self.assertEqual(requested["type"], "permission.requested")
+        self.assertEqual(control.task_permissions(task["task_id"])[0]["status"], "pending")
+        control.resolve_task_permission(
+            task["task_id"],
+            "perm-v2",
+            {"decision": "allow_once"},
+            principal="owner@example.com",
+        )
+        first_control = control.remote_agent_control("nas-a")
+        self.assertEqual(first_control["permissions"][0]["permission_id"], "perm-v2")
+        self.assertEqual(
+            control.remote_agent_control("nas-a")["permissions"][0]["permission_id"],
+            "perm-v2",
+        )
+        cancelled = control.cancel_task(
+            task["task_id"], principal="owner@example.com", reason="test cancel"
+        )
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertEqual(control.remote_agent_control("nas-a")["actions"][0]["type"], "cancel")
+        still_cancelled = control.fail_remote_agent_task(
+            "nas-a",
+            claim["agent_task_id"],
+            {
+                "lease_token": claim["lease_token"],
+                "error": "cancel acknowledged",
+                "retryable": False,
+            },
+        )
+        self.assertEqual(still_cancelled["status"], "cancelled")
+
+        retry_task = control.create_task(
+            {"goal": "Exercise remote retry", "adapter": "fake"},
+            principal="owner@example.com",
+        )
+        first = control.claim_remote_agent_task(
+            "nas-a", {"adapters": ["fake"]}
+        )["assignment"]
+        assert first is not None
+        retrying = control.fail_remote_agent_task(
+            "nas-a",
+            first["agent_task_id"],
+            {"lease_token": first["lease_token"], "error": "transient"},
+        )
+        self.assertEqual(retrying["status"], "running")
+        second = control.claim_remote_agent_task(
+            "nas-a", {"adapters": ["fake"]}
+        )["assignment"]
+        assert second is not None
+        failed = control.fail_remote_agent_task(
+            "nas-a",
+            second["agent_task_id"],
+            {"lease_token": second["lease_token"], "error": "permanent"},
+        )
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(retry_task["task_id"], failed["task_id"])
+
+        expired_task = control.create_task(
+            {"goal": "Recover an expired lease", "adapter": "fake"},
+            principal="owner@example.com",
+        )
+        expired_claim = control.claim_remote_agent_task(
+            "nas-a", {"adapters": ["fake"]}
+        )["assignment"]
+        assert expired_claim is not None
+        control._db.execute(
+            "UPDATE v2_agent_leases SET expires_at = ? WHERE agent_task_id = ?",
+            ("2000-01-01T00:00:00Z", expired_claim["agent_task_id"]),
+        )
+        control._db.commit()
+        recovered = control.claim_remote_agent_task(
+            "nas-a", {"adapters": ["fake"]}
+        )["assignment"]
+        assert recovered is not None
+        self.assertEqual(recovered["attempt"], 2)
+        self.assertEqual(expired_task["task_id"], recovered["task_id"])
+
     def test_create_task_builds_plan_events_and_result(self):
         with self.subTest("single-agent fast path"):
             control = V2ControlPlane(self.tmp_path())

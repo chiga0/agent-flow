@@ -125,6 +125,7 @@ class AuthConfig:
                 else None
             ),
             "auth_mode": "local_email" if self.login_enabled else "disabled",
+            "csrf_token": identity.get("csrf_token") if identity else None,
         }
 
     def resolve_login_email(self, login_id: Any) -> str | None:
@@ -168,6 +169,16 @@ def hash_password(password: str) -> str:
             _b64encode_bytes(digest),
         ]
     )
+
+
+def validate_password(password: Any) -> str:
+    if not isinstance(password, str) or len(password) < 12:
+        raise ValueError("password must contain at least 12 characters")
+    if len(password) > 1024:
+        raise ValueError("password is too long")
+    if password.isspace():
+        raise ValueError("password cannot contain only whitespace")
+    return password
 
 
 def verify_password(password: Any, stored_hash: str) -> bool:

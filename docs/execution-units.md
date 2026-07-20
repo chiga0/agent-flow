@@ -143,6 +143,9 @@ RUN_WORKER_POLL_INTERVAL_SECONDS=2
 RUN_WORKER_HEARTBEAT_INTERVAL_SECONDS=10
 RUN_WORKER_RUN_WAIT_TIMEOUT_SECONDS=300
 RUN_WORKER_ARTIFACT_ROOT=/var/lib/cloud-agents-worker/artifacts
+V2_WORKER_ADAPTERS=fake,qwen,codex,claude,opencode
+V2_ENABLE_REAL_CLI_ADAPTERS=1
+V2_CODEX_CLI_COMMAND=codex exec --skip-git-repo-check -
 RUN_WORKER_METADATA_JSON={"region":"hk","labels":{"size":"2c2g","tier":"sandbox"}}
 QWEN_SERVE_URL=http://127.0.0.1:4170
 QWEN_SERVE_TOKEN=
@@ -240,6 +243,8 @@ V2_OPENCODE_COMMAND=opencode
 
 真实 CLI 的认证、配置文件和权限审批应放在 worker 机器上，不要把用户级 token 写入前端或公共仓库。
 
+Worker 同时兼容旧 Run 协议和 V2 Agent Task 协议。V2 每次认领得到短期 lease token；心跳延长租约，输出逐行写入任务实时 Chat，完成或失败后由控制面原子收口 workflow step。Worker 失联时首次租约过期会重新排队，第二次失败会终止任务。
+
 ## 7. Workspace 隔离
 
 | 隔离方式 | 优点 | 风险 |
@@ -276,6 +281,8 @@ V2_OPENCODE_COMMAND=opencode
 4. heartbeat 是否 stale。
 5. task 要求的 adapter 是否在 unit `adapters` 中。
 6. labels 或 tenant 约束是否匹配。
+7. Worker 的 `V2_WORKER_ADAPTERS` 是否包含任务 adapter。
+8. 真实 CLI 是否同时满足命令存在、认证有效和 `V2_ENABLE_REAL_CLI_ADAPTERS=1`。
 
 ## 9. 验收
 

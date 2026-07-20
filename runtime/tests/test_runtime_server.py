@@ -18,6 +18,120 @@ from runtime.cloud_agents_runtime.server import build_server, main as server_mai
 
 
 class RuntimeServerTest(unittest.TestCase):
+    def test_v2_remote_worker_permission_and_cancel_http_protocol(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with running_runtime(
+                artifact_root=Path(tmp), token="secret", worker_capacity=0
+            ) as base_url:
+                headers = {"authorization": "Bearer secret"}
+                request_json(
+                    f"{base_url}/v2/workers/http-v2-worker/heartbeat",
+                    method="POST",
+                    payload={"adapters": ["fake"]},
+                    headers=headers,
+                )
+                task = request_json(
+                    f"{base_url}/v2/tasks",
+                    method="POST",
+                    payload={"goal": "HTTP remote protocol", "adapter": "fake"},
+                    headers=headers,
+                )
+                claim = request_json(
+                    f"{base_url}/v2/workers/http-v2-worker/claim",
+                    method="POST",
+                    payload={"adapters": ["fake"]},
+                    headers=headers,
+                )["assignment"]
+                agent_id = claim["agent_task_id"]
+                request_json(
+                    f"{base_url}/v2/workers/http-v2-worker/agent-tasks/{agent_id}/events",
+                    method="POST",
+                    payload={
+                        "lease_token": claim["lease_token"],
+                        "type": "permission.requested",
+                        "payload": {"permission_id": "perm-http-v2", "tool": "shell"},
+                    },
+                    headers=headers,
+                )
+                permissions = request_json(
+                    f"{base_url}/v2/tasks/{task['task_id']}/permissions",
+                    headers=headers,
+                )
+                self.assertEqual(permissions["permissions"][0]["status"], "pending")
+                resolved = request_json(
+                    f"{base_url}/v2/tasks/{task['task_id']}/permissions/perm-http-v2",
+                    method="POST",
+                    payload={"decision": "allow_once"},
+                    headers=headers,
+                )
+                self.assertEqual(resolved["status"], "resolved")
+                control = request_json(
+                    f"{base_url}/v2/workers/http-v2-worker/control", headers=headers
+                )
+                self.assertEqual(control["permissions"][0]["permission_id"], "perm-http-v2")
+                cancelled = request_json(
+                    f"{base_url}/v2/tasks/{task['task_id']}/cancel",
+                    method="POST",
+                    payload={"reason": "protocol test"},
+                    headers=headers,
+                )
+                self.assertEqual(cancelled["status"], "cancelled")
+                acknowledged = request_json(
+                    f"{base_url}/v2/workers/http-v2-worker/agent-tasks/{agent_id}/fail",
+                    method="POST",
+                    payload={
+                        "lease_token": claim["lease_token"],
+                        "error": "cancel acknowledged",
+                        "retryable": False,
+                    },
+                    headers=headers,
+                )
+                self.assertEqual(acknowledged["status"], "cancelled")
+
+    def test_browser_csrf_and_self_password_change(self) -> None:
+        with running_runtime(
+            token="secret",
+            login_user="cloudagents",
+            login_password="password",
+            bootstrap_email="owner@example.com",
+        ) as base_url:
+            login = request_raw(
+                f"{base_url}/auth/login",
+                method="POST",
+                payload={"email": "owner@example.com", "password": "password"},
+            )
+            cookie = login.headers["set-cookie"]
+            session = json.loads(login.read().decode("utf-8"))
+            csrf = session["csrf_token"]
+            with self.assertRaises(urllib.error.HTTPError) as missing_csrf:
+                request_json(
+                    f"{base_url}/auth/password",
+                    method="POST",
+                    payload={
+                        "current_password": "password",
+                        "new_password": "new-password-12345",
+                    },
+                    headers={"cookie": cookie, "origin": "https://console.example"},
+                )
+            self.assertEqual(missing_csrf.exception.code, HTTPStatus.FORBIDDEN)
+            changed = request_raw(
+                f"{base_url}/auth/password",
+                method="POST",
+                payload={
+                    "current_password": "password",
+                    "new_password": "new-password-12345",
+                },
+                headers={
+                    "cookie": cookie,
+                    "origin": "https://console.example",
+                    "x-csrf-token": csrf,
+                },
+            )
+            self.assertIn("Max-Age=0", changed.headers["set-cookie"])
+            with self.assertRaises(urllib.error.HTTPError) as revoked:
+                request_json(f"{base_url}/capabilities", headers={"cookie": cookie})
+            self.assertEqual(revoked.exception.code, HTTPStatus.UNAUTHORIZED)
+
     def test_runtime_main_help_builds_parser_defaults(self) -> None:
         with self.assertRaises(SystemExit) as ctx:
             server_main(["--help"])
@@ -934,7 +1048,7 @@ class RuntimeServerTest(unittest.TestCase):
                         payload={
                             "email": email,
                             "display_name": email.split("@", 1)[0].title(),
-                            "password": "password",
+                            "password": "password-12345",
                             "roles": ["member"],
                             "email_verified": True,
                         },
@@ -944,12 +1058,12 @@ class RuntimeServerTest(unittest.TestCase):
                 alice_cookie = request_raw(
                     f"{base_url}/auth/login",
                     method="POST",
-                    payload={"email": "alice@example.com", "password": "password"},
+                    payload={"email": "alice@example.com", "password": "password-12345"},
                 ).headers["set-cookie"]
                 bob_cookie = request_raw(
                     f"{base_url}/auth/login",
                     method="POST",
-                    payload={"email": "bob@example.com", "password": "password"},
+                    payload={"email": "bob@example.com", "password": "password-12345"},
                 ).headers["set-cookie"]
 
                 alice_task = request_json(

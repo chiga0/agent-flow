@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import time
 import unittest
 import urllib.parse
+import os
 from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from runtime.cloud_agents_runtime.adapters import FakeAdapter, RuntimeAdapter
 from runtime.cloud_agents_runtime.models import RunState
 from runtime.cloud_agents_runtime.store import RunStore
 from runtime.cloud_agents_runtime.worker import (
+    ActiveAgentContext,
+    ControlPlaneClient,
     RemoteWorkerConfig,
     RemoteWorkerDaemon,
     host_resource_capacity,
@@ -24,6 +28,228 @@ from runtime.tests.test_runtime_server import request_json, running_runtime
 
 
 class RemoteWorkerDaemonTest(unittest.TestCase):
+    def test_v2_control_loop_applies_cancel_and_permission_once(self) -> None:
+        stop = threading.Event()
+        process = SimpleNamespace(
+            poll=lambda: None,
+            terminate=Mock(),
+        )
+        context = ActiveAgentContext(
+            assignment={
+                "task_id": "task/unsafe",
+                "agent_task_id": "agent/unsafe",
+                "lease_token": "lease",
+                "adapter": "codex",
+            },
+            process=process,
+        )
+        client = SimpleNamespace(
+            v2_heartbeat=Mock(),
+            v2_agent_event=Mock(),
+        )
+
+        def control(_worker_id: str) -> dict[str, object]:
+            stop.set()
+            return {
+                "actions": [
+                    "invalid",
+                    {"agent_task_id": "other", "type": "cancel"},
+                    {"agent_task_id": "agent/unsafe", "type": "cancel"},
+                ],
+                "permissions": [
+                    "invalid",
+                    {"agent_task_id": "other", "permission_id": "ignored"},
+                    {"agent_task_id": "agent/unsafe", "permission_id": ""},
+                    {
+                        "agent_task_id": "agent/unsafe",
+                        "permission_id": "permission-1",
+                        "decision": {"allow": True},
+                    },
+                    {
+                        "agent_task_id": "agent/unsafe",
+                        "permission_id": "permission-1",
+                    },
+                ],
+            }
+
+        client.v2_control = control
+        worker = RemoteWorkerDaemon(
+            RemoteWorkerConfig(control_url="http://example.invalid", worker_id="worker"),
+            client=client,
+        )
+        worker._v2_heartbeat_loop(stop, context)
+
+        self.assertTrue(context.cancelled.is_set())
+        process.terminate.assert_called_once_with()
+        client.v2_agent_event.assert_called_once()
+        self.assertEqual(context.applied_permissions, {"permission-1"})
+        self.assertNotIn("SECRET_TOKEN", worker._sanitized_worker_env())
+        with self.assertRaisesRegex(ValueError, "safe path segment"):
+            worker._agent_workspace(context.assignment)
+
+    def test_v2_helpers_cover_simulation_and_invalid_finish_action(self) -> None:
+        client = ControlPlaneClient("http://example.invalid")
+        with self.assertRaisesRegex(ValueError, "unsupported V2 agent action"):
+            client.v2_finish_agent("worker", "agent", "pause", {})
+
+        worker = RemoteWorkerDaemon(
+            RemoteWorkerConfig(control_url="http://example.invalid", worker_id="worker"),
+            client=SimpleNamespace(),
+        )
+        context = ActiveAgentContext(
+            assignment={
+                "task_id": "task",
+                "agent_task_id": "agent",
+                "lease_token": "lease",
+                "adapter": "codex",
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ, {"V2_ENABLE_REAL_CLI_ADAPTERS": "0"}
+        ):
+            summary, mode, exit_code = worker._run_v2_cli(
+                context,
+                {"goal": "simulate safely"},
+                Path(tmp),
+            )
+        self.assertIn("simulate safely", summary)
+        self.assertEqual((mode, exit_code), ("protocol-simulated", 0))
+
+    def test_control_plane_client_builds_optional_artifact_payloads(self) -> None:
+        client = ControlPlaneClient("http://example.invalid", token="secret")
+        with patch.object(client, "request_json", return_value={}) as request:
+            client.upload_artifact(
+                "worker/a",
+                "run/a",
+                "events.jsonl",
+                json_value={"ok": True},
+                mode="append",
+                chunk_index=2,
+                final=True,
+            )
+            client.upload_artifact("worker/a", "run/a", "empty.txt")
+            client.v2_heartbeat("worker/a", {"status": "active"})
+            client.v2_claim("worker/a", {"capacity": 1})
+            client.v2_control("worker/a")
+
+        first_payload = request.call_args_list[0].kwargs["payload"]
+        self.assertEqual(first_payload["json"], {"ok": True})
+        self.assertEqual(first_payload["mode"], "append")
+        self.assertEqual(first_payload["chunk_index"], 2)
+        self.assertTrue(first_payload["final"])
+        self.assertEqual(request.call_args_list[1].kwargs["payload"]["content"], "")
+
+    def test_remote_worker_streams_v2_real_cli_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "fake-codex"
+            script.write_text(
+                "#!/bin/sh\ncat >/dev/null\nprintf 'remote line one\\nremote line two\\n'\n",
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            with running_runtime(
+                artifact_root=root / "control", token="secret", worker_capacity=0
+            ) as base_url:
+                headers = {"authorization": "Bearer secret"}
+                request_json(
+                    f"{base_url}/v2/workers/codex-worker/heartbeat",
+                    method="POST",
+                    payload={"adapters": ["codex"]},
+                    headers=headers,
+                )
+                task = request_json(
+                    f"{base_url}/v2/tasks",
+                    method="POST",
+                    payload={"goal": "Execute Codex remotely", "adapter": "codex"},
+                    headers=headers,
+                )
+                worker = RemoteWorkerDaemon(
+                    RemoteWorkerConfig(
+                        control_url=base_url,
+                        token="secret",
+                        worker_id="codex-worker",
+                        heartbeat_interval_seconds=0.02,
+                        artifact_root=root / "worker",
+                    )
+                )
+                with patch.dict(
+                    os.environ,
+                    {
+                        "V2_ENABLE_REAL_CLI_ADAPTERS": "1",
+                        "V2_CODEX_CLI_COMMAND": str(script),
+                    },
+                ):
+                    self.assertTrue(worker.run_once(wait=True))
+                completed = request_json(
+                    f"{base_url}/v2/tasks/{task['task_id']}", headers=headers
+                )
+                self.assertEqual(completed["execution_mode"], "real-cli")
+                events = request_json(
+                    f"{base_url}/v2/tasks/{task['task_id']}/events.json",
+                    headers=headers,
+                )["events"]
+                messages = [event for event in events if event["type"] == "agent.message"]
+                self.assertEqual(len(messages), 2)
+
+    def test_remote_worker_executes_v2_agent_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            control_root = Path(tmp) / "control"
+            worker_root = Path(tmp) / "worker"
+            with running_runtime(
+                artifact_root=control_root,
+                token="secret",
+                worker_capacity=0,
+            ) as base_url:
+                headers = {"authorization": "Bearer secret"}
+                request_json(
+                    f"{base_url}/v2/workers/nas-worker/heartbeat",
+                    method="POST",
+                    payload={
+                        "kind": "remote-worker",
+                        "status": "active",
+                        "adapters": ["fake"],
+                        "lease_ttl_seconds": 30,
+                    },
+                    headers=headers,
+                )
+                task = request_json(
+                    f"{base_url}/v2/tasks",
+                    method="POST",
+                    payload={"goal": "Verify a remote V2 worker", "adapter": "fake"},
+                    headers=headers,
+                )
+                self.assertEqual(
+                    task["metadata"]["dispatch"]["execution_unit_id"], "nas-worker"
+                )
+                self.assertEqual(task["status"], "queued")
+
+                worker = RemoteWorkerDaemon(
+                    RemoteWorkerConfig(
+                        control_url=base_url,
+                        token="secret",
+                        worker_id="nas-worker",
+                        heartbeat_interval_seconds=0.05,
+                        artifact_root=worker_root,
+                    )
+                )
+                self.assertTrue(worker.run_once(wait=True))
+                completed = request_json(
+                    f"{base_url}/v2/tasks/{task['task_id']}", headers=headers
+                )
+                self.assertEqual(completed["status"], "completed")
+                self.assertEqual(
+                    completed["result"]["artifacts"][0]["content"]["adapter"]["worker_id"],
+                    "nas-worker",
+                )
+                events = request_json(
+                    f"{base_url}/v2/tasks/{task['task_id']}/events.json", headers=headers
+                )
+                self.assertIn(
+                    "agent_task.completed", {event["type"] for event in events["events"]}
+                )
+                self.assertTrue((worker_root / "v2" / task["task_id"]).is_dir())
+
     def test_remote_worker_daemon_once_executes_fake_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             control_root = Path(tmp) / "control"
