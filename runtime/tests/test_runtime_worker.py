@@ -20,6 +20,7 @@ from runtime.cloud_agents_runtime.worker import (
     ControlPlaneClient,
     RemoteWorkerConfig,
     RemoteWorkerDaemon,
+    WorkspaceVerificationError,
     host_resource_capacity,
     host_resource_metrics,
     parse_json_object,
@@ -128,6 +129,36 @@ class RemoteWorkerDaemonTest(unittest.TestCase):
             os.environ, {"V2_ENABLE_REAL_CLI_ADAPTERS": "0"}
         ), self.assertRaisesRegex(RuntimeError, "real CLI is required"):
             worker._run_v2_cli(context, {"goal": "must be real"}, Path(tmp))
+
+        verification_error = WorkspaceVerificationError(
+            {"exit_code": 2, "output": "verification failed"}
+        )
+        self.assertIn("code 2", str(verification_error))
+        self.assertEqual(verification_error.result["exit_code"], 2)
+
+    def test_v2_process_termination_falls_back_and_escalates(self) -> None:
+        graceful = SimpleNamespace(
+            pid=123,
+            poll=Mock(return_value=None),
+            terminate=Mock(),
+            wait=Mock(return_value=0),
+        )
+        with patch("os.killpg", side_effect=OSError):
+            RemoteWorkerDaemon._terminate_agent_process(graceful)
+        graceful.terminate.assert_called_once_with()
+
+        stubborn = SimpleNamespace(
+            pid=456,
+            poll=Mock(return_value=None),
+            terminate=Mock(),
+            kill=Mock(),
+            wait=Mock(
+                side_effect=[subprocess.TimeoutExpired(cmd="agent", timeout=3), 0]
+            ),
+        )
+        with patch("os.killpg", side_effect=[None, OSError]):
+            RemoteWorkerDaemon._terminate_agent_process(stubborn)
+        stubborn.kill.assert_called_once_with()
 
     def test_v2_cli_timeout_terminates_silent_process(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
