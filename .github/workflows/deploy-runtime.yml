@@ -443,10 +443,14 @@ jobs:
             fi
           fi
           test -n "$PUBLIC_HOST" || { echo "missing RUNTIME_PUBLIC_HOST"; exit 1; }
+          umask 077
           cookie_jar="$RUNNER_TEMP/runtime-deploy/public-cookies.txt"
+          login_response="$RUNNER_TEMP/runtime-deploy/public-login.json"
+          health_response="$RUNNER_TEMP/runtime-deploy/public-health.json"
           curl -fsS \
             --retry 5 \
             --retry-delay 2 \
+            -o "$login_response" \
             -c "$cookie_jar" \
             -H "content-type: application/json" \
             -d "{\"email\":\"$AUTH_EMAIL\",\"password\":\"$AUTH_PASSWORD\"}" \
@@ -454,5 +458,19 @@ jobs:
           curl -fsS \
             --retry 5 \
             --retry-delay 2 \
+            -o "$health_response" \
             -b "$cookie_jar" \
             "http://$PUBLIC_HOST/cloud-agents/health"
+          python3 - "$login_response" "$health_response" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          login = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          health = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+          if login.get("authenticated") is not True:
+              raise SystemExit("public ingress login did not authenticate")
+          if health.get("ok") is not True:
+              raise SystemExit("public ingress health check was not ok")
+          print("public ingress: authenticated health ok")
+          PY
