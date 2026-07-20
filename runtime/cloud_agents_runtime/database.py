@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import weakref
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -27,6 +28,8 @@ class RuntimeDatabase:
             connection = sqlite3.connect(sqlite_path, check_same_thread=False)
             connection.row_factory = sqlite3.Row
             self._connection = connection
+        self._closed = False
+        self._finalizer = weakref.finalize(self, self._connection.close)
 
     def execute(self, sql: str, parameters: Iterable[Any] = ()) -> Any:
         return self._connection.execute(self._sql(sql), tuple(parameters))
@@ -46,7 +49,20 @@ class RuntimeDatabase:
         self._connection.rollback()
 
     def close(self) -> None:
-        self._connection.close()
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        finalizer = getattr(self, "_finalizer", None)
+        if finalizer is not None:
+            finalizer()
+        else:
+            self._connection.close()
+
+    def __enter__(self) -> RuntimeDatabase:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
 
     def task_lock(self, task_id: str) -> None:
         if self.dialect == "postgres":

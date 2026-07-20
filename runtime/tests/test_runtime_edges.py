@@ -1423,7 +1423,10 @@ class RuntimeEdgeTest(unittest.TestCase):
             request.add_header("content-type", "application/json")
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(request, timeout=5)
-        self.assertEqual(ctx.exception.code, code.value)
+        try:
+            self.assertEqual(ctx.exception.code, code.value)
+        finally:
+            ctx.exception.close()
 
     def wait_for_status(self, manager: RunManager, run_id: str, status: str) -> None:
         deadline = time.time() + 2

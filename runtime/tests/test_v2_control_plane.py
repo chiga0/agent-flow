@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import unittest
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -33,6 +34,21 @@ def wait_for_status(control: V2ControlPlane, task_id: str, status: str) -> dict:
 
 
 class V2ControlPlaneTest(unittest.TestCase):
+    def test_close_retries_after_active_runner_finishes(self):
+        control = V2ControlPlane(self.tmp_path())
+        connection = control._db._connection
+        runner = mock.Mock(spec=Thread)
+        runner.is_alive.side_effect = [True, True, False, False]
+        control._threads["active-task"] = runner
+
+        control.close(timeout=0)
+        connection.execute("SELECT 1")
+        control.close(timeout=0)
+
+        runner.join.assert_called_once_with(timeout=0.0)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+
     def test_v2_environment_and_inactive_worker_guards(self):
         with mock.patch.dict(os.environ, {"V2_BAD_JSON": "{"}):
             with self.assertRaisesRegex(ValueError, "JSON object"):

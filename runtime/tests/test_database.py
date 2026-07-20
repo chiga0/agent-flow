@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,15 @@ from runtime.cloud_agents_runtime.database import RuntimeDatabase
 
 
 class RuntimeDatabaseTest(unittest.TestCase):
+    def test_context_manager_closes_sqlite_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with RuntimeDatabase(Path(tmp) / "context.db") as database:
+                connection = database._connection
+                database.execute("CREATE TABLE sample (id TEXT PRIMARY KEY)")
+                database.commit()
+            with self.assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
+
     def test_sqlite_backend_executes_common_sql(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             database = RuntimeDatabase(Path(tmp) / "test.db")
@@ -48,6 +58,7 @@ class RuntimeDatabaseTest(unittest.TestCase):
         database.task_lock("task-one")
         database.commit()
         database.rollback()
+        database.close()
         database.close()
         self.assertEqual(database._connection.execute.call_count, 3)
         database._connection.commit.assert_called_once_with()

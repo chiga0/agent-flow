@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import ast
+import gc
 import pathlib
 import sys
 import threading
 import trace
 import unittest
+import warnings
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -87,8 +89,28 @@ def report_coverage(covered: dict[pathlib.Path, set[int]]) -> int:
 
 
 def run_tests() -> unittest.result.TestResult:
-    suite = unittest.defaultTestLoader.discover(str(TEST_ROOT))
-    return unittest.TextTestRunner(verbosity=2).run(suite)
+    unclosed_resources: list[str] = []
+    previous_hook = sys.unraisablehook
+
+    def record_unraisable(args: sys.UnraisableHookArgs) -> None:
+        if isinstance(args.exc_value, ResourceWarning):
+            unclosed_resources.append(str(args.exc_value))
+            return
+        previous_hook(args)
+
+    sys.unraisablehook = record_unraisable
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ResourceWarning)
+            suite = unittest.defaultTestLoader.discover(str(TEST_ROOT))
+            result = unittest.TextTestRunner(verbosity=2).run(suite)
+            gc.collect()
+    finally:
+        sys.unraisablehook = previous_hook
+    if unclosed_resources:
+        details = "\n".join(sorted(set(unclosed_resources)))
+        raise RuntimeError(f"unclosed runtime resources detected:\n{details}")
+    return result
 
 
 def executable_lines() -> dict[pathlib.Path, set[int]]:

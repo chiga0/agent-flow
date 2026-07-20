@@ -2870,7 +2870,9 @@ function AccessUserList({
 }) {
   const { t } = useI18n();
   const [roleByEmail, setRoleByEmail] = useState<Record<string, string>>({});
-  const [passwordByEmail, setPasswordByEmail] = useState<Record<string, string>>({});
+  const [passwordByEmail, setPasswordByEmail] = useState<
+    Record<string, string>
+  >({});
   useEffect(() => {
     setRoleByEmail((current) => {
       const next = { ...current };
@@ -2996,7 +2998,10 @@ function AccessUserList({
                 className="self-end"
                 disabled={!canManage || !passwordByEmail[user.email]}
                 onClick={() => {
-                  onResetPassword(user.email, passwordByEmail[user.email] ?? "");
+                  onResetPassword(
+                    user.email,
+                    passwordByEmail[user.email] ?? "",
+                  );
                   setPasswordByEmail((current) => ({
                     ...current,
                     [user.email]: "",
@@ -5699,7 +5704,10 @@ function isTerminalEvent(eventType: string) {
   return ["run.completed", "run.failed", "run.cancelled"].includes(eventType);
 }
 
-function effectiveTerminalStatus(status: string | undefined, events: RuntimeEvent[]) {
+function effectiveTerminalStatus(
+  status: string | undefined,
+  events: RuntimeEvent[],
+) {
   if (isTerminal(status)) {
     return status;
   }

@@ -8,6 +8,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,6 +16,16 @@ from typing import Any
 
 from runtime.cloud_agents_runtime.auth import AuthConfig
 from runtime.cloud_agents_runtime.server import build_server, main as server_main
+
+
+@dataclass(frozen=True)
+class BufferedResponse:
+    status: int
+    headers: Any
+    body: bytes
+
+    def read(self) -> bytes:
+        return self.body
 
 
 class RuntimeServerTest(unittest.TestCase):
@@ -1744,10 +1755,14 @@ def request_json(
     request = urllib.request.Request(url, data=body, method=method, headers=headers or {})
     if payload is not None:
         request.add_header("content-type", "application/json")
-    with urllib.request.urlopen(request, timeout=5) as response:
-        parsed = json.loads(response.read().decode("utf-8"))
-        assert isinstance(parsed, dict)
-        return parsed
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            parsed = json.loads(response.read().decode("utf-8"))
+            assert isinstance(parsed, dict)
+            return parsed
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        raise
 
 
 def request_raw(
@@ -1755,12 +1770,13 @@ def request_raw(
     method: str = "GET",
     payload: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
-) -> urllib.response.addinfourl:
+) -> BufferedResponse:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = urllib.request.Request(url, data=body, method=method, headers=headers or {})
     if payload is not None:
         request.add_header("content-type", "application/json")
-    return urllib.request.urlopen(request, timeout=5)
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return BufferedResponse(response.status, response.headers, response.read())
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -1773,16 +1789,20 @@ def request_no_redirect(
     method: str = "GET",
     payload: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
-) -> urllib.response.addinfourl:
+) -> BufferedResponse:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = urllib.request.Request(url, data=body, method=method, headers=headers or {})
     if payload is not None:
         request.add_header("content-type", "application/json")
     opener = urllib.request.build_opener(NoRedirect)
     try:
-        return opener.open(request, timeout=5)
+        with opener.open(request, timeout=5) as response:
+            return BufferedResponse(response.status, response.headers, response.read())
     except urllib.error.HTTPError as response:
-        return response
+        try:
+            return BufferedResponse(response.code, response.headers, response.read())
+        finally:
+            response.close()
 
 
 def request_text(url: str, headers: dict[str, str] | None = None) -> str:

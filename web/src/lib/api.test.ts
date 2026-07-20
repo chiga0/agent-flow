@@ -206,9 +206,14 @@ describe("api helpers", () => {
     await runtimeApi.v2WorkflowEngines();
     await runtimeApi.v2RegisterExecutionUnit({ unit_id: "docker-a" });
     await runtimeApi.v2DiscoverExecutionUnits();
-    await runtimeApi.v2ConfigureChannel("feishu", { webhook_url: "https://example.test" });
+    await runtimeApi.v2ConfigureChannel("feishu", {
+      webhook_url: "https://example.test",
+    });
     await runtimeApi.v2SendChannelMessage("feishu", { message: "hello" });
-    await runtimeApi.v2UpsertTenant({ tenant_id: "tenant_1", name: "Tenant 1" });
+    await runtimeApi.v2UpsertTenant({
+      tenant_id: "tenant_1",
+      name: "Tenant 1",
+    });
     await runtimeApi.v2UpsertTenantUser("tenant 1", {
       email: "ops@example.com",
       roles: ["member"],

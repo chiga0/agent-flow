@@ -934,6 +934,7 @@ class RunManager:
         for adapter in self.adapters.values():
             adapter.shutdown()
         self.executor_registry.shutdown()
+        self.v2.close()
         self.store.close()
 
     def _require_run(self, run_id: str) -> RunState:

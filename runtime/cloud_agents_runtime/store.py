@@ -4,6 +4,7 @@ import hmac
 import json
 import sqlite3
 import threading
+import weakref
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,6 +40,8 @@ class RunStore:
         self.db_path = self.artifact_root / "runtime.db"
         self._db = sqlite3.connect(self.db_path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
+        self._closed = False
+        self._db_finalizer = weakref.finalize(self, self._db.close)
         self._runs: dict[str, RunState] = {}
         self._jobs: dict[str, RunJob] = {}
         self._workers: dict[str, WorkerState] = {}
@@ -1213,7 +1216,16 @@ class RunStore:
 
     def close(self) -> None:
         with self._lock:
-            self._db.close()
+            if self._closed:
+                return
+            self._closed = True
+            self._db_finalizer()
+
+    def __enter__(self) -> RunStore:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
 
     def _append_jsonl(self, run_id: str, name: str, payload: Any) -> None:
         path = self.run_dir(run_id) / name

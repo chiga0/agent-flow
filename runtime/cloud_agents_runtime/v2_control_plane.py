@@ -66,6 +66,8 @@ class V2ControlPlane:
         self._db = RuntimeDatabase(self.db_path, database_url)
         self._lock = threading.RLock()
         self._threads: dict[str, threading.Thread] = {}
+        self._closed = False
+        self._db_closed = False
         self._db.task_lock("agentflow-v2-schema")
         self._init_db()
         self._ensure_defaults()
@@ -2414,6 +2416,8 @@ class V2ControlPlane:
 
     def _ensure_runner(self, task_id: str) -> None:
         with self._lock:
+            if self._closed:
+                return
             if self._task_uses_remote_unit(task_id):
                 return
             thread = self._threads.get(task_id)
@@ -2435,6 +2439,25 @@ class V2ControlPlane:
             )
             self._threads[task_id] = thread
             thread.start()
+
+    def close(self, timeout: float = 2.0) -> None:
+        with self._lock:
+            if self._db_closed:
+                return
+            self._closed = True
+            threads = list(self._threads.values())
+        current = threading.current_thread()
+        deadline = time.monotonic() + max(0.0, timeout)
+        for thread in threads:
+            if thread is current or not thread.is_alive():
+                continue
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        if any(thread.is_alive() for thread in threads):
+            return
+        with self._lock:
+            if not self._db_closed:
+                self._db.close()
+                self._db_closed = True
 
     def _dispatch_temporal_task(self, task_id: str) -> None:
         try:

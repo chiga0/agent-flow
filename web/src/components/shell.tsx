@@ -137,9 +137,7 @@ export function Shell() {
       </header>
 
       <div
-        className={
-          isAdmin ? "grid lg:grid-cols-[240px_minmax(0,1fr)]" : "grid"
-        }
+        className={isAdmin ? "grid lg:grid-cols-[240px_minmax(0,1fr)]" : "grid"}
       >
         {isAdmin ? (
           <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] border-r border-border bg-card lg:block">

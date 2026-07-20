@@ -24,7 +24,13 @@ import {
   Users,
   Zap,
 } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 
 import {
   Badge,
@@ -65,6 +71,12 @@ import {
 
 const modeOptions = [
   {
+    value: "single",
+    label: "Single",
+    detail: "one agent",
+    icon: <Bot className="h-4 w-4" />,
+  },
+  {
     value: "auto",
     label: "Auto",
     detail: "balanced",
@@ -86,18 +98,46 @@ const modeOptions = [
 
 const channelOptions = [
   { value: "web", label: "Web", icon: <MessageSquare className="h-4 w-4" /> },
-  { value: "mobile", label: "Mobile", icon: <Smartphone className="h-4 w-4" /> },
-  { value: "dingtalk", label: "DingTalk", icon: <RadioTower className="h-4 w-4" /> },
-  { value: "feishu", label: "Feishu", icon: <RadioTower className="h-4 w-4" /> },
+  {
+    value: "mobile",
+    label: "Mobile",
+    icon: <Smartphone className="h-4 w-4" />,
+  },
+  {
+    value: "dingtalk",
+    label: "DingTalk",
+    icon: <RadioTower className="h-4 w-4" />,
+  },
+  {
+    value: "feishu",
+    label: "Feishu",
+    icon: <RadioTower className="h-4 w-4" />,
+  },
   { value: "wecom", label: "WeCom", icon: <RadioTower className="h-4 w-4" /> },
 ];
 
 const adapterOptions = [
   { value: "auto", label: "Auto", icon: <Bot className="h-4 w-4" /> },
-  { value: "qwen", label: "qwen-code", icon: <TerminalSquare className="h-4 w-4" /> },
-  { value: "codex", label: "codex cli", icon: <TerminalSquare className="h-4 w-4" /> },
-  { value: "claude", label: "claude code", icon: <TerminalSquare className="h-4 w-4" /> },
-  { value: "opencode", label: "opencode", icon: <TerminalSquare className="h-4 w-4" /> },
+  {
+    value: "qwen",
+    label: "qwen-code",
+    icon: <TerminalSquare className="h-4 w-4" />,
+  },
+  {
+    value: "codex",
+    label: "codex cli",
+    icon: <TerminalSquare className="h-4 w-4" />,
+  },
+  {
+    value: "claude",
+    label: "claude code",
+    icon: <TerminalSquare className="h-4 w-4" />,
+  },
+  {
+    value: "opencode",
+    label: "opencode",
+    icon: <TerminalSquare className="h-4 w-4" />,
+  },
   { value: "fake", label: "fake", icon: <CheckCircle2 className="h-4 w-4" /> },
 ];
 
@@ -228,12 +268,15 @@ export function ProductClientPage() {
               <div>
                 <div className="text-sm font-semibold">New Task</div>
                 <div className="text-xs text-muted-foreground">
-                  {modeLabel(mode)} · {channelLabel(channel)} · {adapterLabel(adapter)}
+                  {modeLabel(mode)} · {channelLabel(channel)} ·{" "}
+                  {adapterLabel(adapter)}
                 </div>
               </div>
             </div>
             <Button
-              disabled={createTask.isPending || !goal.trim() || !repositoryTaskReady}
+              disabled={
+                createTask.isPending || !goal.trim() || !repositoryTaskReady
+              }
               type="submit"
               variant="primary"
             >
@@ -292,8 +335,8 @@ export function ProductClientPage() {
           ) : null}
           {workspacePath.trim() && !repositoryTaskReady ? (
             <div className="text-sm text-destructive">
-              Repository tasks require Single mode, a matching Mac/NAS worker, a real
-              Agent CLI, and a verification command.
+              Repository tasks require Single mode, a matching Mac/NAS worker, a
+              real Agent CLI, and a verification command.
             </div>
           ) : null}
           {createTask.isError ? (
@@ -382,13 +425,25 @@ export function ProductClientPage() {
                 <Activity className="h-4 w-4 text-primary" />
                 <div className="text-sm font-semibold">Workload</div>
               </div>
-              <Button size="icon" variant="ghost" onClick={() => tasks.refetch()}>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() => tasks.refetch()}
+              >
                 <RefreshCw className="h-4 w-4" />
               </Button>
             </div>
             <div className="grid grid-cols-3 gap-2">
-              <Metric label="Active" value={active.length} detail="queued/running" />
-              <Metric label="Done" value={completed.length} detail="completed" />
+              <Metric
+                label="Active"
+                value={active.length}
+                detail="queued/running"
+              />
+              <Metric
+                label="Done"
+                value={completed.length}
+                detail="completed"
+              />
               <Metric label="Units" value={units.length} detail="registered" />
             </div>
           </div>
@@ -460,13 +515,19 @@ function OptionButton({
       </span>
       <span className="min-w-0">
         <span className="block truncate text-sm font-medium">{label}</span>
-        <span className="block truncate text-xs text-muted-foreground">{detail}</span>
+        <span className="block truncate text-xs text-muted-foreground">
+          {detail}
+        </span>
       </span>
     </button>
   );
 }
 
-function ChannelReadiness({ channels }: { channels: V2AdminOverview["channels"] }) {
+function ChannelReadiness({
+  channels,
+}: {
+  channels: V2AdminOverview["channels"];
+}) {
   return (
     <div className="grid gap-3 rounded-lg border border-border bg-card p-4">
       <div className="flex items-center gap-2">
@@ -505,14 +566,21 @@ function modeLabel(value: string) {
 }
 
 function channelLabel(value: string) {
-  return channelOptions.find((option) => option.value === value)?.label ?? value;
+  return (
+    channelOptions.find((option) => option.value === value)?.label ?? value
+  );
 }
 
 function adapterLabel(value: string) {
-  return adapterOptions.find((option) => option.value === value)?.label ?? value;
+  return (
+    adapterOptions.find((option) => option.value === value)?.label ?? value
+  );
 }
 
-function channelStatus(channels: V2AdminOverview["channels"], platform: string) {
+function channelStatus(
+  channels: V2AdminOverview["channels"],
+  platform: string,
+) {
   return (
     channels.find((channel) => channel.platform === platform)?.status ??
     (platform === "web" ? "configured" : "reserved")
@@ -534,7 +602,10 @@ function useV2WebshellEvents(
   }, [initialEvents]);
 
   useEffect(() => {
-    if (taskStatus && ["completed", "failed", "cancelled"].includes(taskStatus)) {
+    if (
+      taskStatus &&
+      ["completed", "failed", "cancelled"].includes(taskStatus)
+    ) {
       setStatus("closed");
       return;
     }
@@ -559,7 +630,9 @@ function useV2WebshellEvents(
     };
     source.onopen = () => setStatus("live");
     source.onerror = () =>
-      setStatus(source.readyState === EventSource.CLOSED ? "fallback" : "connecting");
+      setStatus(
+        source.readyState === EventSource.CLOSED ? "fallback" : "connecting",
+      );
 
     return () => source.close();
   }, [taskId, taskStatus]);
@@ -631,16 +704,24 @@ export function ProductTaskPage() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["v2", "tasks"] }),
       queryClient.invalidateQueries({ queryKey: ["v2", "tasks", taskId] }),
-      queryClient.invalidateQueries({ queryKey: ["v2", "tasks", taskId, "events"] }),
+      queryClient.invalidateQueries({
+        queryKey: ["v2", "tasks", taskId, "events"],
+      }),
       queryClient.invalidateQueries({
         queryKey: ["v2", "tasks", taskId, "webshell-events"],
       }),
-      queryClient.invalidateQueries({ queryKey: ["v2", "tasks", taskId, "workflow"] }),
-      queryClient.invalidateQueries({ queryKey: ["v2", "tasks", taskId, "artifacts"] }),
+      queryClient.invalidateQueries({
+        queryKey: ["v2", "tasks", taskId, "workflow"],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["v2", "tasks", taskId, "artifacts"],
+      }),
       queryClient.invalidateQueries({
         queryKey: ["v2", "tasks", taskId, "evaluations"],
       }),
-      queryClient.invalidateQueries({ queryKey: ["v2", "tasks", taskId, "replays"] }),
+      queryClient.invalidateQueries({
+        queryKey: ["v2", "tasks", taskId, "replays"],
+      }),
       queryClient.invalidateQueries({
         queryKey: ["v2", "tasks", taskId, "permissions"],
       }),
@@ -673,8 +754,15 @@ export function ProductTaskPage() {
     onSuccess: refreshTaskDetail,
   });
   const resolvePermission = useMutation({
-    mutationFn: (input: { permissionId: string; decision: "allow_once" | "deny" }) =>
-      runtimeApi.v2ResolvePermission(taskId, input.permissionId, input.decision),
+    mutationFn: (input: {
+      permissionId: string;
+      decision: "allow_once" | "deny";
+    }) =>
+      runtimeApi.v2ResolvePermission(
+        taskId,
+        input.permissionId,
+        input.decision,
+      ),
     onSuccess: refreshTaskDetail,
   });
   const current = task.data;
@@ -726,7 +814,9 @@ export function ProductTaskPage() {
             Replay
           </Button>
           <Button
-            disabled={retryTask.isPending || current?.status === "running" || !current}
+            disabled={
+              retryTask.isPending || current?.status === "running" || !current
+            }
             size="sm"
             variant="secondary"
             onClick={() => retryTask.mutate()}
@@ -767,8 +857,8 @@ export function ProductTaskPage() {
               <CardTitle>Agent Chat</CardTitle>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              Real-time output is the primary task view. Switch Agent when the plan
-              contains multiple workers.
+              Real-time output is the primary task view. Switch Agent when the
+              plan contains multiple workers.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -802,7 +892,9 @@ export function ProductTaskPage() {
           />
           <div className="flex flex-wrap items-center justify-between gap-2 px-1">
             <div className="text-sm font-medium">
-              {selectedAgent ? `${selectedAgent.role} output` : "All real-time output"}
+              {selectedAgent
+                ? `${selectedAgent.role} output`
+                : "All real-time output"}
             </div>
             <span className="text-xs text-muted-foreground">
               {visibleWebshellEvents.length} events
@@ -816,7 +908,10 @@ export function ProductTaskPage() {
                 : undefined
             }
           />
-          <form className="grid gap-2 border-t border-border pt-3" onSubmit={submitFollowUp}>
+          <form
+            className="grid gap-2 border-t border-border pt-3"
+            onSubmit={submitFollowUp}
+          >
             <Input
               placeholder="Add context or a follow-up instruction"
               value={message}
@@ -824,9 +919,13 @@ export function ProductTaskPage() {
             />
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs text-muted-foreground">
-                Sent to the task runner and mirrored into the WebShell event stream.
+                Sent to the task runner and mirrored into the WebShell event
+                stream.
               </span>
-              <Button disabled={!message.trim() || sendMessage.isPending} type="submit">
+              <Button
+                disabled={!message.trim() || sendMessage.isPending}
+                type="submit"
+              >
                 <Send className="h-4 w-4" />
                 Send
               </Button>
@@ -842,7 +941,9 @@ export function ProductTaskPage() {
               <GitBranch className="h-4 w-4 text-primary" />
               <CardTitle>Plan DAG</CardTitle>
             </div>
-            {current?.plan ? <Badge tone="info">{current.plan.strategy}</Badge> : null}
+            {current?.plan ? (
+              <Badge tone="info">{current.plan.strategy}</Badge>
+            ) : null}
           </CardHeader>
           <CardBody>
             <AgentDag agents={current?.plan?.agent_tasks ?? []} />
@@ -874,7 +975,9 @@ export function ProductTaskPage() {
                     </div>
                   </div>
                 ) : (
-                  <p className="text-muted-foreground">{current.result.summary}</p>
+                  <p className="text-muted-foreground">
+                    {current.result.summary}
+                  </p>
                 )}
                 <StatusBadge
                   status={String(current.result.evaluation.status ?? "passed")}
@@ -888,7 +991,10 @@ export function ProductTaskPage() {
                 </a>
               </div>
             ) : (
-              <EmptyState title="No result yet" detail="The task is still running." />
+              <EmptyState
+                title="No result yet"
+                detail="The task is still running."
+              />
             )}
           </CardBody>
         </Card>
@@ -916,7 +1022,9 @@ export function ProductTaskPage() {
               <Boxes className="h-4 w-4 text-primary" />
               <CardTitle>Artifacts</CardTitle>
             </div>
-            <Badge tone="neutral">{artifacts.data?.artifacts.length ?? 0}</Badge>
+            <Badge tone="neutral">
+              {artifacts.data?.artifacts.length ?? 0}
+            </Badge>
           </CardHeader>
           <CardBody>
             <ArtifactList
@@ -934,7 +1042,9 @@ export function ProductTaskPage() {
               <ShieldCheck className="h-4 w-4 text-primary" />
               <CardTitle>Evaluations</CardTitle>
             </div>
-            <Badge tone="neutral">{evaluations.data?.evaluations.length ?? 0}</Badge>
+            <Badge tone="neutral">
+              {evaluations.data?.evaluations.length ?? 0}
+            </Badge>
           </CardHeader>
           <CardBody>
             <EvaluationList evaluations={evaluations.data?.evaluations ?? []} />
@@ -1022,7 +1132,11 @@ function PermissionCards({
             <div>
               <div className="font-medium">Agent needs permission</div>
               <div className="text-xs text-muted-foreground">
-                {String(permission.request.description ?? permission.request.tool ?? permission.permission_id)}
+                {String(
+                  permission.request.description ??
+                    permission.request.tool ??
+                    permission.permission_id,
+                )}
               </div>
             </div>
             <div className="flex gap-2">
@@ -1037,7 +1151,9 @@ function PermissionCards({
               <Button
                 disabled={pending}
                 size="sm"
-                onClick={() => onResolve(permission.permission_id, "allow_once")}
+                onClick={() =>
+                  onResolve(permission.permission_id, "allow_once")
+                }
               >
                 Allow once
               </Button>
@@ -1076,7 +1192,13 @@ function WorkflowSteps({ steps }: { steps: V2WorkflowStep[] }) {
   );
 }
 
-function ArtifactList({ artifacts, taskId }: { artifacts: V2Artifact[]; taskId: string }) {
+function ArtifactList({
+  artifacts,
+  taskId,
+}: {
+  artifacts: V2Artifact[];
+  taskId: string;
+}) {
   if (!artifacts.length) {
     return <EmptyState title="No artifacts yet" />;
   }
@@ -1153,7 +1275,8 @@ function ReplayList({ replays }: { replays: V2Replay[] }) {
             <StatusBadge status={replay.status} />
           </div>
           <div className="text-xs text-muted-foreground">
-            {replay.requested_by} · {new Date(replay.created_at).toLocaleString()}
+            {replay.requested_by} ·{" "}
+            {new Date(replay.created_at).toLocaleString()}
           </div>
         </div>
       ))}
@@ -1201,7 +1324,9 @@ export function ProductAdminPage() {
   });
   const sendChannel = useMutation({
     mutationFn: () =>
-      runtimeApi.v2SendChannelMessage(channelPlatform, { message: outboundText }),
+      runtimeApi.v2SendChannelMessage(channelPlatform, {
+        message: outboundText,
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({
         queryKey: ["v2", "admin", "channel-messages"],
@@ -1239,7 +1364,9 @@ export function ProductAdminPage() {
       }),
     onSuccess: async () => {
       setProjectName("");
-      await queryClient.invalidateQueries({ queryKey: ["v2", "admin", "projects"] });
+      await queryClient.invalidateQueries({
+        queryKey: ["v2", "admin", "projects"],
+      });
     },
   });
   const addProjectMember = useMutation({
@@ -1279,10 +1406,13 @@ export function ProductAdminPage() {
         </Link>
       </div>
 
-        <div className="grid gap-3 md:grid-cols-5">
+      <div className="grid gap-3 md:grid-cols-5">
         <Metric label="Tasks" value={data?.tasks.total ?? 0} />
         <Metric label="Agent Tasks" value={data?.agent_tasks.total ?? 0} />
-        <Metric label="Execution Units" value={data?.execution_units.length ?? 0} />
+        <Metric
+          label="Execution Units"
+          value={data?.execution_units.length ?? 0}
+        />
         <Metric label="Tenants" value={data?.tenants.length ?? 0} />
       </div>
 
@@ -1398,7 +1528,8 @@ function TaskGrid({ tasks }: { tasks: V2Task[] }) {
 }
 
 function TaskTrackItem({ task }: { task: V2Task }) {
-  const dispatch = task.metadata?.dispatch as Record<string, unknown> | undefined;
+  const dispatch = task.metadata?.dispatch as
+    Record<string, unknown> | undefined;
   const adapter = String(dispatch?.adapter ?? task.adapter);
   const unit = String(dispatch?.execution_unit_id ?? "unassigned");
   const reason = String(dispatch?.reason ?? task.plan?.strategy ?? task.mode);
@@ -1418,7 +1549,9 @@ function TaskTrackItem({ task }: { task: V2Task }) {
           </Badge>
         </div>
         <div className="mt-2 line-clamp-1 font-medium">{task.title}</div>
-        <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{task.goal}</p>
+        <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+          {task.goal}
+        </p>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <span>{adapterLabel(adapter)}</span>
           <ArrowRight className="h-3 w-3" />
@@ -1460,7 +1593,8 @@ function AgentDag({ agents }: { agents: V2AgentTask[] }) {
           <div className="font-medium">{agent.title}</div>
           <div className="text-sm text-muted-foreground">{agent.goal}</div>
           <div className="text-xs text-muted-foreground">
-            Depends on: {agent.depends_on.length ? agent.depends_on.join(", ") : "none"}
+            Depends on:{" "}
+            {agent.depends_on.length ? agent.depends_on.join(", ") : "none"}
           </div>
         </div>
       ))}
@@ -1510,7 +1644,10 @@ function AgentSwitcher({
     return null;
   }
   return (
-    <div aria-label="Agent switcher" className="flex gap-2 overflow-x-auto pb-1">
+    <div
+      aria-label="Agent switcher"
+      className="flex gap-2 overflow-x-auto pb-1"
+    >
       <button
         className={`flex shrink-0 items-center gap-2 rounded-md border px-3 py-2 text-sm ${
           selectedAgentId === "all"
@@ -1597,7 +1734,9 @@ function QwenWebshellPanel({
           >
             <div
               className={`max-w-[78%] rounded-md border px-3 py-2 text-sm ${
-                isUser ? "border-primary bg-primary text-primary-foreground" : "bg-card"
+                isUser
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "bg-card"
               }`}
             >
               <div className="mb-1 text-[11px] opacity-75">
@@ -1664,7 +1803,9 @@ function HaStatusCard({ overview }: { overview?: V2AdminOverview }) {
         <div className="rounded-md border border-border p-3 text-sm">
           <div className="flex items-center justify-between gap-3">
             <span className="font-medium">Workflow Engine</span>
-            <Badge tone="info">{String(workflow?.active_engine ?? "local")}</Badge>
+            <Badge tone="info">
+              {String(workflow?.active_engine ?? "local")}
+            </Badge>
           </div>
           <div className="mt-2 grid gap-2">
             {(workflow?.engines ?? []).map((engine) => (

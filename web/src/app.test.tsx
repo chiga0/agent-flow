@@ -171,7 +171,11 @@ const v2Task = {
       nodes: [
         { id: "brain", title: "Plan the work", depends_on: [] },
         { id: "builder", title: "Execute the work", depends_on: ["brain"] },
-        { id: "reviewer", title: "Review and package", depends_on: ["builder"] },
+        {
+          id: "reviewer",
+          title: "Review and package",
+          depends_on: ["builder"],
+        },
       ],
     },
     artifact_contract: { required: ["final_summary"] },
@@ -187,7 +191,9 @@ const v2Task = {
         adapter: "fake",
         order_index: 0,
         depends_on: [],
-        artifact_contract: { evaluation: "must produce non-empty result summary" },
+        artifact_contract: {
+          evaluation: "must produce non-empty result summary",
+        },
         result: { final_summary: "Plan complete." },
         started_at: new Date().toISOString(),
         completed_at: new Date().toISOString(),
@@ -204,7 +210,9 @@ const v2Task = {
         adapter: "fake",
         order_index: 1,
         depends_on: ["brain"],
-        artifact_contract: { evaluation: "must produce non-empty result summary" },
+        artifact_contract: {
+          evaluation: "must produce non-empty result summary",
+        },
         result: { final_summary: "Build complete." },
         started_at: new Date().toISOString(),
         completed_at: new Date().toISOString(),
@@ -221,7 +229,9 @@ const v2Task = {
         adapter: "fake",
         order_index: 2,
         depends_on: ["builder"],
-        artifact_contract: { evaluation: "must produce non-empty result summary" },
+        artifact_contract: {
+          evaluation: "must produce non-empty result summary",
+        },
         result: { final_summary: "Review complete." },
         started_at: new Date().toISOString(),
         completed_at: new Date().toISOString(),
@@ -233,7 +243,9 @@ const v2Task = {
   },
   result: {
     summary: "Plan complete. Build complete. Review complete.",
-    artifacts: [{ name: "final_summary", kind: "summary", status: "available" }],
+    artifacts: [
+      { name: "final_summary", kind: "summary", status: "available" },
+    ],
     evaluation: { status: "passed", checks: ["contract"] },
   },
 };
@@ -1141,10 +1153,14 @@ describe("aflow console", () => {
     expect(screen.getByText("Agent needs permission")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Deny" }));
     expect(screen.getByLabelText("Agent switcher")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /All output/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /All output/ }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /brain/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /builder/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /reviewer/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /reviewer/ }),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /brain/ }));
     expect(screen.getByText("brain output")).toBeInTheDocument();
     expect(
@@ -1153,7 +1169,9 @@ describe("aflow console", () => {
       ),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /builder/ }));
-    expect(screen.getByText("Waiting for builder to emit output.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Waiting for builder to emit output."),
+    ).toBeInTheDocument();
     expect(screen.getByText("Stream complete")).toBeInTheDocument();
     expect(screen.getByText("Execution")).toBeInTheDocument();
     expect(screen.getByText("Durable Workflow")).toBeInTheDocument();
@@ -1282,7 +1300,10 @@ describe("aflow console", () => {
     expect(screen.getByText("sqlite:v2_events")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Discover" }));
-    await user.type(screen.getByLabelText("Webhook URL"), "https://bot.example");
+    await user.type(
+      screen.getByLabelText("Webhook URL"),
+      "https://bot.example",
+    );
     await user.type(screen.getByLabelText("Callback token"), "token");
     await user.click(screen.getByRole("button", { name: "Configure" }));
     await user.clear(screen.getByLabelText("Outbound test"));
@@ -1290,7 +1311,10 @@ describe("aflow console", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
     await user.type(screen.getByLabelText("Tenant name"), "Acme");
     await user.click(screen.getByRole("button", { name: "Create" }));
-    await user.type(screen.getByLabelText("Default tenant user"), "new@example.com");
+    await user.type(
+      screen.getByLabelText("Default tenant user"),
+      "new@example.com",
+    );
     await user.click(screen.getByRole("button", { name: "Add" }));
   });
 
@@ -1552,7 +1576,9 @@ describe("aflow console", () => {
     await user.selectOptions(screen.getAllByLabelText("Role")[1], "auditor");
     await user.click(screen.getAllByRole("button", { name: "Save role" })[0]);
     await user.type(screen.getAllByLabelText("New password")[0], "reset-12345");
-    await user.click(screen.getAllByRole("button", { name: "Reset password" })[0]);
+    await user.click(
+      screen.getAllByRole("button", { name: "Reset password" })[0],
+    );
     await user.click(screen.getAllByRole("button", { name: "Disable" })[0]);
     expect(await screen.findByText("cat_created_secret")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Revoke" }));
@@ -3056,7 +3082,12 @@ describe("aflow console", () => {
     ).toBeUndefined();
     expect(
       __shellTestUtils.dockPendingPermission([
-        event("permission.requested", 1, { raw: { data: { requestId: "perm_2" } } }, now),
+        event(
+          "permission.requested",
+          1,
+          { raw: { data: { requestId: "perm_2" } } },
+          now,
+        ),
         event("permission.resolve_requested", 2, { requestId: "perm_2" }, now),
       ]),
     ).toBeUndefined();
@@ -3446,7 +3477,9 @@ async function fetchMock(input: RequestInfo | URL, init?: RequestInit) {
     ).users.push(created);
     return jsonResponse(created);
   }
-  const authUserMatch = path.match(/^auth\/users\/([^/]+)\/(roles|status|password)$/);
+  const authUserMatch = path.match(
+    /^auth\/users\/([^/]+)\/(roles|status|password)$/,
+  );
   if (init?.method === "POST" && authUserMatch) {
     const email = decodeURIComponent(authUserMatch[1]);
     const action = authUserMatch[2];

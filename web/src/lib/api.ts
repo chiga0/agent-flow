@@ -430,7 +430,8 @@ export interface V2Task {
   priority: string;
   channel: string;
   adapter: string;
-  execution_mode: "pending" | "fake" | "protocol-simulated" | "real-cli" | string;
+  execution_mode:
+    "pending" | "fake" | "protocol-simulated" | "real-cli" | string;
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -683,7 +684,10 @@ export const runtimeApi = {
       method: "POST",
       body: JSON.stringify({}),
     }),
-  changePassword: (payload: { current_password: string; new_password: string }) =>
+  changePassword: (payload: {
+    current_password: string;
+    new_password: string;
+  }) =>
     api<{ changed: boolean; authenticated: boolean }>("auth/password", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -835,13 +839,10 @@ export const runtimeApi = {
       },
     ),
   v2UpsertRbacPolicy: (tenantId: string, payload: Record<string, unknown>) =>
-    api<V2RbacPolicy>(
-      `v2/admin/tenants/${encodeURIComponent(tenantId)}/rbac`,
-      {
-        method: "POST",
-        body: JSON.stringify(payload),
-      },
-    ),
+    api<V2RbacPolicy>(`v2/admin/tenants/${encodeURIComponent(tenantId)}/rbac`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   capabilities: () => api<Capabilities>("capabilities"),
   metrics: () => api<Metrics>("metrics.json"),
   costStatus: () => api<CostStatus>("cost/status"),

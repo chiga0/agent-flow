@@ -152,6 +152,10 @@ jobs:
         working-directory: web
         run: npm run lint
 
+      - name: Web format
+        working-directory: web
+        run: npm run format
+
       - name: Web tests with coverage gate
         working-directory: web
         run: npm run test

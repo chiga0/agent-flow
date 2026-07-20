@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import shlex
 import subprocess
 import sys
@@ -22,6 +23,27 @@ from runtime.cloud_agents_runtime.store import RunStore, utc_now_plus
 
 
 class RunManagerTest(unittest.TestCase):
+    def test_shutdown_closes_both_runtime_databases_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = RunManager(Path(tmp), worker_capacity=0)
+            legacy_connection = manager.store._db
+            v2_connection = manager.v2._db._connection
+
+            manager.shutdown()
+            manager.shutdown()
+            manager.v2.close()
+            manager.v2._ensure_runner("closed-control-plane")
+
+            with self.assertRaises(sqlite3.ProgrammingError):
+                legacy_connection.execute("SELECT 1")
+            with self.assertRaises(sqlite3.ProgrammingError):
+                v2_connection.execute("SELECT 1")
+
+            with RunStore(Path(tmp) / "context-store") as store:
+                store_connection = store._db
+            with self.assertRaises(sqlite3.ProgrammingError):
+                store_connection.execute("SELECT 1")
+
     def test_fake_run_completes_and_writes_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manager = RunManager(Path(tmp))

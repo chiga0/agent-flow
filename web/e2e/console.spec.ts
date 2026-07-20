@@ -111,7 +111,10 @@ test("uses the client and admin control-plane surfaces", async ({ page }) => {
   await page.getByRole("button", { name: "Send" }).click();
   await messageRequest;
 
-  await page.getByRole("link", { name: /Admin|管理后台/ }).first().click();
+  await page
+    .getByRole("link", { name: /Admin|管理后台/ })
+    .first()
+    .click();
   await expect(
     page.getByRole("heading", { name: "Admin Control Plane" }),
   ).toBeVisible();
@@ -401,7 +404,11 @@ async function mockRuntime(
         nodes: [
           { id: "brain", title: "Plan the work", depends_on: [] },
           { id: "builder", title: "Execute the work", depends_on: ["brain"] },
-          { id: "reviewer", title: "Review and package", depends_on: ["builder"] },
+          {
+            id: "reviewer",
+            title: "Review and package",
+            depends_on: ["builder"],
+          },
         ],
       },
       artifact_contract: { required: ["final_summary"] },
@@ -1005,7 +1012,9 @@ async function mockRuntime(
       await route.fulfill({ json: created, status: 201 });
       return;
     }
-    const authUserMatch = path.match(/^auth\/users\/([^/]+)\/(roles|status|password)$/);
+    const authUserMatch = path.match(
+      /^auth\/users\/([^/]+)\/(roles|status|password)$/,
+    );
     if (request.method() === "POST" && authUserMatch) {
       const email = decodeURIComponent(authUserMatch[1]);
       const action = authUserMatch[2];
