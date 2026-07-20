@@ -77,7 +77,7 @@ jobs:
         env:
           V2_DATABASE_URL: >-
             postgresql://agentflow:agentflow-ci-password@127.0.0.1:5432/agentflow_ci
-        run: python3 scripts/smoke_postgres_v2.py
+        run: PYTHONPATH=. python3 scripts/smoke_postgres_v2.py
 
       - name: Local/NAS one-command acceptance
         run: |
