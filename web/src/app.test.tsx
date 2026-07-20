@@ -1180,6 +1180,52 @@ describe("aflow console", () => {
     );
   });
 
+  it("requires an explicit agent and verification for repository tasks", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Client Workspace" });
+    await user.type(
+      screen.getByPlaceholderText(
+        "Describe the outcome you want. The platform will choose a plan, agents, runtime, and artifacts.",
+      ),
+      "Fix the calculator",
+    );
+    await user.type(
+      screen.getByLabelText("Repository path (optional)"),
+      "/Volumes/AIProjects/calculator",
+    );
+    expect(
+      screen.getByText(
+        "Repository tasks require a real Agent CLI and a verification command.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: /codex cli/ }));
+    await user.clear(screen.getByLabelText("Git ref"));
+    await user.type(screen.getByLabelText("Git ref"), "main");
+    await user.type(
+      screen.getByLabelText(
+        "Verification command (required for repository tasks)",
+      ),
+      "python3 -m unittest -v",
+    );
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/v2/tasks",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringMatching(
+            /Fix the calculator.*single.*codex.*source_path.*AIProjects.*main.*unittest/s,
+          ),
+        }),
+      ),
+    );
+  });
+
   it("does not submit an empty task", async () => {
     render(<App />);
 
