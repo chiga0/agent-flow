@@ -9,9 +9,11 @@ from unittest import mock
 
 from runtime.cloud_agents_runtime.v2_control_plane import (
     V2ControlPlane,
+    comma_list_env,
     extract_feishu_text,
     failure_summary,
     json_loads,
+    local_execution_unit_json,
     nested_text,
     normalize_inbound_channel_payload,
     outbound_channel_payload,
@@ -31,6 +33,21 @@ def wait_for_status(control: V2ControlPlane, task_id: str, status: str) -> dict:
 
 
 class V2ControlPlaneTest(unittest.TestCase):
+    def test_v2_environment_and_inactive_worker_guards(self):
+        with mock.patch.dict(os.environ, {"V2_BAD_JSON": "{"}):
+            with self.assertRaisesRegex(ValueError, "JSON object"):
+                local_execution_unit_json("V2_BAD_JSON", {})
+        with mock.patch.dict(os.environ, {"V2_EMPTY_LIST": " , "}):
+            with self.assertRaisesRegex(ValueError, "at least one value"):
+                comma_list_env("V2_EMPTY_LIST", ["fake"])
+        control = V2ControlPlane(self.tmp_path())
+        with self.assertRaisesRegex(ValueError, "worker_id is required"):
+            control.heartbeat_execution_worker(" ", {})
+        self.assertEqual(
+            control.claim_remote_agent_task("missing-worker", {}),
+            {"assignment": None, "reason": "worker_not_active"},
+        )
+
     def test_stale_remote_dispatch_can_be_claimed_by_healthy_worker(self):
         control = V2ControlPlane(self.tmp_path())
         control._db.execute("DELETE FROM v2_execution_units")
