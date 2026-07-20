@@ -49,6 +49,15 @@ jobs:
             --artifact-root "$RUNNER_TEMP/agentflow-v2-smoke" \
             --timeout 10
 
+      - name: Local/NAS one-command acceptance
+        run: |
+          make local-up
+          make local-demo
+
+      - name: Stop local/NAS acceptance stack
+        if: always()
+        run: make local-down
+
       - name: Install web dependencies
         working-directory: web
         run: npm ci
