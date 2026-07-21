@@ -8,10 +8,48 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App, __testUtils, queryClient, router } from "./app";
 import { __shellTestUtils } from "./components/shell";
+
+vi.mock("@qwen-code/sdk/daemon/transports", () => ({
+  RestSseTransport: class {
+    dispose() {}
+  },
+}));
+
+vi.mock("@qwen-code/webui/daemon-react-sdk", () => ({
+  DaemonWorkspaceProvider: ({ children }: { children: ReactNode }) => children,
+  DaemonSessionProvider: ({ children }: { children: ReactNode }) => children,
+}));
+
+vi.mock("@qwen-code/web-shell", () => ({
+  WebShell: (props: {
+    bottomStatusItems?: Array<{ onClick?: () => void }>;
+    onRightPanelOpen?: () => void;
+    onSessionIdChange?: (sessionId: string) => void;
+    sidebar?: { branding?: { render?: () => ReactNode } };
+  }) => (
+    <div aria-label="Qwen WebShell">
+      {props.sidebar?.branding?.render?.()}
+      <span>Native WebShell Chat</span>
+      <button type="button" onClick={props.bottomStatusItems?.[0]?.onClick}>
+        Open process status
+      </button>
+      <button type="button" onClick={props.onRightPanelOpen}>
+        Open right panel
+      </button>
+      <button
+        type="button"
+        onClick={() => props.onSessionIdChange?.("at_reviewer")}
+      >
+        Select reviewer session
+      </button>
+    </div>
+  ),
+}));
 
 const run = {
   run_id: "run_1",
@@ -1070,15 +1108,16 @@ describe("aflow console", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders the client workspace and keeps the admin control plane reachable", async () => {
+  it("renders the chat-first client and keeps the admin control plane reachable", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: "Client Workspace" }),
+      await screen.findByRole("heading", { name: "今天想完成什么？" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Channel Ready")).toBeInTheDocument();
-    expect(screen.getByText("Live Agent Chats")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Start conversation" }),
+    ).toBeDisabled();
 
     await user.click(screen.getByRole("link", { name: "管理后台" }));
     expect(
@@ -1110,29 +1149,36 @@ describe("aflow console", () => {
     await user.click(screen.getByRole("button", { name: "登录" }));
 
     expect(
-      await screen.findByRole("heading", { name: "Client Workspace" }),
+      await screen.findByRole("heading", { name: "今天想完成什么？" }),
     ).toBeInTheDocument();
   });
 
-  it("creates and inspects a task from the client workspace", async () => {
+  it("creates a task and opens the native WebShell surface", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { name: "Client Workspace" }),
+      await screen.findByRole("heading", { name: "今天想完成什么？" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Channel Ready")).toBeInTheDocument();
 
     await user.type(
       screen.getByPlaceholderText(
-        "Describe the outcome you want. The platform will choose a plan, agents, runtime, and artifacts.",
+        "例如：审计这个仓库的部署链路，修复问题并给出可验证的交付产物",
       ),
       "Ship the control plane",
     );
-    await user.click(screen.getByRole("button", { name: /Multi-agent/ }));
-    await user.click(screen.getByRole("button", { name: /Feishu/ }));
-    await user.click(screen.getByRole("button", { name: /codex cli/ }));
-    await user.click(screen.getByRole("button", { name: "Start" }));
+    await user.click(screen.getByText("设置"));
+    await user.selectOptions(
+      screen.getByLabelText("Agent 模式"),
+      "multi-agent",
+    );
+    await user.selectOptions(screen.getByLabelText("执行 Agent"), "codex");
+    fireEvent.keyDown(
+      screen.getByPlaceholderText(
+        "例如：审计这个仓库的部署链路，修复问题并给出可验证的交付产物",
+      ),
+      { key: "Enter" },
+    );
 
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
@@ -1140,142 +1186,94 @@ describe("aflow console", () => {
         expect.objectContaining({
           method: "POST",
           body: expect.stringMatching(
-            /Ship the control plane.*multi-agent.*feishu.*codex/s,
+            /Ship the control plane.*multi-agent.*codex.*webshell/s,
           ),
         }),
       ),
     );
-    expect(
-      await screen.findByRole("heading", { name: "Ship the control plane" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Plan DAG")).toBeInTheDocument();
-    expect(screen.getByText("Agent Chat")).toBeInTheDocument();
-    expect(screen.getByText("Agent needs permission")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Deny" }));
-    expect(screen.getByLabelText("Agent switcher")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /All output/ }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /brain/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /builder/ })).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /reviewer/ }),
-    ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /brain/ }));
-    expect(screen.getByText("brain output")).toBeInTheDocument();
-    expect(
-      within(screen.getByLabelText("Real-time Agent output")).getByText(
-        "Inspecting live runner state.",
-      ),
-    ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /builder/ }));
-    expect(
-      screen.getByText("Waiting for builder to emit output."),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Stream complete")).toBeInTheDocument();
-    expect(screen.getByText("Execution")).toBeInTheDocument();
-    expect(screen.getByText("Durable Workflow")).toBeInTheDocument();
-    expect(screen.getByText("Artifacts")).toBeInTheDocument();
-    expect(screen.getByText("Evaluations")).toBeInTheDocument();
-    expect(screen.getByText("Replay Snapshots")).toBeInTheDocument();
-    expect(screen.getByText("Canonical Events")).toBeInTheDocument();
-    expect(screen.getByText("Agent Contracts")).toBeInTheDocument();
-    expect(screen.getByText("Download audit bundle")).toHaveAttribute(
-      "href",
-      "/v2/tasks/task_v2_1/audit.json",
+    expect(await screen.findByLabelText("Qwen WebShell")).toBeInTheDocument();
+    expect(screen.getByText("实时进程")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /brain/ })).not.toHaveLength(
+      0,
     );
-    expect(screen.getAllByText("Preview").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Download artifact").length).toBeGreaterThan(0);
-    expect(screen.getByText("orchestrator-workers")).toBeInTheDocument();
-    expect(screen.getByText("task.created")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Replay" }));
+    expect(screen.getAllByRole("button", { name: /builder/ })).not.toHaveLength(
+      0,
+    );
+    expect(
+      screen.getAllByRole("button", { name: /reviewer/ }),
+    ).not.toHaveLength(0);
+    await user.click(
+      screen.getByRole("button", { name: "builder Execute the work" }),
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "reviewer completed Review and package fake builder",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Hide processes" }));
+    expect(
+      screen.getByRole("button", { name: "Show processes" }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Open process status" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Open right panel" }));
+    await user.click(
+      screen.getByRole("button", { name: "Select reviewer session" }),
+    );
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
-        "/v2/tasks/task_v2_1/replay",
+        "/v2/tasks/task_v2_1/retry",
         expect.objectContaining({ method: "POST" }),
-      ),
-    );
-    expect(fetch).toHaveBeenCalledWith(
-      "/v2/tasks/task_v2_1/retry",
-      expect.objectContaining({ method: "POST" }),
-    );
-    expect(fetch).toHaveBeenCalledWith(
-      "/v2/tasks/task_v2_1/permissions/perm_v2_1",
-      expect.objectContaining({ method: "POST" }),
-    );
-
-    await user.type(
-      screen.getByPlaceholderText("Add context or a follow-up instruction"),
-      "Include audit notes",
-    );
-    await user.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith(
-        "/v2/tasks/task_v2_1/messages",
-        expect.objectContaining({
-          method: "POST",
-          body: expect.stringContaining("Include audit notes"),
-        }),
       ),
     );
   });
 
-  it("requires an explicit agent and verification for repository tasks", async () => {
+  it("cancels a running task from the WebShell process panel", async () => {
+    const user = userEvent.setup();
+    const originalStatus = v2Task.status;
+    v2Task.status = "running";
+    try {
+      await act(async () => {
+        await router.navigate({
+          to: "/tasks/$taskId",
+          params: { taskId: "task_v2_1" },
+        });
+      });
+      render(<App />);
+
+      await user.click(await screen.findByRole("button", { name: "Cancel" }));
+      await waitFor(() =>
+        expect(fetch).toHaveBeenCalledWith(
+          "/v2/tasks/task_v2_1/cancel",
+          expect.objectContaining({ method: "POST" }),
+        ),
+      );
+    } finally {
+      v2Task.status = originalStatus;
+    }
+  });
+
+  it("keeps advanced Agent selection inside settings", async () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await screen.findByRole("heading", { name: "Client Workspace" });
-    await user.type(
-      screen.getByPlaceholderText(
-        "Describe the outcome you want. The platform will choose a plan, agents, runtime, and artifacts.",
-      ),
-      "Fix the calculator",
-    );
-    await user.type(
-      screen.getByLabelText("Repository path (optional)"),
-      "/Volumes/AIProjects/calculator",
-    );
-    expect(
-      screen.getByText(
-        /Repository tasks require Single mode, a matching Mac\/NAS worker/,
-      ),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
-
-    await user.click(screen.getByRole("button", { name: /codex cli/ }));
-    await user.clear(screen.getByLabelText("Git ref"));
-    await user.type(screen.getByLabelText("Git ref"), "main");
-    await user.type(
-      screen.getByLabelText(
-        "Verification command (required for repository tasks)",
-      ),
-      "python3 -m unittest -v",
-    );
-    await user.selectOptions(
-      screen.getByLabelText("Execution unit (required for repository tasks)"),
-      "mac-local-worker",
-    );
-    await user.click(screen.getByRole("button", { name: "Start" }));
-
-    await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith(
-        "/v2/tasks",
-        expect.objectContaining({
-          method: "POST",
-          body: expect.stringMatching(
-            /Fix the calculator.*single.*codex.*execution_unit_id.*mac-local-worker.*source_path.*AIProjects.*main.*unittest/s,
-          ),
-        }),
-      ),
-    );
+    await screen.findByRole("heading", { name: "今天想完成什么？" });
+    const settings = screen.getByText("设置").closest("details");
+    expect(settings).not.toHaveAttribute("open");
+    await user.click(screen.getByText("设置"));
+    expect(settings).toHaveAttribute("open");
+    expect(screen.getByLabelText("Agent 模式")).toBeInTheDocument();
+    expect(screen.getByLabelText("执行 Agent")).toBeInTheDocument();
   });
 
   it("does not submit an empty task", async () => {
     render(<App />);
 
-    fireEvent.submit(await screen.findByRole("form", { name: "New Task" }));
+    fireEvent.submit(
+      await screen.findByRole("form", { name: "New conversation" }),
+    );
 
     expect(fetch).not.toHaveBeenCalledWith(
       "/v2/tasks",
@@ -3384,6 +3382,9 @@ async function fetchMock(input: RequestInfo | URL, init?: RequestInit) {
   }
   if (init?.method === "POST" && path === "v2/tasks/task_v2_1/retry") {
     return jsonResponse({ ...v2Task, status: "queued" });
+  }
+  if (init?.method === "POST" && path === "v2/tasks/task_v2_1/cancel") {
+    return jsonResponse({ ...v2Task, status: "cancelled" });
   }
   if (init?.method === "POST" && path === "v2/tasks/task_v2_1/replay") {
     return jsonResponse(v2Replay);

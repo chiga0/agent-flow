@@ -672,6 +672,27 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return result;
 }
 
+export function authenticatedFetch(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+) {
+  const method = (init.method ?? "GET").toUpperCase();
+  return fetch(input, {
+    ...init,
+    credentials: "same-origin",
+    headers: {
+      ...(csrfToken && !["GET", "HEAD", "OPTIONS"].includes(method)
+        ? { "x-csrf-token": csrfToken }
+        : {}),
+      ...(init.headers ?? {}),
+    },
+  });
+}
+
+export function v2TaskDaemonBaseHref(taskId: string) {
+  return `${API_BASE}v2/tasks/${encodeURIComponent(taskId)}/daemon`;
+}
+
 export const runtimeApi = {
   session: () => api<AuthSession>("auth/session"),
   login: (payload: { email: string; password: string }) =>

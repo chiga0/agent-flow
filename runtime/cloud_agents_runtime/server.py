@@ -28,7 +28,17 @@ from .models import RunSpec
 from .supervisor import qwen_supervisor_from_env
 from .temporal_poc import agent_run_workflow_plan, mission_workflow_plan
 from .ui_projection import project_event, project_events
-from .v2_control_plane import v2_event_to_daemon_event
+from .v2_control_plane import is_v2_webshell_event, v2_event_to_daemon_event
+from .webshell_gateway import (
+    capabilities as webshell_capabilities,
+    extract_prompt as webshell_extract_prompt,
+    find_agent as webshell_find_agent,
+    restored_session as webshell_restored_session,
+    session_context as webshell_session_context,
+    session_events as webshell_session_events,
+    session_summaries as webshell_session_summaries,
+    workspace_cwd as webshell_workspace_cwd,
+)
 
 
 def make_handler(
@@ -48,6 +58,7 @@ def make_handler(
             rotate_password=True,
         )
     login_failures: dict[str, list[float]] = {}
+    v2_prompt_ids: dict[tuple[str, str], str] = {}
 
     class RuntimeHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -78,6 +89,13 @@ def make_handler(
                 return
             if path == "/v2/capabilities":
                 self.write_json(manager.v2.capabilities())
+                return
+            if (
+                len(parts) >= 5
+                and parts[:2] == ["v2", "tasks"]
+                and parts[3] == "daemon"
+            ):
+                self.handle_v2_daemon_get(unquote(parts[2]), parts[4:])
                 return
             if path == "/v2/tasks":
                 self.write_json(
@@ -665,6 +683,15 @@ def make_handler(
                 return
             try:
                 payload = self.read_json()
+                if (
+                    len(parts) >= 5
+                    and parts[:2] == ["v2", "tasks"]
+                    and parts[3] == "daemon"
+                ):
+                    self.handle_v2_daemon_post(
+                        unquote(parts[2]), parts[4:], payload
+                    )
+                    return
                 if path == "/auth/password":
                     new_password = validate_password(payload.get("new_password"))
                     user = manager.store.get_auth_user(self.principal_id() or "")
@@ -1363,6 +1390,294 @@ def make_handler(
             except (BrokenPipeError, ConnectionResetError):
                 return
 
+        def handle_v2_daemon_get(self, task_id: str, route: list[str]) -> None:
+            if not self.authorize_v2_task(task_id):
+                return
+            try:
+                task = manager.v2.get_task(task_id)
+                events = manager.v2.webshell_events(task_id)
+                if route == ["health"]:
+                    self.write_json({"ok": True, "healthy": True})
+                    return
+                if route == ["capabilities"]:
+                    self.write_json(webshell_capabilities(task))
+                    return
+                if route == ["status"]:
+                    self.write_json(
+                        {
+                            "v": 1,
+                            "sessions": webshell_session_summaries(task),
+                        }
+                    )
+                    return
+                if len(route) == 3 and route[0] == "workspace" and route[2] == "sessions":
+                    self.write_json({"sessions": webshell_session_summaries(task)})
+                    return
+                if (
+                    len(route) == 3
+                    and route[0] == "workspace"
+                    and route[2] == "session-groups"
+                ):
+                    self.write_json(
+                        {
+                            "groups": [],
+                            "colorOptions": [
+                                "red",
+                                "orange",
+                                "yellow",
+                                "green",
+                                "blue",
+                                "purple",
+                            ],
+                        }
+                    )
+                    return
+                if len(route) == 3 and route[0] == "workspaces" and route[2] == "git":
+                    self.write_json(
+                        {
+                            "v": 2,
+                            "workspaceCwd": webshell_workspace_cwd(task),
+                            "branch": None,
+                        }
+                    )
+                    return
+                if len(route) == 2 and route[0] == "workspace":
+                    resource = route[1]
+                    empty_resources: dict[str, dict[str, Any]] = {
+                        "providers": {
+                            "v": 1,
+                            "workspaceCwd": webshell_workspace_cwd(task),
+                            "initialized": True,
+                            "acpChannelLive": True,
+                            "approvalMode": "default",
+                            "current": {},
+                            "providers": [],
+                        },
+                        "skills": {
+                            "v": 1,
+                            "workspaceCwd": webshell_workspace_cwd(task),
+                            "initialized": True,
+                            "skills": [],
+                        },
+                        "settings": {"v": 1, "settings": []},
+                        "tools": {
+                            "v": 1,
+                            "workspaceCwd": webshell_workspace_cwd(task),
+                            "initialized": True,
+                            "tools": [],
+                        },
+                        "mcp": {
+                            "v": 1,
+                            "workspaceCwd": webshell_workspace_cwd(task),
+                            "initialized": True,
+                            "discoveryState": "completed",
+                            "servers": [],
+                        },
+                        "voice": {
+                            "v": 1,
+                            "workspaceCwd": webshell_workspace_cwd(task),
+                            "available": False,
+                        },
+                        "extensions": {
+                            "v": 1,
+                            "workspaceCwd": webshell_workspace_cwd(task),
+                            "extensions": [],
+                        },
+                    }
+                    if resource in empty_resources:
+                        self.write_json(empty_resources[resource])
+                        return
+                if len(route) >= 3 and route[0] == "session":
+                    session_id = unquote(route[1])
+                    webshell_find_agent(task, session_id)
+                    action = route[2]
+                    if action == "events":
+                        self.stream_v2_daemon_events(task_id, session_id)
+                        return
+                    if action == "context":
+                        self.write_json(webshell_session_context(task, session_id))
+                        return
+                    if action == "supported-commands":
+                        self.write_json(
+                            {
+                                "v": 1,
+                                "sessionId": session_id,
+                                "availableCommands": [],
+                                "availableSkills": [],
+                            }
+                        )
+                        return
+                    if action == "pending-prompts":
+                        self.write_json({"pendingPrompts": []})
+                        return
+                    if action == "tasks":
+                        self.write_json({"v": 1, "sessionId": session_id, "tasks": []})
+                        return
+                    if action == "stats":
+                        self.write_json({"v": 1, "sessionId": session_id})
+                        return
+                    if action == "transcript":
+                        replay = webshell_session_events(task, events, session_id)
+                        self.write_json(
+                            {
+                                "v": 1,
+                                "sessionId": session_id,
+                                "events": replay,
+                                "hasMore": False,
+                            }
+                        )
+                        return
+                self.write_error(HTTPStatus.NOT_FOUND, "daemon route not found")
+            except KeyError:
+                self.write_error(HTTPStatus.NOT_FOUND, "session not found")
+
+        def handle_v2_daemon_post(
+            self, task_id: str, route: list[str], payload: dict[str, Any]
+        ) -> None:
+            if not self.authorize_v2_task(task_id, write=True):
+                return
+            try:
+                task = manager.v2.get_task(task_id)
+                events = manager.v2.webshell_events(task_id)
+                if route == ["session"]:
+                    session = webshell_session_summaries(task)[0]
+                    self.write_json(
+                        {
+                            "sessionId": session["sessionId"],
+                            "workspaceCwd": session["workspaceCwd"],
+                            "attached": True,
+                            "clientId": f"aflow-{session['sessionId']}",
+                            "createdAt": session.get("createdAt"),
+                            "hasActivePrompt": session.get("hasActivePrompt", False),
+                        },
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+                if len(route) >= 3 and route[0] == "session":
+                    session_id = unquote(route[1])
+                    webshell_find_agent(task, session_id)
+                    action = route[2]
+                    if action in {"load", "resume"}:
+                        self.write_json(
+                            webshell_restored_session(
+                                task,
+                                events,
+                                session_id,
+                                client_id=self.headers.get("x-qwen-client-id"),
+                            )
+                        )
+                        return
+                    if action == "prompt":
+                        prompt = webshell_extract_prompt(payload)
+                        event = manager.v2.append_message(
+                            task_id,
+                            prompt,
+                            principal=self.principal_id() or "api-token",
+                        )
+                        prompt_id = f"aflow-{event['event_id']}"
+                        v2_prompt_ids[(task_id, session_id)] = prompt_id
+                        if task.get("status") in {"completed", "failed", "cancelled"}:
+                            manager.v2.retry_task(
+                                task_id,
+                                principal=self.principal_id() or "api-token",
+                            )
+                        self.write_json(
+                            {
+                                "promptId": prompt_id,
+                                "lastEventId": event["sequence"],
+                            },
+                            status=HTTPStatus.ACCEPTED,
+                        )
+                        return
+                    if action == "cancel":
+                        manager.v2.cancel_task(
+                            task_id,
+                            principal=self.principal_id() or "api-token",
+                            reason=str(payload.get("reason") or "cancelled from WebShell"),
+                        )
+                        self.write_json({"cancelled": True})
+                        return
+                    if action == "permission" and len(route) == 4:
+                        self.resolve_v2_daemon_permission(task_id, unquote(route[3]), payload)
+                        return
+                    if action in {"heartbeat", "detach", "model", "approval-mode"}:
+                        self.write_json({"ok": True, "sessionId": session_id})
+                        return
+                if len(route) == 2 and route[0] == "permission":
+                    self.resolve_v2_daemon_permission(task_id, unquote(route[1]), payload)
+                    return
+                if route == ["workspace", "settings"]:
+                    self.write_json({"requiresRestart": False})
+                    return
+                self.write_error(HTTPStatus.NOT_FOUND, "daemon route not found")
+            except KeyError:
+                self.write_error(HTTPStatus.NOT_FOUND, "session not found")
+            except ValueError as exc:
+                self.write_error(HTTPStatus.BAD_REQUEST, str(exc))
+
+        def resolve_v2_daemon_permission(
+            self, task_id: str, permission_id: str, payload: dict[str, Any]
+        ) -> None:
+            outcome = payload.get("outcome")
+            option_id = payload.get("optionId")
+            if isinstance(outcome, dict):
+                option_id = outcome.get("optionId") or option_id
+            decision = "allow_once" if str(option_id).startswith("allow") else "deny"
+            permission = manager.v2.resolve_task_permission(
+                task_id,
+                permission_id,
+                {"decision": decision},
+                principal=self.principal_id() or "api-token",
+            )
+            self.write_json(permission, status=HTTPStatus.ACCEPTED)
+
+        def stream_v2_daemon_events(self, task_id: str, session_id: str) -> None:
+            last_sequence = parse_last_event_id(self.headers.get("Last-Event-ID"))
+            self.send_response(HTTPStatus.OK)
+            self.send_header("content-type", "text/event-stream; charset=utf-8")
+            self.send_header("cache-control", "no-cache")
+            self.send_header("connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            last_heartbeat = time.monotonic()
+            try:
+                while True:
+                    raw_events = manager.v2.events(task_id, after=last_sequence)
+                    task = manager.v2.get_task(task_id)
+                    projected = [
+                        v2_event_to_daemon_event(event)
+                        for event in raw_events
+                        if is_v2_webshell_event(event)
+                        and event["type"] != "user.message"
+                    ]
+                    visible = webshell_session_events(task, projected, session_id)
+                    for event in visible:
+                        terminal_event = event["type"] in {
+                            "turn_complete",
+                            "turn_error",
+                            "prompt_cancelled",
+                        }
+                        if terminal_event:
+                            prompt_id = v2_prompt_ids.get((task_id, session_id))
+                            if prompt_id:
+                                event = {
+                                    **event,
+                                    "promptId": prompt_id,
+                                    "data": {**event.get("data", {}), "promptId": prompt_id},
+                                }
+                        self.write_sse(int(event["id"]), "message", event)
+                        if terminal_event:
+                            v2_prompt_ids.pop((task_id, session_id), None)
+                    if raw_events:
+                        last_sequence = max(int(event["sequence"]) for event in raw_events)
+                    if time.monotonic() - last_heartbeat >= 10:
+                        self.wfile.write(b": heartbeat\n\n")
+                        self.wfile.flush()
+                        last_heartbeat = time.monotonic()
+                    time.sleep(0.2)
+            except (BrokenPipeError, ConnectionResetError, KeyError):
+                return
+
         def projected_session_events(self, session_id: str) -> list[dict[str, Any]]:
             run = manager.get_run(session_id)
             if run is None:
@@ -1822,6 +2137,8 @@ def required_scope_for(method: str, path: str) -> str | None:
             if len(parts) >= 4 and parts[3] in {"evaluations", "replays", "workflow"}:
                 return "events:read"
             return "tasks:read"
+        if len(parts) >= 4 and parts[3] == "daemon":
+            return "tasks:write"
         if len(parts) >= 4 and parts[3] in {"messages", "retry", "replay"}:
             return "tasks:write"
         return "tasks:create"

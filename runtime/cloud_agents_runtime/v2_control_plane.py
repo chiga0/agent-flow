@@ -1406,7 +1406,7 @@ class V2ControlPlane:
         return [
             v2_event_to_daemon_event(event)
             for event in self.events(task_id)
-            if event["type"] in {"task.created", "user.message", "agent.message", "task.completed"}
+            if is_v2_webshell_event(event)
         ]
 
     def retry_task(self, task_id: str, *, principal: str) -> dict[str, Any]:
@@ -2294,6 +2294,12 @@ class V2ControlPlane:
     ) -> dict[str, Any]:
         adapter = str(agent["adapter"])
         protocol = "internal" if adapter == "fake" else "ACP/A2A"
+        follow_up_messages = [
+            str(event["payload"].get("message") or "")
+            for event in self.events(task_id)
+            if event["type"] == "user.message"
+            and str(event["payload"].get("message") or "").strip()
+        ]
         envelope = {
             "protocol": "agentflow-v2-acp-a2a",
             "protocol_version": "2026-07",
@@ -2305,6 +2311,7 @@ class V2ControlPlane:
             "context": {
                 "depends_on": agent["depends_on"],
                 "artifact_contract": agent["artifact_contract"],
+                "follow_up_messages": follow_up_messages,
             },
         }
         if adapter == "fake":
@@ -3827,10 +3834,13 @@ def outbound_channel_payload(platform: str, text: str) -> dict[str, Any]:
 def v2_event_to_daemon_event(event: dict[str, Any]) -> dict[str, Any]:
     payload = event["payload"]
     event_type = event["type"]
-    if event_type == "user.message":
+    if event_type in {"task.created", "user.message"}:
         update = {
             "sessionUpdate": "user_message_chunk",
-            "content": {"type": "text", "text": str(payload.get("message") or "")},
+            "content": {
+                "type": "text",
+                "text": str(payload.get("message") or payload.get("goal") or ""),
+            },
         }
     elif event_type == "agent.message":
         update = {
@@ -3838,27 +3848,103 @@ def v2_event_to_daemon_event(event: dict[str, Any]) -> dict[str, Any]:
             "content": {"type": "text", "text": str(payload.get("message") or "")},
         }
     elif event_type == "task.completed":
-        update = {
-            "sessionUpdate": "agent_message_chunk",
-            "content": {"type": "text", "text": str(payload.get("summary") or "Done")},
-        }
+        return _v2_daemon_event(
+            event,
+            "turn_complete",
+            {
+                "stopReason": "end_turn",
+                "summary": str(payload.get("summary") or "Done"),
+            },
+        )
+    elif event_type in {"task.failed", "agent_task.failed"}:
+        return _v2_daemon_event(
+            event,
+            "turn_error",
+            {"message": str(payload.get("error") or payload.get("reason") or "Task failed")},
+        )
+    elif event_type == "task.cancelled":
+        return _v2_daemon_event(
+            event,
+            "prompt_cancelled",
+            {"reason": str(payload.get("reason") or "Cancelled")},
+        )
+    elif event_type == "permission.requested":
+        return _v2_daemon_event(
+            event,
+            "permission_request",
+            {
+                "requestId": payload.get("permission_id"),
+                "sessionId": payload.get("agent_task_id"),
+                "toolCall": {
+                    "name": payload.get("tool") or "Tool",
+                    "input": payload.get("context") or {},
+                },
+                "options": [
+                    {"optionId": "allow_once", "label": "Allow once"},
+                    {"optionId": "deny", "label": "Deny"},
+                ],
+            },
+        )
+    elif event_type == "permission.resolved":
+        return _v2_daemon_event(
+            event,
+            "permission_resolved",
+            {
+                "requestId": payload.get("permission_id"),
+                "decision": payload.get("decision"),
+            },
+        )
     else:
         update = {
-            "sessionUpdate": "system_message_chunk",
-            "content": {"type": "text", "text": str(payload.get("goal") or "")},
+            "sessionUpdate": "status",
+            "status": {
+                "eventType": event_type,
+                "message": _v2_status_message(event_type, payload),
+                "data": payload,
+            },
         }
+    return _v2_daemon_event(event, "session_update", {"update": update})
+
+
+def is_v2_webshell_event(event: dict[str, Any]) -> bool:
+    """Keep orchestration telemetry out of the human chat transcript."""
+    return event.get("type") in {
+        "task.created",
+        "user.message",
+        "agent.message",
+        "task.completed",
+        "task.failed",
+        "agent_task.failed",
+        "task.cancelled",
+        "permission.requested",
+        "permission.resolved",
+    }
+
+
+def _v2_daemon_event(
+    event: dict[str, Any], event_type: str, data: dict[str, Any]
+) -> dict[str, Any]:
+    payload = event["payload"]
     return {
         "id": event["sequence"],
         "v": 1,
-        "type": "session_update",
-        "data": {"update": update},
+        "type": event_type,
+        "data": data,
         "_meta": {
             "serverTimestamp": event["created_at"],
             "runtimeRunId": event["task_id"],
             "runtimeSequence": event["sequence"],
-            "runtimeEventType": event_type,
+            "runtimeEventType": event["type"],
             "source": "agentflow-v2-webshell",
             "agentTaskId": payload.get("agent_task_id"),
             "agentRole": event.get("actor"),
         },
     }
+
+
+def _v2_status_message(event_type: str, payload: dict[str, Any]) -> str:
+    for key in ("message", "summary", "reason", "goal"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return event_type.replace("_", " ").replace(".", " ")

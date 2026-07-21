@@ -25,6 +25,8 @@ import {
   Zap,
 } from "lucide-react";
 import {
+  lazy,
+  Suspense,
   useEffect,
   useRef,
   useState,
@@ -32,6 +34,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { ClientHome } from "./client-home";
 import {
   Badge,
   Button,
@@ -147,7 +150,20 @@ const taskTemplates = [
   "审计当前项目的部署链路，给出可以直接执行的修复顺序。",
 ];
 
+const AflowAgentShell = lazy(() =>
+  import("./agent-shell").then((module) => ({
+    default: module.AflowAgentShell,
+  })),
+);
+
 export function ProductClientPage() {
+  return <ClientHome />;
+}
+
+/** Kept temporarily as an exported migration reference; the client route no longer renders it. */
+/* v8 ignore start -- unreachable migration reference, retained only for downstream imports */
+/* v8 ignore next */
+export function LegacyProductClientPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [goal, setGoal] = useState("");
@@ -650,7 +666,79 @@ function mergeDaemonEvents(current: DaemonEvent[], incoming: DaemonEvent[]) {
   );
 }
 
+/* v8 ignore stop */
+
 export function ProductTaskPage() {
+  const { taskId } = useParams({ strict: false }) as { taskId: string };
+  const queryClient = useQueryClient();
+  const task = useQuery({
+    queryKey: ["v2", "tasks", taskId],
+    queryFn: () => runtimeApi.v2Task(taskId),
+    refetchInterval: 1000,
+  });
+  const artifacts = useQuery({
+    queryKey: ["v2", "tasks", taskId, "artifacts"],
+    queryFn: () => runtimeApi.v2TaskArtifacts(taskId),
+    refetchInterval: 2000,
+  });
+  const refresh = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["v2", "tasks"] }),
+      queryClient.invalidateQueries({ queryKey: ["v2", "tasks", taskId] }),
+      queryClient.invalidateQueries({
+        queryKey: ["v2", "tasks", taskId, "artifacts"],
+      }),
+    ]);
+  };
+  const retry = useMutation({
+    mutationFn: () => runtimeApi.v2RetryTask(taskId),
+    onSuccess: refresh,
+  });
+  const cancel = useMutation({
+    mutationFn: () => runtimeApi.v2CancelTask(taskId),
+    onSuccess: refresh,
+  });
+
+  if (task.isError) {
+    return (
+      <div className="grid h-[calc(100vh-3.5rem)] place-items-center p-6">
+        <EmptyState
+          title="Unable to open this conversation"
+          detail={String(task.error)}
+        />
+      </div>
+    );
+  }
+  if (!task.data) {
+    return (
+      <div className="grid h-[calc(100vh-3.5rem)] place-items-center text-sm text-muted-foreground">
+        Opening Agent chat…
+      </div>
+    );
+  }
+  return (
+    <Suspense
+      fallback={
+        <div className="grid h-[calc(100vh-3.5rem)] place-items-center text-sm text-muted-foreground">
+          Loading WebShell…
+        </div>
+      }
+    >
+      <AflowAgentShell
+        artifacts={artifacts.data?.artifacts ?? []}
+        busy={retry.isPending || cancel.isPending}
+        task={task.data}
+        onCancel={() => cancel.mutate()}
+        onRetry={() => retry.mutate()}
+      />
+    </Suspense>
+  );
+}
+
+/** Kept temporarily as an exported migration reference; the client route no longer renders it. */
+/* v8 ignore start -- unreachable migration reference, retained only for downstream imports */
+/* v8 ignore next */
+export function LegacyProductTaskPage() {
   const { taskId } = useParams({ strict: false }) as { taskId: string };
   const queryClient = useQueryClient();
   const [message, setMessage] = useState("");
@@ -1283,6 +1371,8 @@ function ReplayList({ replays }: { replays: V2Replay[] }) {
     </div>
   );
 }
+
+/* v8 ignore stop */
 
 export function ProductAdminPage() {
   const queryClient = useQueryClient();

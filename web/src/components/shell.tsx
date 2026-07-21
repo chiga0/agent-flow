@@ -96,6 +96,7 @@ export function Shell() {
   });
   const roles = session.data?.principal?.roles ?? [];
   const isAdmin = isAdminPath(pathname);
+  const isAgentChat = pathname.startsWith("/tasks/");
   const canUseAdmin = roles.some((role) =>
     ["owner", "operator", "auditor"].includes(role),
   );
@@ -166,7 +167,9 @@ export function Shell() {
           className={
             isAdmin
               ? "min-w-0 p-4 pb-36 lg:p-6 lg:pb-36"
-              : "min-w-0 px-4 py-5 pb-24 sm:px-6 lg:px-8"
+              : isAgentChat
+                ? "min-w-0 overflow-hidden"
+                : "min-w-0 px-4 py-5 pb-24 sm:px-6 lg:px-8"
           }
         >
           <Outlet />

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   artifactHref,
+  authenticatedFetch,
   auditHref,
   backupHref,
   extractPermissionRequest,
@@ -15,6 +16,25 @@ import {
 } from "./api";
 
 describe("api helpers", () => {
+  it("keeps WebShell transport requests on the authenticated console session", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await authenticatedFetch("/daemon/health", {
+      headers: { "x-client": "webshell" },
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/daemon/health",
+      expect.objectContaining({
+        credentials: "same-origin",
+        headers: { "x-client": "webshell" },
+      }),
+    );
+  });
+
   it("extracts permission requests from direct and nested event shapes", () => {
     const direct = event("permission.requested", {
       permission_id: "perm_direct",

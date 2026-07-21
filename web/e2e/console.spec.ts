@@ -14,102 +14,86 @@ test("signs in from the responsive login page", async ({ page, isMobile }) => {
   await page.getByLabel("密码").fill("secret");
   await page.getByRole("button", { name: "登录" }).click();
   await expect(
-    page.getByRole("heading", { name: "Client Workspace" }),
+    page.getByRole("heading", { name: "今天想完成什么？" }),
   ).toBeVisible();
 });
 
-test("creates a task from the client workspace", async ({ page }) => {
+test("creates a task from the client workspace", async ({ page, isMobile }) => {
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Client Workspace" }),
+    page.getByRole("heading", { name: "今天想完成什么？" }),
   ).toBeVisible();
   await page
     .getByPlaceholder(
-      "Describe the outcome you want. The platform will choose a plan, agents, runtime, and artifacts.",
+      "例如：审计这个仓库的部署链路，修复问题并给出可验证的交付产物",
     )
     .fill("整理交付审计清单");
   const createRequest = page.waitForRequest(
     (request) =>
       request.method() === "POST" && request.url().includes("/v2/tasks"),
   );
-  await page.getByRole("button", { name: "Start" }).click();
+  await page.getByRole("button", { name: "Start conversation" }).click();
   await createRequest;
 
   await expect(
-    page.getByRole("heading", { name: "Ship the control plane" }),
+    page.getByRole("button", {
+      name: isMobile ? "brain" : "brain Plan the work",
+      exact: true,
+    }),
   ).toBeVisible();
-  await expect(page.getByText("Plan DAG")).toBeVisible();
-  await expect(page.getByText("Agent Chat")).toBeVisible();
-  await expect(page.getByText("Qwen WebShell")).toBeVisible();
-  await expect(page.getByLabel("Agent switcher")).toBeVisible();
-  await expect(page.getByRole("button", { name: /All output/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /brain/ })).toBeVisible();
-  await page.getByRole("button", { name: /brain/ }).click();
-  await expect(page.getByText("brain output")).toBeVisible();
-  await expect(page.getByLabel("Real-time Agent output")).toContainText(
-    "Webshell ready",
-  );
-  await expect(page.getByText("Canonical Events")).toBeVisible();
-  const followUpRequest = page.waitForRequest(
-    (request) =>
-      request.method() === "POST" &&
-      request.url().includes("/v2/tasks/task_v2_1/messages"),
-  );
-  await page
-    .getByPlaceholder("Add context or a follow-up instruction")
-    .fill("请继续完善清单");
-  await page.getByRole("button", { name: "Send" }).click();
-  await followUpRequest;
+  await expect(
+    page.getByRole("button", {
+      name: isMobile ? "builder" : "builder Execute the work",
+      exact: true,
+    }),
+  ).toBeVisible();
+  if (!isMobile) {
+    await expect(page.getByRole("heading", { name: "实时进程" })).toBeVisible();
+  }
 });
 
-test("uses the client and admin control-plane surfaces", async ({ page }) => {
+test("uses the client and admin control-plane surfaces", async ({
+  page,
+  isMobile,
+}) => {
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Client Workspace" }),
+    page.getByRole("heading", { name: "今天想完成什么？" }),
   ).toBeVisible();
   await page
     .getByPlaceholder(
-      "Describe the outcome you want. The platform will choose a plan, agents, runtime, and artifacts.",
+      "例如：审计这个仓库的部署链路，修复问题并给出可验证的交付产物",
     )
     .fill("Ship the control plane");
-  await page.getByRole("button", { name: /Multi-agent/ }).click();
-  await page.getByRole("button", { name: /Feishu/ }).click();
-  await page.getByRole("button", { name: /qwen-code/ }).click();
+  await page.getByText("设置", { exact: true }).click();
+  await page.getByLabel("Agent 模式").selectOption("multi-agent");
+  await page.getByLabel("执行 Agent").selectOption("qwen");
   const createRequest = page.waitForRequest(
     (request) =>
       request.method() === "POST" && request.url().includes("/v2/tasks"),
   );
-  await page.getByRole("button", { name: "Start" }).click();
+  await page.getByRole("button", { name: "Start conversation" }).click();
   const request = await createRequest;
   expect(request.postDataJSON()).toMatchObject({
     adapter: "qwen",
-    channel: "feishu",
+    channel: "web",
     mode: "multi-agent",
   });
 
   await expect(
-    page.getByRole("heading", { name: "Ship the control plane" }),
+    page.getByRole("button", {
+      name: isMobile ? "brain" : "brain Plan the work",
+      exact: true,
+    }),
   ).toBeVisible();
-  await expect(page.getByText("Plan DAG")).toBeVisible();
-  await expect(page.getByText("Canonical Events")).toBeVisible();
-  await expect(page.getByText("Agent Contracts")).toBeVisible();
   await expect(
-    page.getByText("orchestrator-workers", { exact: true }),
+    page.getByRole("button", {
+      name: isMobile ? "reviewer" : "reviewer Review and package",
+      exact: true,
+    }),
   ).toBeVisible();
-  await expect(page.getByText("task.created")).toBeVisible();
-
-  const messageRequest = page.waitForRequest(
-    (request) =>
-      request.method() === "POST" &&
-      request.url().includes("/v2/tasks/task_v2_1/messages"),
-  );
-  await page
-    .getByPlaceholder("Add context or a follow-up instruction")
-    .fill("Include deployment sizing notes");
-  await page.getByRole("button", { name: "Send" }).click();
-  await messageRequest;
 
   await page
     .getByRole("link", { name: /Admin|管理后台/ })
@@ -128,7 +112,7 @@ test("hides backend navigation for a member user", async ({ page }) => {
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Client Workspace" }),
+    page.getByRole("heading", { name: "今天想完成什么？" }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: /管理后台/ })).toHaveCount(0);
   await expect(page.getByRole("link", { name: /运行/ })).toHaveCount(0);
@@ -142,7 +126,7 @@ test("manages runs, permissions, profiles, and operations", async ({
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Client Workspace" }),
+    page.getByRole("heading", { name: "今天想完成什么？" }),
   ).toBeVisible();
   await page.getByRole("link", { name: /Admin|管理后台/ }).click();
   await expect(
@@ -963,6 +947,134 @@ async function mockRuntime(
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname.replace(/^\//, "");
+    const daemonPrefix = "v2/tasks/task_v2_1/daemon/";
+    if (path.startsWith(daemonPrefix)) {
+      const daemonPath = path.slice(daemonPrefix.length);
+      const sessions = v2Task.plan.agent_tasks.map((agent) => ({
+        sessionId: agent.agent_task_id,
+        workspaceCwd: "/aflow/tasks/task_v2_1",
+        createdAt: now,
+        updatedAt: now,
+        displayName: agent.title,
+        sourceType: "aflow-agent",
+        sourceId: agent.agent_task_id,
+        clientCount: 0,
+        hasActivePrompt: false,
+      }));
+      if (request.method() === "GET" && daemonPath === "capabilities") {
+        await route.fulfill({
+          json: {
+            v: 1,
+            features: ["session_events"],
+            transports: ["rest-sse"],
+            workspaceCwd: "/aflow/tasks/task_v2_1",
+            workspaces: [
+              {
+                id: "task_v2_1",
+                cwd: "/aflow/tasks/task_v2_1",
+                displayName: "Ship the control plane",
+                primary: true,
+                trusted: true,
+              },
+            ],
+          },
+        });
+        return;
+      }
+      if (request.method() === "GET" && daemonPath.includes("/sessions")) {
+        await route.fulfill({ json: { sessions } });
+        return;
+      }
+      if (request.method() === "POST" && daemonPath.endsWith("/load")) {
+        const sessionId = daemonPath.split("/")[1];
+        const agent = v2Task.plan.agent_tasks.find(
+          (candidate) => candidate.agent_task_id === sessionId,
+        )!;
+        await route.fulfill({
+          json: {
+            sessionId,
+            workspaceCwd: "/aflow/tasks/task_v2_1",
+            attached: true,
+            clientId: `client-${sessionId}`,
+            hasActivePrompt: false,
+            state: {
+              displayName: agent.title,
+              models: {
+                currentModelId: "fake",
+                availableModels: [{ modelId: "fake", name: "fake" }],
+              },
+              modes: { currentModeId: "default" },
+            },
+            compactedReplay: [
+              {
+                id: 1,
+                v: 1,
+                type: "session_update",
+                data: {
+                  update: {
+                    sessionUpdate: "user_message_chunk",
+                    content: { type: "text", text: v2Task.goal },
+                  },
+                },
+              },
+              {
+                id: 2,
+                v: 1,
+                type: "session_update",
+                data: {
+                  update: {
+                    sessionUpdate: "agent_message_chunk",
+                    content: { type: "text", text: `${agent.role} output` },
+                  },
+                },
+              },
+              {
+                id: 3,
+                v: 1,
+                type: "turn_complete",
+                data: { stopReason: "end_turn" },
+              },
+            ],
+            liveJournal: [],
+            historyHasMore: false,
+            lastEventId: 3,
+          },
+        });
+        return;
+      }
+      if (request.method() === "GET" && daemonPath.endsWith("/events")) {
+        await route.fulfill({
+          body: ": heartbeat\n\n",
+          contentType: "text/event-stream",
+        });
+        return;
+      }
+      if (request.method() === "GET" && daemonPath.endsWith("/context")) {
+        await route.fulfill({ json: { v: 1, state: {} } });
+        return;
+      }
+      if (
+        request.method() === "GET" &&
+        daemonPath.endsWith("/supported-commands")
+      ) {
+        await route.fulfill({
+          json: { v: 1, availableCommands: [], availableSkills: [] },
+        });
+        return;
+      }
+      if (request.method() === "GET" && daemonPath.includes("/git")) {
+        await route.fulfill({ json: { v: 1, current: {} } });
+        return;
+      }
+      if (request.method() === "GET") {
+        await route.fulfill({
+          json: { v: 1, providers: [], skills: [], settings: [] },
+        });
+        return;
+      }
+      await route.fulfill({ json: { ok: true } });
+      return;
+    }
     if (request.method() === "POST" && path === "auth/login") {
       const body = request.postDataJSON() as {
         email?: string;

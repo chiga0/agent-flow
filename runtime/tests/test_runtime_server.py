@@ -13,6 +13,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from runtime.cloud_agents_runtime.auth import AuthConfig
 from runtime.cloud_agents_runtime.server import build_server, main as server_main
@@ -502,6 +503,52 @@ class RuntimeServerTest(unittest.TestCase):
                     headers=headers,
                 )
             self.assertEqual(missing.exception.code, HTTPStatus.NOT_FOUND)
+
+    def test_v2_daemon_gateway_supports_webshell_session_lifecycle(self) -> None:
+        with running_runtime(token="secret") as base_url:
+            headers = {"authorization": "Bearer secret"}
+            task = request_json(
+                f"{base_url}/v2/tasks",
+                method="POST",
+                payload={"goal": "Open native WebShell", "adapter": "fake"},
+                headers=headers,
+            )
+            daemon = f"{base_url}/v2/tasks/{task['task_id']}/daemon"
+            capabilities = request_json(f"{daemon}/capabilities", headers=headers)
+            self.assertIn("session_events", capabilities["features"])
+            self.assertEqual(capabilities["transports"], ["rest-sse"])
+
+            cwd = quote(capabilities["workspaceCwd"], safe="")
+            sessions = request_json(
+                f"{daemon}/workspace/{cwd}/sessions", headers=headers
+            )["sessions"]
+            self.assertTrue(sessions)
+            session_id = sessions[0]["sessionId"]
+            restored = request_json(
+                f"{daemon}/session/{session_id}/load",
+                method="POST",
+                payload={},
+                headers=headers,
+            )
+            self.assertEqual(restored["sessionId"], session_id)
+            self.assertEqual(restored["state"]["_meta"]["aflowTaskId"], task["task_id"])
+
+            prompt = request_json(
+                f"{daemon}/session/{session_id}/prompt",
+                method="POST",
+                payload={"prompt": [{"type": "text", "text": "Add risk summary"}]},
+                headers=headers,
+            )
+            self.assertTrue(prompt["promptId"].startswith("aflow-"))
+            events = request_json(
+                f"{base_url}/v2/tasks/{task['task_id']}/events.json",
+                headers=headers,
+            )["events"]
+            self.assertIn("Add risk summary", [
+                event["payload"].get("message")
+                for event in events
+                if event["type"] == "user.message"
+            ])
 
     def test_console_login_session_cookie_authorizes_api(self) -> None:
         with running_runtime(

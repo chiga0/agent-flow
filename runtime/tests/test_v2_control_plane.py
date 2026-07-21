@@ -685,7 +685,8 @@ class V2ControlPlaneTest(unittest.TestCase):
                 "created_at": "2026-07-15T00:00:00Z",
             }
         )
-        self.assertIn("done", projected["data"]["update"]["content"]["text"])
+        self.assertEqual(projected["type"], "turn_complete")
+        self.assertIn("done", projected["data"]["summary"])
 
     def test_admin_tenant_rbac_ha_and_unit_discovery(self):
         control = V2ControlPlane(self.tmp_path())
