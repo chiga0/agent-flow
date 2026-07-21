@@ -17,6 +17,7 @@ from urllib import request
 from urllib.error import URLError
 from uuid import uuid4
 
+from .agent_events import validate_worker_event
 from .database import RuntimeDatabase
 from .events import utc_now
 
@@ -25,6 +26,21 @@ TERMINAL_TASK_STATUSES = {"completed", "failed", "cancelled"}
 SUPPORTED_MODES = {"auto", "single", "workflow", "multi-agent"}
 SUPPORTED_CHANNELS = {"web", "mobile", "dingtalk", "feishu", "wecom"}
 SUPPORTED_ADAPTERS = {"auto", "fake", "qwen", "codex", "claude", "opencode"}
+TASK_STATUS_TRANSITIONS = {
+    "queued": {"running", "failed", "cancelled"},
+    "running": {"completed", "failed", "cancelled"},
+    # A post-run workflow/evaluation failure may invalidate a completed result.
+    "completed": {"queued", "failed"},
+    "failed": {"queued"},
+    "cancelled": {"queued"},
+}
+AGENT_STATUS_TRANSITIONS = {
+    "queued": {"running", "failed", "cancelled"},
+    "running": {"queued", "completed", "failed", "cancelled"},
+    "completed": {"queued"},
+    "failed": {"queued"},
+    "cancelled": {"queued"},
+}
 
 
 def local_execution_unit_json(name: str, default: dict[str, Any]) -> dict[str, Any]:
@@ -488,13 +504,8 @@ class V2ControlPlane:
                         {"runner": "remote-worker", "execution_unit_id": worker_id},
                     )
                 step_id = self._start_workflow_step_locked(task_id, agent, now)
-                self._db.execute(
-                    """
-                    UPDATE v2_agent_tasks
-                    SET status = 'running', started_at = COALESCE(started_at, ?), updated_at = ?
-                    WHERE agent_task_id = ?
-                    """,
-                    (now, now, agent["agent_task_id"]),
+                self._transition_agent_status_locked(
+                    agent["agent_task_id"], "running", started_at=now
                 )
                 self._append_event_locked(
                     task_id,
@@ -580,6 +591,9 @@ class V2ControlPlane:
             agent = self._agent_task_row(agent_task_id)
             if event_type == "permission.requested":
                 permission_id = str(data.get("permission_id") or f"perm_{uuid4().hex}")
+                data["permission_id"] = permission_id
+            data = validate_worker_event(event_type, data)
+            if event_type == "permission.requested":
                 now = utc_now()
                 self._db.execute(
                     """
@@ -599,13 +613,53 @@ class V2ControlPlane:
                         now,
                     ),
                 )
-                data["permission_id"] = permission_id
+            data.update(
+                {
+                    "attempt": int(lease["attempt"]),
+                    "execution_unit_id": worker_id,
+                }
+            )
+            source_event_id = str(payload.get("source_event_id") or "").strip()[:240]
+            if source_event_id:
+                duplicate = self._db.execute(
+                    """
+                    SELECT e.* FROM v2_event_dedup d
+                    JOIN v2_events e ON e.event_id = d.event_id
+                    WHERE d.task_id = ? AND d.agent_task_id = ?
+                        AND d.attempt = ? AND d.source_event_id = ?
+                    """,
+                    (
+                        lease["task_id"],
+                        agent_task_id,
+                        int(lease["attempt"]),
+                        source_event_id,
+                    ),
+                ).fetchone()
+                if duplicate is not None:
+                    return event_from_row(duplicate)
             event = self._append_event_locked(
                 lease["task_id"],
                 event_type,
                 agent["role"],
                 {"agent_task_id": agent_task_id, **data},
             )
+            if source_event_id:
+                self._db.execute(
+                    """
+                    INSERT INTO v2_event_dedup (
+                        task_id, agent_task_id, attempt, source_event_id,
+                        event_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        lease["task_id"],
+                        agent_task_id,
+                        int(lease["attempt"]),
+                        source_event_id,
+                        event["event_id"],
+                        event["created_at"],
+                    ),
+                )
             self._db.commit()
             return event
 
@@ -620,7 +674,10 @@ class V2ControlPlane:
                 worker_id,
                 agent_task_id,
                 str(payload.get("lease_token") or ""),
+                allowed_statuses={"active", "completed"},
             )
+            if lease["status"] == "completed":
+                return self.get_task(lease["task_id"])
             task_row = self._task_row(lease["task_id"])
             if task_row is not None and task_row["status"] == "cancelled":
                 raise PermissionError("task was cancelled")
@@ -668,13 +725,11 @@ class V2ControlPlane:
                 {"checks": ["non_empty_summary"], "artifact_id": artifact["artifact_id"]},
             )
             completed_at = utc_now()
-            self._db.execute(
-                """
-                UPDATE v2_agent_tasks
-                SET status = 'completed', result_json = ?, completed_at = ?, updated_at = ?
-                WHERE agent_task_id = ?
-                """,
-                (json_dumps(result), completed_at, completed_at, agent_task_id),
+            self._transition_agent_status_locked(
+                agent_task_id,
+                "completed",
+                result=result,
+                completed_at=completed_at,
             )
             self._finish_remote_step_locked(
                 lease["task_id"], agent_task_id, "completed", artifact, completed_at
@@ -713,7 +768,10 @@ class V2ControlPlane:
                 worker_id,
                 agent_task_id,
                 str(payload.get("lease_token") or ""),
+                allowed_statuses={"active", "failed", "retry", "cancelled"},
             )
+            if lease["status"] != "active":
+                return self.get_task(lease["task_id"])
             task_row = self._task_row(lease["task_id"])
             if task_row is not None and task_row["status"] == "cancelled":
                 now = utc_now()
@@ -755,10 +813,7 @@ class V2ControlPlane:
                             (json_dumps(metadata), now, lease["task_id"]),
                         )
             next_status = "queued" if retryable else "failed"
-            self._db.execute(
-                "UPDATE v2_agent_tasks SET status = ?, updated_at = ? WHERE agent_task_id = ?",
-                (next_status, now, agent_task_id),
-            )
+            self._transition_agent_status_locked(agent_task_id, next_status)
             self._db.execute(
                 "UPDATE v2_agent_leases SET status = ?, updated_at = ? WHERE agent_task_id = ?",
                 ("retry" if retryable else "failed", now, agent_task_id),
@@ -1417,14 +1472,10 @@ class V2ControlPlane:
             if row["status"] == "running":
                 raise ValueError("task is already running")
             now = utc_now()
-            self._db.execute(
-                """
-                UPDATE v2_agent_tasks
-                SET status = ?, result_json = ?, updated_at = ?
-                WHERE task_id = ?
-                """,
-                ("queued", json_dumps({}), now, task_id),
-            )
+            for agent in self._agent_tasks(task_id):
+                self._transition_agent_status_locked(
+                    agent["agent_task_id"], "queued", reset_result=True
+                )
             self._set_task_status_locked(task_id, "queued")
             current = self._workflow_run(task_id)
             attempt = 1 if current is None else int(current["attempt"]) + 1
@@ -1463,14 +1514,11 @@ class V2ControlPlane:
             now = utc_now()
             self._set_task_status_locked(task_id, "cancelled")
             self._set_workflow_status_locked(task_id, "cancelled")
-            self._db.execute(
-                """
-                UPDATE v2_agent_tasks
-                SET status = 'cancelled', completed_at = ?, updated_at = ?
-                WHERE task_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
-                """,
-                (now, now, task_id),
-            )
+            for agent in self._agent_tasks(task_id):
+                if agent["status"] not in TERMINAL_TASK_STATUSES:
+                    self._transition_agent_status_locked(
+                        agent["agent_task_id"], "cancelled", completed_at=now
+                    )
             self._append_event_locked(
                 task_id,
                 "task.cancelled",
@@ -1963,18 +2011,15 @@ class V2ControlPlane:
                 self._db.commit()
 
             for agent in self._agent_tasks(task_id):
+                if agent["status"] == "completed":
+                    continue
                 with self._lock:
                     if self._task_row(task_id)["status"] == "cancelled":
                         return
                     started_at = utc_now()
                     step_id = self._start_workflow_step_locked(task_id, agent, started_at)
-                    self._db.execute(
-                        """
-                        UPDATE v2_agent_tasks
-                        SET status = ?, started_at = ?, updated_at = ?
-                        WHERE agent_task_id = ?
-                        """,
-                        ("running", started_at, started_at, agent["agent_task_id"]),
+                    self._transition_agent_status_locked(
+                        agent["agent_task_id"], "running", started_at=started_at
                     )
                     self._append_event_locked(
                         task_id,
@@ -1990,6 +2035,8 @@ class V2ControlPlane:
                 time.sleep(0.05)
                 adapter_result = self._execute_agent_adapter(task_id, agent)
                 with self._lock:
+                    if self._task_row(task_id)["status"] == "cancelled":
+                        return
                     self._append_event_locked(
                         task_id,
                         "agent.message",
@@ -2021,19 +2068,11 @@ class V2ControlPlane:
                         {"checks": ["non_empty_summary"], "artifact_id": artifact["artifact_id"]},
                     )
                     completed_at = utc_now()
-                    self._db.execute(
-                        """
-                        UPDATE v2_agent_tasks
-                        SET status = ?, result_json = ?, completed_at = ?, updated_at = ?
-                        WHERE agent_task_id = ?
-                        """,
-                        (
-                            "completed",
-                            json_dumps(result),
-                            completed_at,
-                            completed_at,
-                            agent["agent_task_id"],
-                        ),
+                    self._transition_agent_status_locked(
+                        agent["agent_task_id"],
+                        "completed",
+                        result=result,
+                        completed_at=completed_at,
                     )
                     self._append_event_locked(
                         task_id,
@@ -2076,7 +2115,8 @@ class V2ControlPlane:
                 self._db.commit()
         except Exception as exc:  # pragma: no cover - defensive safety net
             with self._lock:
-                if self._task_row(task_id) is not None:
+                task_row = self._task_row(task_id)
+                if task_row is not None and task_row["status"] != "cancelled":
                     failure = failure_summary(exc)
                     self._set_task_status_locked(task_id, "failed")
                     self._set_workflow_status_locked(task_id, "failed")
@@ -2598,21 +2638,25 @@ class V2ControlPlane:
         worker_id: str,
         agent_task_id: str,
         token: str,
+        *,
+        allowed_statuses: set[str] | None = None,
     ) -> Any:
         row = self._db.execute(
             """
             SELECT * FROM v2_agent_leases
-            WHERE agent_task_id = ? AND worker_id = ? AND status = 'active'
+            WHERE agent_task_id = ? AND worker_id = ?
             """,
             (agent_task_id, worker_id),
         ).fetchone()
+        statuses = allowed_statuses or {"active"}
         if (
             row is None
+            or row["status"] not in statuses
             or not token
             or not secrets.compare_digest(row["lease_hash"], secret_hash(token))
         ):
             raise PermissionError("invalid or expired agent lease")
-        if row["expires_at"] <= utc_now():
+        if row["status"] == "active" and row["expires_at"] <= utc_now():
             raise PermissionError("agent lease expired")
         return row
 
@@ -2633,12 +2677,8 @@ class V2ControlPlane:
         for lease in rows:
             expired_at = utc_now()
             next_status = "queued" if int(lease["attempt"]) < 2 else "failed"
-            self._db.execute(
-                """
-                UPDATE v2_agent_tasks SET status = ?, updated_at = ?
-                WHERE agent_task_id = ?
-                """,
-                (next_status, utc_now(), lease["agent_task_id"]),
+            self._transition_agent_status_locked(
+                lease["agent_task_id"], next_status
             )
             self._db.execute(
                 """
@@ -2916,9 +2956,65 @@ class V2ControlPlane:
         return int(row["next_sequence"])
 
     def _set_task_status_locked(self, task_id: str, status: str) -> None:
+        row = self._task_row(task_id)
+        if row is None:
+            raise KeyError(task_id)
+        current = str(row["status"])
+        if status == current:
+            return
+        if status not in TASK_STATUS_TRANSITIONS.get(current, set()):
+            raise ValueError(f"invalid task status transition: {current} -> {status}")
         self._db.execute(
             "UPDATE v2_tasks SET status = ?, updated_at = ? WHERE task_id = ?",
             (status, utc_now(), task_id),
+        )
+
+    def _transition_agent_status_locked(
+        self,
+        agent_task_id: str,
+        status: str,
+        *,
+        result: dict[str, Any] | None = None,
+        started_at: str | None = None,
+        completed_at: str | None = None,
+        reset_result: bool = False,
+    ) -> None:
+        row = self._db.execute(
+            "SELECT status FROM v2_agent_tasks WHERE agent_task_id = ?",
+            (agent_task_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(agent_task_id)
+        current = str(row["status"])
+        if status != current and status not in AGENT_STATUS_TRANSITIONS.get(current, set()):
+            raise ValueError(f"invalid agent status transition: {current} -> {status}")
+        now = utc_now()
+        if reset_result:
+            self._db.execute(
+                """
+                UPDATE v2_agent_tasks
+                SET status = ?, result_json = '{}', completed_at = NULL, updated_at = ?
+                WHERE agent_task_id = ?
+                """,
+                (status, now, agent_task_id),
+            )
+            return
+        self._db.execute(
+            """
+            UPDATE v2_agent_tasks
+            SET status = ?, result_json = COALESCE(?, result_json),
+                started_at = COALESCE(started_at, ?),
+                completed_at = COALESCE(?, completed_at), updated_at = ?
+            WHERE agent_task_id = ?
+            """,
+            (
+                status,
+                json_dumps(result) if result is not None else None,
+                started_at,
+                completed_at,
+                now,
+                agent_task_id,
+            ),
         )
 
     def _touch_task_locked(self, task_id: str, updated_at: str | None = None) -> None:
@@ -3221,6 +3317,19 @@ class V2ControlPlane:
                     created_at TEXT NOT NULL,
                     UNIQUE(task_id, sequence),
                     FOREIGN KEY(task_id) REFERENCES v2_tasks(task_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS v2_event_dedup (
+                    task_id TEXT NOT NULL,
+                    agent_task_id TEXT NOT NULL,
+                    attempt INTEGER NOT NULL,
+                    source_event_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(task_id, agent_task_id, attempt, source_event_id),
+                    FOREIGN KEY(task_id) REFERENCES v2_tasks(task_id),
+                    FOREIGN KEY(agent_task_id) REFERENCES v2_agent_tasks(agent_task_id),
+                    FOREIGN KEY(event_id) REFERENCES v2_events(event_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS v2_execution_units (
@@ -3834,6 +3943,17 @@ def outbound_channel_payload(platform: str, text: str) -> dict[str, Any]:
 def v2_event_to_daemon_event(event: dict[str, Any]) -> dict[str, Any]:
     payload = event["payload"]
     event_type = event["type"]
+    if event_type == "adapter.daemon_event":
+        native = payload.get("event")
+        if isinstance(native, dict):
+            projected = dict(native)
+            projected["id"] = event["sequence"]
+            projected["v"] = int(projected.get("v") or 1)
+            projected["_meta"] = {
+                **dict(projected.get("_meta") or {}),
+                **_v2_daemon_meta(event),
+            }
+            return projected
     if event_type in {"task.created", "user.message"}:
         update = {
             "sessionUpdate": "user_message_chunk",
@@ -3846,6 +3966,60 @@ def v2_event_to_daemon_event(event: dict[str, Any]) -> dict[str, Any]:
         update = {
             "sessionUpdate": "agent_message_chunk",
             "content": {"type": "text", "text": str(payload.get("message") or "")},
+        }
+    elif event_type == "agent.thought":
+        update = {
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {"type": "text", "text": str(payload.get("message") or "")},
+        }
+    elif event_type.startswith("tool."):
+        status = {
+            "tool.started": "in_progress",
+            "tool.updated": "in_progress",
+            "tool.completed": "completed",
+            "tool.failed": "failed",
+        }[event_type]
+        update: dict[str, Any] = {
+            "sessionUpdate": (
+                "tool_call" if event_type == "tool.started" else "tool_call_update"
+            ),
+            "toolCallId": str(payload.get("tool_call_id") or "unknown"),
+            "status": status,
+        }
+        name = str(payload.get("name") or "tool")
+        if event_type == "tool.started" or name != "tool":
+            update.update(
+                {
+                    "title": str(payload.get("title") or name),
+                    "kind": payload.get("kind") or "tool",
+                    "toolName": name,
+                }
+            )
+        if payload.get("input") is not None:
+            update["rawInput"] = payload["input"]
+        if payload.get("output") is not None:
+            update["rawOutput"] = payload["output"]
+        if payload.get("kind") in {"mcp", "subagent"}:
+            update["provenance"] = payload["kind"]
+        if payload.get("parent_tool_call_id"):
+            update["parentToolCallId"] = payload["parent_tool_call_id"]
+        if payload.get("subagent_type"):
+            update["subagentType"] = payload["subagent_type"]
+    elif event_type == "shell.output":
+        return _v2_daemon_event(
+            event,
+            "shell_output",
+            {
+                "output": str(payload.get("output") or ""),
+                "stream": payload.get("stream") or "stdout",
+                "source": payload.get("source") or "agent",
+            },
+        )
+    elif event_type == "agent.status":
+        update = {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": ""},
+            "_meta": {"status": payload.get("status"), "usage": payload.get("usage")},
         }
     elif event_type == "task.completed":
         return _v2_daemon_event(
@@ -3912,6 +4086,14 @@ def is_v2_webshell_event(event: dict[str, Any]) -> bool:
         "task.created",
         "user.message",
         "agent.message",
+        "agent.thought",
+        "agent.status",
+        "tool.started",
+        "tool.updated",
+        "tool.completed",
+        "tool.failed",
+        "shell.output",
+        "adapter.daemon_event",
         "task.completed",
         "task.failed",
         "agent_task.failed",
@@ -3930,15 +4112,23 @@ def _v2_daemon_event(
         "v": 1,
         "type": event_type,
         "data": data,
-        "_meta": {
-            "serverTimestamp": event["created_at"],
-            "runtimeRunId": event["task_id"],
-            "runtimeSequence": event["sequence"],
-            "runtimeEventType": event["type"],
-            "source": "agentflow-v2-webshell",
-            "agentTaskId": payload.get("agent_task_id"),
-            "agentRole": event.get("actor"),
-        },
+        "_meta": _v2_daemon_meta(event),
+    }
+
+
+def _v2_daemon_meta(event: dict[str, Any]) -> dict[str, Any]:
+    payload = event["payload"]
+    return {
+        "serverTimestamp": event["created_at"],
+        "runtimeRunId": event["task_id"],
+        "runtimeSequence": event["sequence"],
+        "runtimeEventType": event["type"],
+        "source": "agentflow-v2-webshell",
+        "agentTaskId": payload.get("agent_task_id"),
+        "agentRole": event.get("actor"),
+        "adapter": payload.get("adapter"),
+        "attempt": payload.get("attempt"),
+        "executionUnitId": payload.get("execution_unit_id"),
     }
 
 

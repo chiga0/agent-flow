@@ -23,6 +23,12 @@ class ValidateV2RepositoryCaseTest(unittest.TestCase):
             command.write_text(
                 "#!/bin/sh\n"
                 "cat >/dev/null\n"
+                "attempt_file=\"${0}.attempted\"\n"
+                "if [ ! -f \"$attempt_file\" ]; then\n"
+                "  : > \"$attempt_file\"\n"
+                "  echo 'transient adapter failure'\n"
+                "  exit 1\n"
+                "fi\n"
                 "cat > slugify.py <<'PY'\n"
                 "import re\n"
                 "import unicodedata\n\n"

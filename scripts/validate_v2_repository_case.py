@@ -11,6 +11,10 @@ import sys
 import time
 from uuid import uuid4
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from runtime.cloud_agents_runtime.worker import ControlPlaneClient
 from runtime.cloud_agents_runtime.worker import RemoteWorkerConfig
 from runtime.cloud_agents_runtime.worker import RemoteWorkerDaemon
@@ -28,7 +32,7 @@ GOAL = (
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="validate a real Qwen-backed V2 repository delivery"
+        description="validate a real Agent-backed V2 repository delivery"
     )
     parser.add_argument("--base-url", default="http://127.0.0.1:8765")
     parser.add_argument("--token", default=os.environ.get("RUN_MANAGER_TOKEN"))
@@ -37,6 +41,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--worker-id", default=f"repository-acceptance-{uuid4().hex[:12]}"
     )
     parser.add_argument("--timeout", type=int, default=900)
+    parser.add_argument(
+        "--adapter",
+        choices=["qwen", "codex", "claude", "opencode"],
+        default="qwen",
+    )
     args = parser.parse_args(argv)
     if not args.token:
         parser.error("--token or RUN_MANAGER_TOKEN is required")
@@ -246,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
             "lease_ttl_seconds": 60,
             "labels": {"acceptance": "real-repository-v1"},
             "resources": {},
-            "adapters": ["qwen"],
+            "adapters": [args.adapter],
             "features": ["artifacts", "events", "v2-agent-tasks"],
         },
     )
@@ -256,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
         payload={
             "goal": GOAL,
             "mode": "single",
-            "adapter": "qwen",
+            "adapter": args.adapter,
             "channel": "web",
             "metadata": {"acceptance": "real-repository-v1"},
             "workspace": {
@@ -272,16 +281,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"repository case source: {repo}", flush=True)
     print(f"repository case task: {task['task_id']}", flush=True)
 
-    if not worker.run_once(wait=True):
-        raise RuntimeError("repository acceptance worker did not claim the bound task")
-
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + args.timeout + 30
     completed = task
     while time.monotonic() < deadline:
+        claimed = worker.run_once(wait=True)
         completed = client.request_json(f"/v2/tasks/{task['task_id']}")
         if completed.get("status") in {"completed", "failed", "cancelled"}:
             break
-        time.sleep(1)
+        if not claimed:
+            time.sleep(1)
     evidence = validate_delivery(
         client=client,
         task=completed,

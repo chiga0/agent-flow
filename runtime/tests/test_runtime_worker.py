@@ -5,8 +5,10 @@ import threading
 import time
 import unittest
 import urllib.parse
+import json
 import os
 import subprocess
+import sys
 from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
@@ -95,6 +97,43 @@ class RemoteWorkerDaemonTest(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "safe path segment"):
             worker._agent_workspace(context.assignment)
+
+    def test_v2_permission_is_confirmed_only_after_event_delivery(self) -> None:
+        stop = threading.Event()
+        context = ActiveAgentContext(
+            assignment={
+                "agent_task_id": "agent-1",
+                "lease_token": "lease",
+                "adapter": "qwen",
+            }
+        )
+        client = SimpleNamespace(
+            v2_heartbeat=Mock(),
+            v2_agent_event=Mock(side_effect=RuntimeError("network unavailable")),
+        )
+
+        def control(_worker_id: str) -> dict[str, object]:
+            stop.set()
+            return {
+                "actions": [],
+                "permissions": [
+                    {
+                        "agent_task_id": "agent-1",
+                        "permission_id": "permission-1",
+                        "decision": {"allow": True},
+                    }
+                ],
+            }
+
+        client.v2_control = control
+        worker = RemoteWorkerDaemon(
+            RemoteWorkerConfig(control_url="http://example.invalid", worker_id="worker"),
+            client=client,
+        )
+        worker._v2_heartbeat_loop(stop, context)
+
+        self.assertEqual(context.applied_permissions, set())
+        client.v2_agent_event.assert_called_once()
 
     def test_v2_helpers_cover_simulation_and_invalid_finish_action(self) -> None:
         client = ControlPlaneClient("http://example.invalid")
@@ -189,6 +228,91 @@ class RemoteWorkerDaemonTest(unittest.TestCase):
             ), self.assertRaisesRegex(TimeoutError, "timed out"):
                 worker._run_v2_cli(context, {"goal": "timeout"}, root)
             self.assertIsNone(context.process)
+
+    def test_v2_stream_reassembles_fragmented_jsonl_before_translation(self) -> None:
+        client = SimpleNamespace(v2_agent_event=Mock())
+        worker = RemoteWorkerDaemon(
+            RemoteWorkerConfig(control_url="http://example.invalid", worker_id="worker"),
+            client=client,
+        )
+        context = ActiveAgentContext(
+            assignment={
+                "task_id": "task",
+                "agent_task_id": "agent",
+                "lease_token": "lease",
+                "adapter": "codex",
+            }
+        )
+        script = (
+            "import sys,time;"
+            "sys.stdout.write('{\"type\":\"item.completed\",\"item\":');"
+            "sys.stdout.flush();time.sleep(.05);"
+            "sys.stdout.write('{\"type\":\"agent_message\",\"text\":\"hello\"}}\\n');"
+            "sys.stdout.flush()"
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        summary, exit_code, truncated = worker._stream_agent_process(
+            context,
+            process,
+            timeout_seconds=2,
+            message_prefix="",
+            execution_mode="real-cli",
+        )
+        self.assertEqual((summary, exit_code, truncated), ("hello", 0, False))
+        client.v2_agent_event.assert_called_once()
+        sent = client.v2_agent_event.call_args.args[2]
+        self.assertEqual(sent["type"], "agent.message")
+        self.assertEqual(sent["payload"]["message"], "hello")
+
+    def test_v2_qwen_partial_messages_form_summary_without_final_duplicate(self) -> None:
+        client = SimpleNamespace(v2_agent_event=Mock())
+        worker = RemoteWorkerDaemon(
+            RemoteWorkerConfig(control_url="http://example.invalid", worker_id="worker"),
+            client=client,
+        )
+        context = ActiveAgentContext(
+            assignment={
+                "task_id": "task",
+                "agent_task_id": "agent",
+                "lease_token": "lease",
+                "adapter": "qwen",
+            }
+        )
+        records = [
+            {
+                "type": "stream_event",
+                "event": {"delta": {"type": "text_delta", "text": "hello"}},
+            },
+            {
+                "type": "stream_event",
+                "event": {"delta": {"type": "text_delta", "text": " world"}},
+            },
+            {"type": "assistant", "message": {"content": "hello world"}},
+        ]
+        script = "import sys;sys.stdout.write(" + repr(
+            "\n".join(json.dumps(record) for record in records) + "\n"
+        ) + ")"
+        process = subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        summary, exit_code, truncated = worker._stream_agent_process(
+            context,
+            process,
+            timeout_seconds=2,
+            message_prefix="",
+            execution_mode="real-cli",
+        )
+
+        self.assertEqual((summary, exit_code, truncated), ("hello world", 0, False))
+        self.assertEqual(client.v2_agent_event.call_count, 2)
 
     def test_control_plane_client_builds_optional_artifact_payloads(self) -> None:
         client = ControlPlaneClient("http://example.invalid", token="secret")

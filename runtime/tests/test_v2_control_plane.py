@@ -86,6 +86,69 @@ class V2ControlPlaneTest(unittest.TestCase):
         self.assertEqual(claim["task_id"], task["task_id"])
         self.assertEqual(claim["worker_id"], "healthy-worker")
 
+    def test_remote_events_are_validated_idempotent_and_attempt_scoped(self):
+        control = V2ControlPlane(self.tmp_path())
+        control._db.execute("DELETE FROM v2_execution_units")
+        control._db.commit()
+        control.heartbeat_execution_worker("worker-a", {"adapters": ["codex"]})
+        task = control.create_task(
+            {"goal": "Stream structured output", "adapter": "codex"},
+            principal="owner@example.com",
+        )
+        claim = control.claim_remote_agent_task(
+            "worker-a", {"adapters": ["codex"]}
+        )["assignment"]
+        assert claim is not None
+        payload = {
+            "lease_token": claim["lease_token"],
+            "type": "agent.thought",
+            "source_event_id": "native-event-1",
+            "payload": {"message": "safe reasoning summary", "adapter": "codex"},
+        }
+        first = control.append_remote_agent_event(
+            "worker-a", claim["agent_task_id"], payload
+        )
+        duplicate = control.append_remote_agent_event(
+            "worker-a", claim["agent_task_id"], payload
+        )
+        self.assertEqual(first["event_id"], duplicate["event_id"])
+        stored = [
+            event
+            for event in control.events(task["task_id"])
+            if event["type"] == "agent.thought"
+        ]
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0]["payload"]["attempt"], 1)
+        with self.assertRaisesRegex(ValueError, "unsupported worker event"):
+            control.append_remote_agent_event(
+                "worker-a",
+                claim["agent_task_id"],
+                {
+                    "lease_token": claim["lease_token"],
+                    "type": "task.completed",
+                    "payload": {"summary": "forged terminal state"},
+                },
+            )
+        finish = {
+            "lease_token": claim["lease_token"],
+            "summary": "completed once",
+            "execution_mode": "real-cli",
+        }
+        completed = control.complete_remote_agent_task(
+            "worker-a", claim["agent_task_id"], finish
+        )
+        repeated = control.complete_remote_agent_task(
+            "worker-a", claim["agent_task_id"], finish
+        )
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(repeated["status"], "completed")
+        terminal_events = [
+            event
+            for event in control.events(task["task_id"])
+            if event["type"] == "agent_task.completed"
+        ]
+        self.assertEqual(len(terminal_events), 1)
+
     def test_remote_agent_lease_permission_cancel_and_retry(self):
         control = V2ControlPlane(self.tmp_path())
         control._db.execute("DELETE FROM v2_execution_units")

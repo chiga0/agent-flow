@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .adapters import FakeAdapter, QwenServeAdapter, RuntimeAdapter
+from .agent_events import translate_adapter_record
 from .models import RunSpec, RunState
 
 
@@ -528,10 +529,13 @@ class RemoteWorkerDaemon:
             "opencode": "V2_OPENCODE_COMMAND",
         }.get(adapter)
         defaults = {
-            "qwen": "qwen",
-            "codex": "codex exec --skip-git-repo-check -",
+            "qwen": (
+                "qwen --approval-mode auto --output-format stream-json "
+                "--include-partial-messages"
+            ),
+            "codex": "codex exec --json --skip-git-repo-check -",
             "claude": "claude -p",
-            "opencode": "opencode run",
+            "opencode": "opencode run --format json",
         }
         command = shlex.split(os.environ.get(command_env or "", defaults.get(adapter, "")))
         executable = shutil.which(command[0]) if command else None
@@ -592,13 +596,15 @@ class RemoteWorkerDaemon:
         def read_output() -> None:
             try:
                 decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+                buffered = ""
                 while raw_chunk := os.read(process.stdout.fileno(), 4096):
-                    chunk = decoder.decode(raw_chunk)
-                    if chunk:
-                        lines.put(chunk)
-                final_chunk = decoder.decode(b"", final=True)
-                if final_chunk:
-                    lines.put(final_chunk)
+                    buffered += decoder.decode(raw_chunk)
+                    while "\n" in buffered:
+                        line, buffered = buffered.split("\n", 1)
+                        lines.put(line.rstrip("\r"))
+                buffered += decoder.decode(b"", final=True)
+                if buffered:
+                    lines.put(buffered)
             finally:
                 lines.put(None)
 
@@ -607,9 +613,12 @@ class RemoteWorkerDaemon:
         deadline = time.monotonic() + timeout_seconds
         max_bytes = max(4096, int(os.environ.get("V2_MAX_COMMAND_OUTPUT_BYTES") or 262144))
         tail: deque[tuple[str, int]] = deque()
+        semantic_tail: deque[tuple[str, int, bool]] = deque()
         tail_bytes = 0
+        semantic_bytes = 0
         truncated = False
         event_lines = 0
+        qwen_partial_types: set[str] = set()
         max_event_lines = max(
             1, int(os.environ.get("V2_MAX_COMMAND_EVENT_LINES") or 5000)
         )
@@ -631,7 +640,7 @@ class RemoteWorkerDaemon:
                     continue
                 if line is None:
                     break
-                for output_line in line.splitlines() or [line]:
+                for output_line in [line]:
                     if not output_line:
                         continue
                     output_line = self._redact_worker_output(output_line)
@@ -648,24 +657,74 @@ class RemoteWorkerDaemon:
                         truncated = True
                         continue
                     event_lines += 1
-                    message = f"{message_prefix}{output_line[:760]}"
-                    if event_lines == max_event_lines:
-                        message += " [event stream limit reached]"
-                    self.client.v2_agent_event(
-                        self.config.worker_id,
-                        str(context.assignment["agent_task_id"]),
-                        {
-                            "lease_token": context.assignment["lease_token"],
-                            "type": "agent.message",
-                            "payload": {
-                                "message": message,
-                                "protocol": "ACP/A2A",
-                                "execution_mode": execution_mode,
-                                "partial": True,
+                    if message_prefix:
+                        canonical_events = [
+                            {
+                                "type": "shell.output",
+                                "payload": {
+                                    "output": f"{message_prefix}{output_line[:760]}",
+                                    "stream": "stdout",
+                                    "execution_mode": execution_mode,
+                                },
+                                "source_event_id": f"shell:{event_lines}",
+                            }
+                        ]
+                    else:
+                        canonical_events = translate_adapter_record(
+                            str(context.assignment.get("adapter") or ""), output_line
+                        )
+                    for canonical_index, canonical in enumerate(canonical_events):
+                        payload = dict(canonical["payload"])
+                        if (
+                            context.assignment.get("adapter") == "qwen"
+                            and canonical["type"] in qwen_partial_types
+                            and not payload.get("partial")
+                        ):
+                            continue
+                        if payload.get("partial"):
+                            qwen_partial_types.add(str(canonical["type"]))
+                        payload.update(
+                            {"protocol": "ACP/A2A", "execution_mode": execution_mode}
+                        )
+                        if event_lines == max_event_lines:
+                            payload["stream_limit_reached"] = True
+                        if canonical["type"] == "agent.message":
+                            semantic = str(payload.get("message") or "")
+                            semantic_size = len(semantic.encode("utf-8", errors="replace"))
+                            semantic_tail.append(
+                                (semantic, semantic_size, bool(payload.get("partial")))
+                            )
+                            semantic_bytes += semantic_size
+                            while semantic_tail and semantic_bytes > max_bytes:
+                                _text, removed_size, _partial = semantic_tail.popleft()
+                                semantic_bytes -= removed_size
+                        self.client.v2_agent_event(
+                            self.config.worker_id,
+                            str(context.assignment["agent_task_id"]),
+                            {
+                                "lease_token": context.assignment["lease_token"],
+                                "type": canonical["type"],
+                                "payload": payload,
+                                "source_event_id": (
+                                    f"{canonical['source_event_id']}:{event_lines}:"
+                                    f"{canonical_index}"
+                                ),
                             },
-                        },
-                    )
-            return "\n".join(line for line, _size in tail), process.wait(), truncated
+                        )
+            if semantic_tail and not message_prefix:
+                summary = ""
+                for text, _size, partial in semantic_tail:
+                    if partial:
+                        summary += text
+                    else:
+                        summary += ("\n" if summary else "") + text
+            else:
+                summary = "\n".join(line for line, _size in tail)
+            return (
+                summary,
+                process.wait(),
+                truncated,
+            )
         finally:
             if process.poll() is None:
                 self._terminate_agent_process(process)
@@ -717,7 +776,6 @@ class RemoteWorkerDaemon:
                     permission_id = str(permission.get("permission_id") or "")
                     if not permission_id or permission_id in context.applied_permissions:
                         continue
-                    context.applied_permissions.add(permission_id)
                     self.client.v2_agent_event(
                         self.config.worker_id,
                         str(context.assignment["agent_task_id"]),
@@ -730,6 +788,7 @@ class RemoteWorkerDaemon:
                             },
                         },
                     )
+                    context.applied_permissions.add(permission_id)
             except Exception:
                 pass
             stop.wait(self.config.heartbeat_interval_seconds)
