@@ -251,6 +251,7 @@ jobs:
           export RUN_MANAGER_ARTIFACT_RETENTION_SECONDS="$ARTIFACT_RETENTION_SECONDS"
           export RUN_MANAGER_CLEANUP_INTERVAL_SECONDS="$CLEANUP_INTERVAL_SECONDS"
           export DEPLOY_RUNTIME_PRINT_SECRETS=0
+          export DEPLOY_LOG_FILE="$RUNNER_TEMP/runtime-deploy/runtime-deploy.log"
           export QWEN_EXECUTOR_STRATEGY="${VAR_QWEN_EXECUTOR_STRATEGY:-}"
           export QWEN_CONTAINER_IMAGE="${VAR_QWEN_CONTAINER_IMAGE:-}"
           export QWEN_CONTAINER_CPUS="${VAR_QWEN_CONTAINER_CPUS:-}"
@@ -296,6 +297,15 @@ jobs:
             sleep $((deploy_attempt * 15))
             deploy_attempt=$((deploy_attempt + 1))
           done
+
+      - name: Upload runtime deploy log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-deploy-log
+          path: ${{ runner.temp }}/runtime-deploy/runtime-deploy.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Smoke test deployed runtime
         env:

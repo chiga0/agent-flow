@@ -17,6 +17,11 @@ export function ClientHome() {
     queryFn: runtimeApi.v2Tasks,
     refetchInterval: 3000,
   });
+  const capabilities = useQuery({
+    queryKey: ["v2", "capabilities"],
+    queryFn: runtimeApi.v2Capabilities,
+    staleTime: 30_000,
+  });
   const createTask = useMutation({
     mutationFn: runtimeApi.v2CreateTask,
     onSuccess: async (task) => {
@@ -38,6 +43,17 @@ export function ClientHome() {
       metadata: { product_surface: "webshell" },
     });
   };
+  const agentOptions = capabilities.data?.adapters.filter(
+    (item) => item.adapter !== "fake",
+  );
+  const selectedCapability = agentOptions?.find(
+    (item) => item.adapter === adapter,
+  );
+  const selectedUnavailable = Boolean(
+    agentOptions &&
+    adapter !== "auto" &&
+    selectedCapability?.status !== "available",
+  );
 
   return (
     <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-4xl flex-col justify-center gap-10 py-8">
@@ -93,16 +109,54 @@ export function ClientHome() {
                   onChange={(event) => setAdapter(event.target.value)}
                 >
                   <option value="auto">自动选择</option>
-                  <option value="qwen">qwen-code</option>
-                  <option value="codex">codex</option>
-                  <option value="opencode">opencode</option>
+                  {(
+                    agentOptions ?? [
+                      {
+                        adapter: "qwen",
+                        label: "qwen-code",
+                        status: "available",
+                      },
+                      {
+                        adapter: "codex",
+                        label: "codex cli",
+                        status: "available",
+                      },
+                      {
+                        adapter: "opencode",
+                        label: "opencode",
+                        status: "available",
+                      },
+                    ]
+                  ).map((item) => (
+                    <option
+                      key={item.adapter}
+                      disabled={item.status !== "available"}
+                      value={item.adapter}
+                    >
+                      {item.label}
+                      {item.status === "available" ? " · 可用" : " · 未注册"}
+                    </option>
+                  ))}
                 </Select>
+                {capabilities.isError ? (
+                  <span className="text-amber-600">
+                    无法检测 Agent 状态，将由服务端校验。
+                  </span>
+                ) : selectedCapability ? (
+                  <span>
+                    {selectedCapability.status === "available"
+                      ? `已就绪 · ${selectedCapability.execution}`
+                      : "没有可用的执行单元"}
+                  </span>
+                ) : null}
               </label>
             </div>
           </details>
           <Button
             aria-label="Start conversation"
-            disabled={!goal.trim() || createTask.isPending}
+            disabled={
+              !goal.trim() || createTask.isPending || selectedUnavailable
+            }
             size="icon"
             type="submit"
           >
@@ -110,6 +164,34 @@ export function ClientHome() {
           </Button>
         </div>
       </form>
+
+      {createTask.isError ? (
+        <div
+          className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+          role="alert"
+        >
+          <div className="font-medium">无法启动 Agent 对话</div>
+          <div className="mt-1 text-xs">{String(createTask.error)}</div>
+          <Button
+            className="mt-3"
+            disabled={!goal.trim() || selectedUnavailable}
+            size="sm"
+            type="button"
+            variant="secondary"
+            onClick={() =>
+              createTask.mutate({
+                goal: goal.trim(),
+                mode,
+                adapter,
+                channel: "web",
+                metadata: { product_surface: "webshell" },
+              })
+            }
+          >
+            重试
+          </Button>
+        </div>
+      ) : null}
 
       {(tasks.data?.tasks.length ?? 0) > 0 ? (
         <div className="grid gap-3">

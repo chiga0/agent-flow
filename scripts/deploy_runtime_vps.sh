@@ -86,6 +86,10 @@ DEPLOY_COMMAND_TIMEOUT_SECONDS="${DEPLOY_COMMAND_TIMEOUT_SECONDS:-900}"
 DEPLOY_NPM_INSTALL_TIMEOUT_SECONDS="${DEPLOY_NPM_INSTALL_TIMEOUT_SECONDS:-300}"
 DEPLOY_DOCKER_BUILD_TIMEOUT_SECONDS="${DEPLOY_DOCKER_BUILD_TIMEOUT_SECONDS:-1800}"
 DEPLOY_RUNTIME_PRINT_SECRETS="${DEPLOY_RUNTIME_PRINT_SECRETS:-1}"
+DEPLOY_REMOTE_MODE="${DEPLOY_REMOTE_MODE:-background}"
+DEPLOY_REMOTE_POLL_ATTEMPTS="${DEPLOY_REMOTE_POLL_ATTEMPTS:-180}"
+DEPLOY_REMOTE_POLL_INTERVAL_SECONDS="${DEPLOY_REMOTE_POLL_INTERVAL_SECONDS:-10}"
+DEPLOY_LOG_FILE="${DEPLOY_LOG_FILE:-}"
 
 case "$PUBLIC_HOST" in
   *[!A-Za-z0-9._-]*)
@@ -233,6 +237,125 @@ append_remote_env \
   "$DEPLOY_NPM_INSTALL_TIMEOUT_SECONDS"
 append_remote_env DEPLOY_DOCKER_BUILD_TIMEOUT_SECONDS "$DEPLOY_DOCKER_BUILD_TIMEOUT_SECONDS"
 
+run_background_deploy() {
+  local deploy_id="${GITHUB_SHA:-manual}"
+  local local_script
+  local remote_prefix
+  local remote_script
+  local remote_upload
+  local remote_status
+  local remote_pid
+  local remote_log
+  local poll_command
+  local -a detached_env
+  local attempt=1
+  local status=""
+  deploy_id="$(printf '%s' "$deploy_id" | tr -cd 'A-Za-z0-9._-' | cut -c1-48)"
+  [[ -n "$deploy_id" ]] || deploy_id="manual"
+  local_script="$(mktemp)"
+  trap 'rm -f "$local_script"' RETURN
+  awk '
+    /^# BEGIN REMOTE DEPLOY PAYLOAD$/ { marker = 1; next }
+    marker && !payload && /^ssh_cmd / { payload = 1; next }
+    payload && /^REMOTE$/ { exit }
+    payload { print }
+  ' "$0" > "$local_script"
+  if [[ ! -s "$local_script" ]]; then
+    echo "could not extract remote deployment payload" >&2
+    return 2
+  fi
+
+  remote_prefix="/tmp/agentflow-runtime-deploy-$deploy_id"
+  remote_script="$remote_prefix.sh"
+  remote_upload="$remote_prefix.$$.upload"
+  remote_status="$remote_prefix.status"
+  remote_pid="$remote_prefix.pid"
+  remote_log="$remote_prefix.log"
+  printf '[deploy-local] upload detached deployment payload %s\n' "$deploy_id"
+  scp "${SSH_OPTIONS[@]}" "$local_script" "$SSH_TARGET:$remote_upload"
+
+  detached_env=("${REMOTE_ENV[@]}")
+  detached_env+=("REMOTE_SCRIPT=$(shell_quote "$remote_script")")
+  detached_env+=("REMOTE_UPLOAD=$(shell_quote "$remote_upload")")
+  detached_env+=("REMOTE_STATUS=$(shell_quote "$remote_status")")
+  detached_env+=("REMOTE_PID=$(shell_quote "$remote_pid")")
+  detached_env+=("REMOTE_LOG=$(shell_quote "$remote_log")")
+  ssh_cmd "${detached_env[*]} bash -s" <<'START_REMOTE'
+set -euo pipefail
+if [[ -f "$REMOTE_STATUS" ]] && [[ "$(cat "$REMOTE_STATUS")" == "0" ]]; then
+  rm -f "$REMOTE_UPLOAD"
+  echo "[deploy-remote] deployment already completed"
+  exit 0
+fi
+if [[ -f "$REMOTE_PID" ]] && kill -0 "$(cat "$REMOTE_PID")" 2>/dev/null; then
+  rm -f "$REMOTE_UPLOAD"
+  echo "[deploy-remote] deployment already running"
+  exit 0
+fi
+mv "$REMOTE_UPLOAD" "$REMOTE_SCRIPT"
+chmod 700 "$REMOTE_SCRIPT"
+rm -f "$REMOTE_STATUS" "$REMOTE_PID"
+nohup bash -c '
+  set +e
+  bash "$1"
+  code=$?
+  printf "%s\n" "$code" > "$2"
+  exit "$code"
+' _ "$REMOTE_SCRIPT" "$REMOTE_STATUS" > "$REMOTE_LOG" 2>&1 </dev/null &
+printf '%s\n' "$!" > "$REMOTE_PID"
+echo "[deploy-remote] deployment started as pid $!"
+START_REMOTE
+
+  poll_command="if test -f $(shell_quote "$remote_status");"
+  poll_command+=" then cat $(shell_quote "$remote_status");"
+  poll_command+=" elif test -f $(shell_quote "$remote_pid")"
+  poll_command+=" && kill -0 \$(cat $(shell_quote "$remote_pid")) 2>/dev/null;"
+  poll_command+=" then echo RUNNING; else echo LOST; fi"
+  while (( attempt <= DEPLOY_REMOTE_POLL_ATTEMPTS )); do
+    if status="$(ssh_cmd "$poll_command" 2>/dev/null)"; then
+      case "$status" in
+        0)
+          printf '[deploy-local] detached deployment completed\n'
+          break
+          ;;
+        RUNNING)
+          printf '[deploy-local] detached deployment running (%s/%s)\n' \
+            "$attempt" "$DEPLOY_REMOTE_POLL_ATTEMPTS"
+          ;;
+        LOST)
+          echo "detached deployment process disappeared without a status" >&2
+          return 3
+          ;;
+        *)
+          printf '[deploy-local] detached deployment failed with status %s\n' \
+            "$status" >&2
+          ssh_cmd "tail -n 200 $(shell_quote "$remote_log")" || true
+          return "$status"
+          ;;
+      esac
+    else
+      printf '[deploy-local] SSH unavailable while polling; will reconnect (%s/%s)\n' \
+        "$attempt" "$DEPLOY_REMOTE_POLL_ATTEMPTS" >&2
+    fi
+    sleep "$DEPLOY_REMOTE_POLL_INTERVAL_SECONDS"
+    attempt=$((attempt + 1))
+  done
+  if [[ "$status" != "0" ]]; then
+    echo "timed out waiting for detached deployment" >&2
+    return 255
+  fi
+  ssh_cmd "tail -n 200 $(shell_quote "$remote_log")"
+  if [[ -n "$DEPLOY_LOG_FILE" ]]; then
+    scp "${SSH_OPTIONS[@]}" "$SSH_TARGET:$remote_log" "$DEPLOY_LOG_FILE"
+  fi
+}
+
+if [[ "$DEPLOY_REMOTE_MODE" == "background" ]]; then
+  run_background_deploy
+  exit $?
+fi
+
+# BEGIN REMOTE DEPLOY PAYLOAD
 ssh_cmd "${REMOTE_ENV[*]} bash -s" <<'REMOTE'
 set -euo pipefail
 

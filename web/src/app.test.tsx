@@ -755,6 +755,42 @@ const fixtures: Record<string, unknown> = {
     generated_at: new Date().toISOString(),
   },
   "v2/tasks": { tasks: [v2Task, v2FallbackTask] },
+  "v2/capabilities": {
+    version: "v2-control-plane-slice",
+    status: "usable-mvp",
+    features: ["adapter_selection"],
+    adapters: [
+      {
+        adapter: "fake",
+        label: "Fake smoke runner",
+        status: "available",
+        protocol: "internal",
+        execution: "local-simulated",
+      },
+      {
+        adapter: "qwen",
+        label: "qwen-code",
+        status: "available",
+        protocol: "ACP/A2A",
+        execution: "cli-adapter",
+      },
+      {
+        adapter: "codex",
+        label: "codex cli",
+        status: "available",
+        protocol: "ACP/A2A",
+        execution: "cli-adapter",
+      },
+      {
+        adapter: "opencode",
+        label: "opencode",
+        status: "registered",
+        protocol: "ACP/A2A",
+        execution: "cli-adapter",
+      },
+    ],
+    runtime: {},
+  },
   "v2/tasks/task_v2_1": v2Task,
   "v2/tasks/task_v2_1/events.json": { events: v2Events },
   "v2/tasks/task_v2_1/webshell/events.json": { events: daemonEvents },
@@ -1215,6 +1251,25 @@ describe("aflow console", () => {
       screen.getByRole("button", { name: "Show processes" }),
     ).toBeInTheDocument();
     await user.click(
+      screen.getByRole("button", { name: "Open process drawer" }),
+    );
+    const drawer = screen.getByRole("dialog", {
+      name: "Process status drawer",
+    });
+    expect(drawer).toBeInTheDocument();
+    await user.click(
+      within(drawer).getByRole("button", {
+        name: "reviewer completed Review and package fake builder",
+      }),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Open process drawer" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Close process drawer" }),
+    );
+    await user.click(
       screen.getByRole("button", { name: "Open process status" }),
     );
     await user.click(screen.getByRole("button", { name: "Open right panel" }));
@@ -1266,6 +1321,48 @@ describe("aflow console", () => {
     expect(settings).toHaveAttribute("open");
     expect(screen.getByLabelText("Agent 模式")).toBeInTheDocument();
     expect(screen.getByLabelText("执行 Agent")).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "opencode · 未注册" }),
+    ).toBeDisabled();
+  });
+
+  it("shows task creation failures and lets the user retry", async () => {
+    const user = userEvent.setup();
+    const baseFetch = fetchMock;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const path = String(input)
+        .replace(/^https?:\/\/[^/]+\//, "")
+        .replace(/^\//, "");
+      if (init?.method === "POST" && path === "v2/tasks") {
+        return jsonResponse({ error: "no active execution unit" }, 503);
+      }
+      return baseFetch(input, init);
+    });
+    render(<App />);
+
+    await user.type(
+      await screen.findByPlaceholderText(
+        "例如：审计这个仓库的部署链路，修复问题并给出可验证的交付产物",
+      ),
+      "Run a real case",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Start conversation" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法启动 Agent 对话",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "no active execution unit",
+    );
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/v2/tasks",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
   });
 
   it("does not submit an empty task", async () => {

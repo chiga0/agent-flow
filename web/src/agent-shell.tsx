@@ -4,7 +4,7 @@ import {
   DaemonSessionProvider,
   DaemonWorkspaceProvider,
 } from "@qwen-code/webui/daemon-react-sdk";
-import { ChevronRight, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { ChevronRight, PanelRightClose, PanelRightOpen, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge, Button, StatusBadge } from "./components/ui";
@@ -44,6 +44,7 @@ export function AflowAgentShell({
     defaultAgent?.agent_task_id ?? task.task_id,
   );
   const [processesOpen, setProcessesOpen] = useState(true);
+  const [mobileProcessesOpen, setMobileProcessesOpen] = useState(false);
   const baseUrl = v2TaskDaemonBaseHref(task.task_id);
   const workspaceCwd = taskWorkspace(task);
   const transport = useMemo(
@@ -99,6 +100,16 @@ export function AflowAgentShell({
             {runningCount} active
           </Badge>
           <Button
+            className="xl:hidden"
+            aria-label="Open process drawer"
+            size="icon"
+            variant="ghost"
+            onClick={() => setMobileProcessesOpen(true)}
+          >
+            <PanelRightOpen className="h-4 w-4" />
+          </Button>
+          <Button
+            className="hidden xl:inline-flex"
             aria-label={processesOpen ? "Hide processes" : "Show processes"}
             size="icon"
             variant="ghost"
@@ -198,6 +209,43 @@ export function AflowAgentShell({
             onSelectAgent={setSelectedAgentId}
           />
         </aside>
+      ) : null}
+      {mobileProcessesOpen ? (
+        <div
+          aria-label="Process status drawer"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex justify-end bg-black/40 xl:hidden"
+          role="dialog"
+          onClick={() => setMobileProcessesOpen(false)}
+        >
+          <aside
+            className="h-full w-[min(24rem,92vw)] overflow-y-auto border-l border-border bg-card shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 flex justify-end border-b border-border bg-card p-2">
+              <Button
+                aria-label="Close process drawer"
+                size="icon"
+                variant="ghost"
+                onClick={() => setMobileProcessesOpen(false)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <ProcessPanel
+              agents={agents}
+              artifacts={artifacts}
+              busy={busy}
+              task={task}
+              onCancel={onCancel}
+              onRetry={onRetry}
+              onSelectAgent={(agentId) => {
+                setSelectedAgentId(agentId);
+                setMobileProcessesOpen(false);
+              }}
+            />
+          </aside>
+        </div>
       ) : null}
     </div>
   );

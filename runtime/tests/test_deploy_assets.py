@@ -97,14 +97,22 @@ class DeployAssetsTest(unittest.TestCase):
             self.assertNotIn("@qwen-code/qwen-code@0.19.3", path.read_text())
 
     def test_runtime_deploy_recovers_from_transient_ssh_disconnects(self) -> None:
+        script_path = ROOT / "scripts" / "deploy_runtime_vps.sh"
+        script = script_path.read_text(encoding="utf-8")
         workflow = (ROOT / ".github" / "workflows" / "deploy-runtime.yml").read_text(
             encoding="utf-8"
         )
 
+        subprocess.run(["bash", "-n", str(script_path)], check=True)
+        self.assertIn('DEPLOY_REMOTE_MODE="${DEPLOY_REMOTE_MODE:-background}"', script)
+        self.assertIn("# BEGIN REMOTE DEPLOY PAYLOAD", script)
+        self.assertIn("detached deployment running", script)
+        self.assertIn("SSH unavailable while polling; will reconnect", script)
         self.assertIn("timeout-minutes: 40", workflow)
         self.assertIn("deploy_attempts=3", workflow)
         self.assertIn('[[ "$exit_code" -ne 255', workflow)
         self.assertIn("retrying the idempotent deployment", workflow)
+        self.assertIn("Upload runtime deploy log", workflow)
 
 
 if __name__ == "__main__":

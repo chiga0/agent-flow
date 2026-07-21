@@ -49,6 +49,22 @@ export interface DaemonEvent {
   originatorClientId?: string;
 }
 
+export interface V2AdapterCapability {
+  adapter: string;
+  label: string;
+  status: "available" | "registered" | string;
+  protocol: string;
+  execution: string;
+}
+
+export interface V2Capabilities {
+  version: string;
+  status: string;
+  features: string[];
+  adapters: V2AdapterCapability[];
+  runtime: Record<string, unknown>;
+}
+
 export interface ArtifactInfo {
   name: string;
   size_bytes: number;
@@ -714,7 +730,7 @@ export const runtimeApi = {
       body: JSON.stringify(payload),
     }),
   health: () => api<{ ok: boolean; version: string }>("health"),
-  v2Capabilities: () => api<Record<string, unknown>>("v2/capabilities"),
+  v2Capabilities: () => api<V2Capabilities>("v2/capabilities"),
   v2Tasks: () => api<{ tasks: V2Task[] }>("v2/tasks"),
   v2Task: (taskId: string) =>
     api<V2Task>(`v2/tasks/${encodeURIComponent(taskId)}`),

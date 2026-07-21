@@ -674,12 +674,22 @@ export function ProductTaskPage() {
   const task = useQuery({
     queryKey: ["v2", "tasks", taskId],
     queryFn: () => runtimeApi.v2Task(taskId),
-    refetchInterval: 1000,
+    refetchInterval: (query) =>
+      ["completed", "failed", "cancelled"].includes(
+        String(query.state.data?.status),
+      )
+        ? false
+        : 3000,
   });
   const artifacts = useQuery({
     queryKey: ["v2", "tasks", taskId, "artifacts"],
     queryFn: () => runtimeApi.v2TaskArtifacts(taskId),
-    refetchInterval: 2000,
+    refetchInterval: (query) =>
+      ["completed", "failed", "cancelled"].includes(
+        String(task.data?.status),
+      ) && query.state.data
+        ? false
+        : 5000,
   });
   const refresh = async () => {
     await Promise.all([
