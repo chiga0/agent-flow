@@ -251,7 +251,9 @@ jobs:
           export RUN_MANAGER_ARTIFACT_RETENTION_SECONDS="$ARTIFACT_RETENTION_SECONDS"
           export RUN_MANAGER_CLEANUP_INTERVAL_SECONDS="$CLEANUP_INTERVAL_SECONDS"
           export DEPLOY_RUNTIME_PRINT_SECRETS=0
-          export DEPLOY_LOG_FILE="$RUNNER_TEMP/runtime-deploy/runtime-deploy.log"
+          export DEPLOY_LOG_FILE="$RUNNER_TEMP/runtime-deploy/runtime-remote.log"
+          deploy_ci_log="$RUNNER_TEMP/runtime-deploy/runtime-deploy.log"
+          : > "$deploy_ci_log"
           export QWEN_EXECUTOR_STRATEGY="${VAR_QWEN_EXECUTOR_STRATEGY:-}"
           export QWEN_CONTAINER_IMAGE="${VAR_QWEN_CONTAINER_IMAGE:-}"
           export QWEN_CONTAINER_CPUS="${VAR_QWEN_CONTAINER_CPUS:-}"
@@ -285,7 +287,8 @@ jobs:
             echo "[deploy-ci] attempt $deploy_attempt/$deploy_attempts"
             if bash scripts/deploy_runtime_vps.sh \
               "$RUNTIME_SSH_TARGET" \
-              "$RUNNER_TEMP/runtime-deploy/ssh_key"; then
+              "$RUNNER_TEMP/runtime-deploy/ssh_key" \
+              2>&1 | tee -a "$deploy_ci_log"; then
               break
             else
               exit_code=$?
@@ -303,7 +306,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: runtime-deploy-log
-          path: ${{ runner.temp }}/runtime-deploy/runtime-deploy.log
+          path: ${{ runner.temp }}/runtime-deploy/*.log
           if-no-files-found: ignore
           retention-days: 7
 

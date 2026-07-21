@@ -113,6 +113,8 @@ class DeployAssetsTest(unittest.TestCase):
         self.assertIn('[[ "$exit_code" -ne 255', workflow)
         self.assertIn("retrying the idempotent deployment", workflow)
         self.assertIn("Upload runtime deploy log", workflow)
+        self.assertIn('2>&1 | tee -a "$deploy_ci_log"', workflow)
+        self.assertIn("runtime-deploy/*.log", workflow)
 
 
 if __name__ == "__main__":
