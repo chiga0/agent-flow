@@ -540,6 +540,14 @@ class RuntimeServerTest(unittest.TestCase):
                 headers=headers,
             )
             self.assertTrue(prompt["promptId"].startswith("aflow-"))
+            streamed = read_sse_until(
+                f"{daemon}/session/{session_id}/events",
+                headers=headers,
+                terminal_types={"turn_complete", "turn_error", "prompt_cancelled"},
+            )
+            self.assertTrue(streamed)
+            terminal = streamed[-1]["data"]
+            self.assertEqual(terminal["promptId"], prompt["promptId"])
             events = request_json(
                 f"{base_url}/v2/tasks/{task['task_id']}/events.json",
                 headers=headers,
@@ -549,6 +557,172 @@ class RuntimeServerTest(unittest.TestCase):
                 for event in events
                 if event["type"] == "user.message"
             ])
+
+    def test_v2_daemon_gateway_supports_webshell_discovery_and_controls(self) -> None:
+        with running_runtime(token="secret") as base_url:
+            headers = {
+                "authorization": "Bearer secret",
+                "x-qwen-client-id": "webshell-test-client",
+            }
+            task = request_json(
+                f"{base_url}/v2/tasks",
+                method="POST",
+                payload={"goal": "Exercise WebShell discovery", "adapter": "fake"},
+                headers=headers,
+            )
+            daemon = f"{base_url}/v2/tasks/{task['task_id']}/daemon"
+            capabilities = request_json(f"{daemon}/capabilities", headers=headers)
+            cwd = quote(capabilities["workspaceCwd"], safe="")
+            sessions = request_json(f"{daemon}/status", headers=headers)["sessions"]
+            session_id = sessions[0]["sessionId"]
+            session = f"{daemon}/session/{session_id}"
+
+            self.assertTrue(request_json(f"{daemon}/health", headers=headers)["ok"])
+            self.assertEqual(
+                request_json(f"{daemon}/workspace/{cwd}/sessions", headers=headers)[
+                    "sessions"
+                ][0]["sessionId"],
+                session_id,
+            )
+            self.assertEqual(
+                request_json(
+                    f"{daemon}/workspace/{cwd}/session-groups", headers=headers
+                )["groups"],
+                [],
+            )
+            self.assertEqual(
+                request_json(f"{daemon}/workspaces/{cwd}/git", headers=headers)["v"],
+                2,
+            )
+            for resource in (
+                "providers",
+                "skills",
+                "settings",
+                "tools",
+                "mcp",
+                "voice",
+                "extensions",
+            ):
+                self.assertEqual(
+                    request_json(f"{daemon}/workspace/{resource}", headers=headers)["v"],
+                    1,
+                )
+            self.assertEqual(
+                request_json(f"{session}/context", headers=headers)["sessionId"],
+                session_id,
+            )
+            self.assertEqual(
+                request_json(f"{session}/supported-commands", headers=headers)[
+                    "availableCommands"
+                ],
+                [],
+            )
+            self.assertEqual(
+                request_json(f"{session}/pending-prompts", headers=headers)[
+                    "pendingPrompts"
+                ],
+                [],
+            )
+            self.assertEqual(
+                request_json(f"{session}/tasks", headers=headers)["tasks"], []
+            )
+            self.assertEqual(
+                request_json(f"{session}/stats", headers=headers)["sessionId"],
+                session_id,
+            )
+            self.assertFalse(
+                request_json(f"{session}/transcript", headers=headers)["hasMore"]
+            )
+
+            created_session = request_json(
+                f"{daemon}/session", method="POST", payload={}, headers=headers
+            )
+            self.assertEqual(created_session["sessionId"], session_id)
+            resumed = request_json(
+                f"{session}/resume", method="POST", payload={}, headers=headers
+            )
+            self.assertEqual(resumed["clientId"], "webshell-test-client")
+            for action in ("heartbeat", "detach", "model", "approval-mode"):
+                self.assertTrue(
+                    request_json(
+                        f"{session}/{action}",
+                        method="POST",
+                        payload={},
+                        headers=headers,
+                    )["ok"]
+                )
+            self.assertFalse(
+                request_json(
+                    f"{daemon}/workspace/settings",
+                    method="POST",
+                    payload={},
+                    headers=headers,
+                )["requiresRestart"]
+            )
+
+            with self.assertRaises(urllib.error.HTTPError) as bad_prompt:
+                request_json(
+                    f"{session}/prompt",
+                    method="POST",
+                    payload={"prompt": []},
+                    headers=headers,
+                )
+            self.assertEqual(bad_prompt.exception.code, HTTPStatus.BAD_REQUEST)
+            with self.assertRaises(urllib.error.HTTPError) as missing_session:
+                request_json(f"{daemon}/session/missing/context", headers=headers)
+            self.assertEqual(missing_session.exception.code, HTTPStatus.NOT_FOUND)
+            with self.assertRaises(urllib.error.HTTPError) as missing_route:
+                request_json(f"{daemon}/missing", headers=headers)
+            self.assertEqual(missing_route.exception.code, HTTPStatus.NOT_FOUND)
+
+            cancelled = request_json(
+                f"{session}/cancel",
+                method="POST",
+                payload={"reason": "test complete"},
+                headers=headers,
+            )
+            self.assertTrue(cancelled["cancelled"])
+
+    def test_v2_daemon_gateway_resolves_permissions(self) -> None:
+        with running_runtime(token="secret", worker_capacity=0) as base_url:
+            headers = {"authorization": "Bearer secret"}
+            request_json(
+                f"{base_url}/v2/workers/webshell-worker/heartbeat",
+                method="POST",
+                payload={"adapters": ["fake"]},
+                headers=headers,
+            )
+            task = request_json(
+                f"{base_url}/v2/tasks",
+                method="POST",
+                payload={"goal": "Approve a WebShell tool", "adapter": "fake"},
+                headers=headers,
+            )
+            claim = request_json(
+                f"{base_url}/v2/workers/webshell-worker/claim",
+                method="POST",
+                payload={"adapters": ["fake"]},
+                headers=headers,
+            )["assignment"]
+            request_json(
+                f"{base_url}/v2/workers/webshell-worker/agent-tasks/"
+                f"{claim['agent_task_id']}/events",
+                method="POST",
+                payload={
+                    "lease_token": claim["lease_token"],
+                    "type": "permission.requested",
+                    "payload": {"permission_id": "perm-webshell", "tool": "shell"},
+                },
+                headers=headers,
+            )
+            daemon = f"{base_url}/v2/tasks/{task['task_id']}/daemon"
+            denied = request_json(
+                f"{daemon}/permission/perm-webshell",
+                method="POST",
+                payload={"outcome": {"optionId": "deny_once"}},
+                headers=headers,
+            )
+            self.assertEqual(denied["decision"]["decision"], "deny")
 
     def test_console_login_session_cookie_authorizes_api(self) -> None:
         with running_runtime(
@@ -1891,6 +2065,33 @@ def read_sse(url: str, headers: dict[str, str] | None = None) -> list[dict[str, 
                 events.append({"event": event_name, "data": json.loads("\n".join(data_lines))})
                 data_lines = []
                 event_name = None
+    return events
+
+
+def read_sse_until(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    terminal_types: set[str],
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    request = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(request, timeout=5) as response:
+        event_name: str | None = None
+        data_lines: list[str] = []
+        for raw_line in response:
+            line = raw_line.decode("utf-8").rstrip("\n")
+            if line.startswith("event:"):
+                event_name = line[6:].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line[5:].strip())
+            elif line == "" and data_lines:
+                data = json.loads("\n".join(data_lines))
+                events.append({"event": event_name, "data": data})
+                data_lines = []
+                event_name = None
+                if data.get("type") in terminal_types:
+                    break
     return events
 
 

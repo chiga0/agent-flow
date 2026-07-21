@@ -5,6 +5,7 @@ import hmac
 import json
 import mimetypes
 import os
+import sqlite3
 import sys
 import time
 from http import HTTPStatus
@@ -1675,7 +1676,7 @@ def make_handler(
                         self.wfile.flush()
                         last_heartbeat = time.monotonic()
                     time.sleep(0.2)
-            except (BrokenPipeError, ConnectionResetError, KeyError):
+            except (BrokenPipeError, ConnectionResetError, KeyError, sqlite3.ProgrammingError):
                 return
 
         def projected_session_events(self, session_id: str) -> list[dict[str, Any]]:
